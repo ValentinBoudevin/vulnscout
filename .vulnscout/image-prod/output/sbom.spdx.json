@@ -1,0 +1,590 @@
+{
+    "SPDXID": "SPDXRef-DOCUMENT",
+    "creationInfo": {
+        "created": "2025-08-16T20:26:02Z",
+        "creators": [
+            "Organization: Savoir-faire Linux",
+            "Tool: VulnScout"
+        ]
+    },
+    "dataLicense": "CC0-1.0",
+    "name": "PRODUCT_NAME-1.0.0",
+    "spdxVersion": "SPDX-2.3",
+    "documentNamespace": "https://spdx.org/spdxdocs/068a0e95-a61d-76d3-8000-f75008741e3e.spdx.json",
+    "packages": [
+        {
+            "SPDXID": "SPDXRef-068a0e95-a61d-7ff8-8000-5f29535132de",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "glib-2.0",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1_2.84.0"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a61e-7714-8000-9e6138f59be9",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "libffi",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "3.4.7"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a61e-7bb1-8000-9ace6f80e426",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "libseccomp",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "2.6.0"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a61e-7f0d-8000-77b27112eff9",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "kbd",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "2.7.1"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a61f-7224-8000-5f58bb2ff5ee",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "zstd",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1.5.7"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a61f-7515-8000-5c4de82eab53",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "psplash",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "0.1"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a61f-7806-8000-1e51c7db8878",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "systemd-conf",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1_1.0"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a61f-7ae8-8000-e6f85a5b878e",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "zlib",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1.3.1"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a61f-7db6-8000-530df50060eb",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "netbase",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1_6.5"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a620-7098-8000-e893929d4108",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "attr",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "2.5.2"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a620-737e-8000-ed8cc1f4bfa8",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "libgcc",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "14.3.0"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a620-765c-8000-18497f0f8cbc",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "gcc-runtime",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "14.3.0"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a620-7937-8000-5337ed650b0f",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "kmod",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "34.1"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a620-7c08-8000-2c05904d10b5",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "v86d",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "0.1.10"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a620-7ec9-8000-d29a87bf0ea9",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "shadow-securetty",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "4.6"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a621-71a0-8000-d4f167bb74fd",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "tar",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1.35"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a621-745e-8000-b9f5fbc6ddd1",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "libpcre2",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "10.45"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a621-772b-8000-1bafb16b4784",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "libxcrypt",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "4.4.38"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a621-79fd-8000-b2347bacab5c",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "libxml2",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "2.13.8"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a621-7cc9-8000-77141c8bc42c",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "glibc",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "2.41"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a621-7fa9-8000-d7f15be38825",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "acl",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "2.3.2"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a622-727a-8000-9c8cf617d65c",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "e2fsprogs",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1.47.1"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a622-7556-8000-0b90c22e05e7",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "xz",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "5.6.4"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a622-7821-8000-83883306b4c3",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "dbus",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1.16.2"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a622-7af6-8000-36c0e7701778",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "base-passwd",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "3.6.6"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a622-7e0b-8000-662ef71d5af4",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "linux-yocto",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "6.12.38"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a623-70e3-8000-8013642f05f7",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "shadow",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "4.17.3"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a623-73cf-8000-18dab3d0d28c",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "opkg-utils",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "0.7.0"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a623-76a6-8000-4010931c0d6f",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "util-linux",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "2.40.4"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a623-7976-8000-0bf51f0220a5",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "openssl",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "3.4.2"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a623-7c48-8000-d8ed51a33127",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "systemd-firstboot-getty",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1.0"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a623-7f1a-8000-89d9795f5b53",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "systemd",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1_257.6"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a624-71e2-8000-3844164057ae",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "busybox",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1.37.0"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a624-74b1-8000-10ebd363e416",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "shared-mime-info",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "2.4"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a624-7776-8000-9e3595bd571b",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "base-files",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "3.0.14"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a624-7a34-8000-be006c46c491",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "run-postinsts",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1.0"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a624-7cfe-8000-fd9621791237",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "libcap",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "2.75"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a624-7fc5-8000-69477dbeca7c",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "expat",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "2.7.1"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a625-7295-8000-b581e5d6d59d",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "lighttpd",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1.4.77"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a625-7562-8000-3b2b90255267",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "volatile-binds",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1.0"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a625-782d-8000-4fa03c067ad2",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "libpam",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1.7.1"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a625-7b00-8000-6d4c6ed31def",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "util-linux-libuuid",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "2.40.4"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a625-7dd2-8000-fb1d16789896",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "os-release",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1.0"
+        },
+        {
+            "SPDXID": "SPDXRef-068a0e95-a626-70c3-8000-c84ca123a383",
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": false,
+            "name": "systemd-serialgetty",
+            "primaryPackagePurpose": "APPLICATION",
+            "versionInfo": "1.0"
+        }
+    ],
+    "relationships": [
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a61d-7ff8-8000-5f29535132de",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a61e-7714-8000-9e6138f59be9",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a61e-7bb1-8000-9ace6f80e426",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a61e-7f0d-8000-77b27112eff9",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a61f-7224-8000-5f58bb2ff5ee",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a61f-7515-8000-5c4de82eab53",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a61f-7806-8000-1e51c7db8878",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a61f-7ae8-8000-e6f85a5b878e",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a61f-7db6-8000-530df50060eb",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a620-7098-8000-e893929d4108",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a620-737e-8000-ed8cc1f4bfa8",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a620-765c-8000-18497f0f8cbc",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a620-7937-8000-5337ed650b0f",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a620-7c08-8000-2c05904d10b5",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a620-7ec9-8000-d29a87bf0ea9",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a621-71a0-8000-d4f167bb74fd",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a621-745e-8000-b9f5fbc6ddd1",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a621-772b-8000-1bafb16b4784",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a621-79fd-8000-b2347bacab5c",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a621-7cc9-8000-77141c8bc42c",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a621-7fa9-8000-d7f15be38825",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a622-727a-8000-9c8cf617d65c",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a622-7556-8000-0b90c22e05e7",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a622-7821-8000-83883306b4c3",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a622-7af6-8000-36c0e7701778",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a622-7e0b-8000-662ef71d5af4",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a623-70e3-8000-8013642f05f7",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a623-73cf-8000-18dab3d0d28c",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a623-76a6-8000-4010931c0d6f",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a623-7976-8000-0bf51f0220a5",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a623-7c48-8000-d8ed51a33127",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a623-7f1a-8000-89d9795f5b53",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a624-71e2-8000-3844164057ae",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a624-74b1-8000-10ebd363e416",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a624-7776-8000-9e3595bd571b",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a624-7a34-8000-be006c46c491",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a624-7cfe-8000-fd9621791237",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a624-7fc5-8000-69477dbeca7c",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a625-7295-8000-b581e5d6d59d",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a625-7562-8000-3b2b90255267",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a625-782d-8000-4fa03c067ad2",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a625-7b00-8000-6d4c6ed31def",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a625-7dd2-8000-fb1d16789896",
+            "relationshipType": "DESCRIBES"
+        },
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relatedSpdxElement": "SPDXRef-068a0e95-a626-70c3-8000-c84ca123a383",
+            "relationshipType": "DESCRIBES"
+        }
+    ]
+}

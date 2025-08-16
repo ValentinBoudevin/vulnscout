@@ -1,0 +1,61 @@
+= Vulnerabilities Report
+Savoir-faire Linux
+2025-08-16
+
+
+
+== Legal Notice
+
+[.text-justify]
+This report is a summary of the vulnerabilities found in the project. Scan was made on 2025-08-16 at 20:26 (UTC) and export of this report was made on 2025-08-16. Keep in mind that this report is not exhaustive and may not contain all vulnerabilities found in the project. Also, new vulnerabilities are discovered every day and thus the precision and accuracy of this report will decrease over time.
+
+== Summary
+
+Number of vulnerabilities found: **11340**
+
+Number of vulnerabilities present in this report: **11340**
+
+They are classified as follow:
+
+[cols="2,1,1,1,1,1,1"]
+[.text-justify]
+|===
+^.^| Status ^.^| Critical ^.^| High ^.^| Medium ^.^| Low ^.^| Unknown ^.^| Total
+
+^.^| Pending investigation
+^.^| 0
+^.^| 11
+^.^| 16
+^.^| 1
+^.^| 0
+^.^| **28**
+
+^.^| Confirmed and exploitable
+^.^| 0
+^.^| 0
+^.^| 0
+^.^| 0
+^.^| 0
+^.^| **0**
+
+^.^| Fixed
+^.^| 275
+^.^| 2718
+^.^| 5196
+^.^| 475
+^.^| 2620
+^.^| **11284**
+
+^.^| Ignored or false positive
+^.^| 4
+^.^| 6
+^.^| 16
+^.^| 2
+^.^| 0
+^.^| **28**
+|===
+
+== Most critical vulnerabilities
+
+The following list use EPSS ranking to outline the vulnerabilities which are most used. The EPSS ranking is a metric that takes into account the number of known exploits, the ease of exploitation, the impact of the vulnerability, and the availability of a fix.
+
