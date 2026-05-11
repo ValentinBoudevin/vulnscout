@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from "react";
 import ScansHandler from "../handlers/scans";
-import type { Scan, ScanDiff, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, GlobalResult } from "../handlers/scans";
+import type { Scan, ScanDiff, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, AssessmentDiffEntry, GlobalResult } from "../handlers/scans";
 import { subscribe, getSnapshot, setOnDone, triggerScan, dismiss as grypeDismiss } from "../handlers/grypeScanState";
 import {
     subscribe as nvdSubscribe,
@@ -19,6 +19,7 @@ import {
 import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
 import ScanProgressPanel from "../components/ScanProgressPanel";
 import { useDocUrl } from "../helpers/useDocUrl";
+import { extractSupplierName } from "../helpers/pkgId";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
@@ -60,7 +61,8 @@ function FindingDiffTable({ entries, label, colorClass }: {
             e.package_name.toLowerCase().includes(filter.toLowerCase()) ||
             e.package_version.toLowerCase().includes(filter.toLowerCase()) ||
             e.vulnerability_id.toLowerCase().includes(filter.toLowerCase()) ||
-            (e.origin || '').toLowerCase().includes(filter.toLowerCase())
+            (e.origin || '').toLowerCase().includes(filter.toLowerCase()) ||
+            extractSupplierName(e.package_supplier || '').toLowerCase().includes(filter.toLowerCase())
         )
         : entries;
 
@@ -87,6 +89,7 @@ function FindingDiffTable({ entries, label, colorClass }: {
                             <tr>
                                 <th className="px-3 py-2">Package</th>
                                 <th className="px-3 py-2">Version</th>
+                                <th className="px-3 py-2">Supplier</th>
                                 <th className="px-3 py-2">Vulnerability</th>
                                 {hasOrigin && <th className="px-3 py-2">Origin</th>}
                             </tr>
@@ -96,6 +99,7 @@ function FindingDiffTable({ entries, label, colorClass }: {
                                 <tr key={e.finding_id} className="border-t border-gray-600 hover:bg-gray-600/40">
                                     <td className="px-3 py-1.5 font-mono">{e.package_name}</td>
                                     <td className="px-3 py-1.5 font-mono text-gray-400">{e.package_version}</td>
+                                    <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(e.package_supplier || '') || '—'}</td>
                                     <td className="px-3 py-1.5 font-mono">{e.vulnerability_id}</td>
                                     {hasOrigin && <td className="px-3 py-1.5 text-gray-400">{e.origin ?? ''}</td>}
                                 </tr>
@@ -121,7 +125,8 @@ function FindingUpgradeDiffTable({ entries, label, colorClass }: {
             e.vulnerability_id.toLowerCase().includes(filter.toLowerCase()) ||
             e.old_version.toLowerCase().includes(filter.toLowerCase()) ||
             e.new_version.toLowerCase().includes(filter.toLowerCase()) ||
-            (e.origin || '').toLowerCase().includes(filter.toLowerCase())
+            (e.origin || '').toLowerCase().includes(filter.toLowerCase()) ||
+            extractSupplierName(e.package_supplier || '').toLowerCase().includes(filter.toLowerCase())
         )
         : entries;
 
@@ -133,7 +138,7 @@ function FindingUpgradeDiffTable({ entries, label, colorClass }: {
                 </h3>
                 <input
                     type="text"
-                    placeholder="Filter&#x2026;"
+                    placeholder="Filter\u2026"
                     value={filter}
                     onChange={e => setFilter(e.target.value)}
                     className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-200 w-48"
@@ -149,6 +154,7 @@ function FindingUpgradeDiffTable({ entries, label, colorClass }: {
                                 <th className="px-3 py-2">Package</th>
                                 <th className="px-3 py-2">Old Version</th>
                                 <th className="px-3 py-2">New Version</th>
+                                <th className="px-3 py-2">Supplier</th>
                                 <th className="px-3 py-2">Vulnerability</th>
                                 {hasOrigin && <th className="px-3 py-2">Origin</th>}
                             </tr>
@@ -159,6 +165,7 @@ function FindingUpgradeDiffTable({ entries, label, colorClass }: {
                                     <td className="px-3 py-1.5 font-mono">{e.package_name}</td>
                                     <td className="px-3 py-1.5 font-mono text-red-400">{e.old_version}</td>
                                     <td className="px-3 py-1.5 font-mono text-green-400">{e.new_version}</td>
+                                    <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(e.package_supplier || '') || '—'}</td>
                                     <td className="px-3 py-1.5 font-mono">{e.vulnerability_id}</td>
                                     {hasOrigin && <td className="px-3 py-1.5 text-gray-400">{e.origin ?? ''}</td>}
                                 </tr>
@@ -180,7 +187,8 @@ function PackageDiffTable({ entries, label, colorClass }: {
     const filtered = filter
         ? entries.filter(e =>
             e.package_name.toLowerCase().includes(filter.toLowerCase()) ||
-            e.package_version.toLowerCase().includes(filter.toLowerCase())
+            e.package_version.toLowerCase().includes(filter.toLowerCase()) ||
+            extractSupplierName(e.package_supplier || '').toLowerCase().includes(filter.toLowerCase())
         )
         : entries;
 
@@ -193,7 +201,7 @@ function PackageDiffTable({ entries, label, colorClass }: {
                 {entries.length > 10 && (
                     <input
                         type="text"
-                        placeholder="Filter…"
+                        placeholder="Filter\u2026"
                         value={filter}
                         onChange={e => setFilter(e.target.value)}
                         className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-200 w-48"
@@ -209,6 +217,7 @@ function PackageDiffTable({ entries, label, colorClass }: {
                             <tr>
                                 <th className="px-3 py-2">Package</th>
                                 <th className="px-3 py-2">Version</th>
+                                <th className="px-3 py-2">Supplier</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -216,6 +225,7 @@ function PackageDiffTable({ entries, label, colorClass }: {
                                 <tr key={e.package_id} className="border-t border-gray-600 hover:bg-gray-600/40">
                                     <td className="px-3 py-1.5 font-mono">{e.package_name}</td>
                                     <td className="px-3 py-1.5 font-mono text-gray-400">{e.package_version}</td>
+                                    <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(e.package_supplier || '') || '—'}</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -236,7 +246,8 @@ function PackageUpgradeDiffTable({ entries, label, colorClass }: {
         ? entries.filter(e =>
             e.package_name.toLowerCase().includes(filter.toLowerCase()) ||
             e.old_version.toLowerCase().includes(filter.toLowerCase()) ||
-            e.new_version.toLowerCase().includes(filter.toLowerCase())
+            e.new_version.toLowerCase().includes(filter.toLowerCase()) ||
+            extractSupplierName(e.package_supplier || '').toLowerCase().includes(filter.toLowerCase())
         )
         : entries;
 
@@ -249,7 +260,7 @@ function PackageUpgradeDiffTable({ entries, label, colorClass }: {
                 {entries.length > 10 && (
                     <input
                         type="text"
-                        placeholder="Filter…"
+                        placeholder="Filter\u2026"
                         value={filter}
                         onChange={e => setFilter(e.target.value)}
                         className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-200 w-48"
@@ -266,6 +277,7 @@ function PackageUpgradeDiffTable({ entries, label, colorClass }: {
                                 <th className="px-3 py-2">Package</th>
                                 <th className="px-3 py-2">Old Version</th>
                                 <th className="px-3 py-2">New Version</th>
+                                <th className="px-3 py-2">Supplier</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -274,6 +286,70 @@ function PackageUpgradeDiffTable({ entries, label, colorClass }: {
                                     <td className="px-3 py-1.5 font-mono">{e.package_name}</td>
                                     <td className="px-3 py-1.5 font-mono text-red-400">{e.old_version}</td>
                                     <td className="px-3 py-1.5 font-mono text-green-400">{e.new_version}</td>
+                                    <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(e.package_supplier || '') || '—'}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function AssessmentDiffTable({ entries, label, colorClass = "text-white" }: {
+    entries: AssessmentDiffEntry[];
+    label: string;
+    colorClass?: string;
+}) {
+    const [filter, setFilter] = useState('');
+    const filtered = filter
+        ? entries.filter(e =>
+            e.vulnerability_id.toLowerCase().includes(filter.toLowerCase()) ||
+            e.status.toLowerCase().includes(filter.toLowerCase()) ||
+            e.simplified_status.toLowerCase().includes(filter.toLowerCase()) ||
+            e.justification.toLowerCase().includes(filter.toLowerCase()) ||
+            e.impact_statement.toLowerCase().includes(filter.toLowerCase()) ||
+            e.status_notes.toLowerCase().includes(filter.toLowerCase())
+        )
+        : entries;
+
+    return (
+        <div className="mb-6">
+            <div className="flex items-center justify-between mb-2 gap-3">
+                <h3 className={["font-bold text-base", colorClass].join(' ')}>
+                    {label} ({entries.length})
+                </h3>
+                <input
+                    type="text"
+                    placeholder="Filter\u2026"
+                    value={filter}
+                    onChange={e => setFilter(e.target.value)}
+                    className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-200 w-48"
+                />
+            </div>
+            {entries.length === 0 ? (
+                <p className="text-sm text-gray-400 italic">None</p>
+            ) : (
+                <div className="overflow-auto max-h-64 rounded border border-gray-600">
+                    <table className="w-full text-xs text-left">
+                        <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase">
+                            <tr>
+                                <th className="px-3 py-2">Vulnerability</th>
+                                <th className="px-3 py-2">Status</th>
+                                <th className="px-3 py-2">Justification</th>
+                                <th className="px-3 py-2">Impact</th>
+                                <th className="px-3 py-2">Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filtered.map((e, i) => (
+                                <tr key={e.vulnerability_id + i} className="border-t border-gray-600 hover:bg-gray-600/40">
+                                    <td className="px-3 py-1.5 font-mono">{e.vulnerability_id}</td>
+                                    <td className="px-3 py-1.5">{e.simplified_status}</td>
+                                    <td className="px-3 py-1.5 text-gray-400">{e.justification || '—'}</td>
+                                    <td className="px-3 py-1.5 text-gray-400 max-w-xs truncate" title={e.impact_statement}>{e.impact_statement || '—'}</td>
+                                    <td className="px-3 py-1.5 text-gray-400 max-w-xs truncate" title={e.status_notes}>{e.status_notes || '—'}</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -308,7 +384,7 @@ function VulnDiffList({ vulns, label, colorClass, originMap }: {
                 {vulns.length > 10 && (
                     <input
                         type="text"
-                        placeholder="Filter…"
+                        placeholder="Filter\u2026"
                         value={filter}
                         onChange={e => setFilter(e.target.value)}
                         className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-200 w-48"
@@ -341,8 +417,8 @@ function VulnDiffList({ vulns, label, colorClass, originMap }: {
     );
 }
 
-type Section = 'packages' | 'findings' | 'vulnerabilities' | 'newly_detected';
-type GlobalSection = 'packages' | 'findings' | 'vulnerabilities';
+type Section = 'packages' | 'findings' | 'vulnerabilities' | 'assessments' | 'newly_detected';
+type GlobalSection = 'packages' | 'findings' | 'vulnerabilities' | 'assessments';
 
 // ---------------------------------------------------------------------------
 // Scan Result modal — shows active items (SBOM ∪ Tool scan) with source
@@ -380,9 +456,10 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
         ].join(' ');
 
     const lc = filter.toLowerCase();
-    const filteredPkgs = data ? (lc ? data.packages.filter(p => p.package_name.toLowerCase().includes(lc) || p.package_version.toLowerCase().includes(lc) || p.sources.some(s => s.toLowerCase().includes(lc))) : data.packages) : [];
-    const filteredFindings = data ? (lc ? data.findings.filter(f => f.package_name.toLowerCase().includes(lc) || f.vulnerability_id.toLowerCase().includes(lc) || f.sources.some(s => s.toLowerCase().includes(lc))) : data.findings) : [];
+    const filteredPkgs = data ? (lc ? data.packages.filter(p => p.package_name.toLowerCase().includes(lc) || p.package_version.toLowerCase().includes(lc) || p.sources.some(s => s.toLowerCase().includes(lc)) || extractSupplierName(p.package_supplier || '').toLowerCase().includes(lc)) : data.packages) : [];
+    const filteredFindings = data ? (lc ? data.findings.filter(f => f.package_name.toLowerCase().includes(lc) || f.vulnerability_id.toLowerCase().includes(lc) || f.sources.some(s => s.toLowerCase().includes(lc)) || extractSupplierName(f.package_supplier || '').toLowerCase().includes(lc)) : data.findings) : [];
     const filteredVulns = data ? (lc ? data.vulnerabilities.filter(v => v.vulnerability_id.toLowerCase().includes(lc) || v.sources.some(s => s.toLowerCase().includes(lc))) : data.vulnerabilities) : [];
+    const filteredAssessments = data ? (lc ? (data.assessments || []).filter(a => a.vulnerability_id.toLowerCase().includes(lc) || a.status.toLowerCase().includes(lc) || a.justification.toLowerCase().includes(lc) || a.impact_statement.toLowerCase().includes(lc) || a.status_notes.toLowerCase().includes(lc)) : (data.assessments || [])) : [];
 
     return (
         <div
@@ -427,10 +504,16 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
                                     {data.vuln_count.toLocaleString()}
                                 </span>
                             </button>
+                            <button className={tabCls('assessments')} onClick={() => setSection('assessments')}>
+                                Assessments
+                                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-cyan-900/40 text-cyan-300">
+                                    {(data.assessment_count ?? 0).toLocaleString()}
+                                </span>
+                            </button>
                             <div className="ml-auto">
                                 <input
                                     type="text"
-                                    placeholder="Filter…"
+                                    placeholder="Filter\u2026"
                                     value={filter}
                                     onChange={e => setFilter(e.target.value)}
                                     className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-200 w-48"
@@ -451,6 +534,7 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
                                         <tr>
                                             <th className="px-3 py-2">Package</th>
                                             <th className="px-3 py-2">Version</th>
+                                            <th className="px-3 py-2">Supplier</th>
                                             <th className="px-3 py-2">Source</th>
                                         </tr>
                                     </thead>
@@ -459,6 +543,7 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
                                             <tr key={p.package_id} className="border-t border-gray-600 hover:bg-gray-600/40">
                                                 <td className="px-3 py-1.5 font-mono">{p.package_name}</td>
                                                 <td className="px-3 py-1.5 font-mono text-gray-400">{p.package_version}</td>
+                                                <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(p.package_supplier || '') || '—'}</td>
                                                 <td className="px-3 py-1.5 text-gray-400">{p.sources.join(', ')}</td>
                                             </tr>
                                         ))}
@@ -474,6 +559,7 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
                                         <tr>
                                             <th className="px-3 py-2">Package</th>
                                             <th className="px-3 py-2">Version</th>
+                                            <th className="px-3 py-2">Supplier</th>
                                             <th className="px-3 py-2">Vulnerability</th>
                                             <th className="px-3 py-2">Source</th>
                                         </tr>
@@ -483,6 +569,7 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
                                             <tr key={f.finding_id} className="border-t border-gray-600 hover:bg-gray-600/40">
                                                 <td className="px-3 py-1.5 font-mono">{f.package_name}</td>
                                                 <td className="px-3 py-1.5 font-mono text-gray-400">{f.package_version}</td>
+                                                <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(f.package_supplier || '') || '—'}</td>
                                                 <td className="px-3 py-1.5 font-mono">{f.vulnerability_id}</td>
                                                 <td className="px-3 py-1.5 text-gray-400">{f.sources.join(', ')}</td>
                                             </tr>
@@ -511,6 +598,13 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
                                     </tbody>
                                 </table>
                             </div>
+                        )}
+
+                        {data && section === 'assessments' && (
+                            <AssessmentDiffTable
+                                entries={filteredAssessments}
+                                label="Active assessments"
+                            />
                         )}
                     </div>
 
@@ -664,6 +758,26 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                                     </>
                                 )}
                             </button>
+                            <button className={tabCls('assessments')} onClick={() => setSection('assessments')}>
+                                Assessments
+                                {diff.is_first ? (
+                                    <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-900/40 text-blue-300">
+                                        {(diff.assessment_count ?? 0).toLocaleString()}
+                                    </span>
+                                ) : (
+                                    <>
+                                        <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${(Array.isArray(diff.assessments_added) ? diff.assessments_added.length : 0) > 0 ? 'bg-green-900/40 text-green-300' : 'bg-gray-600 text-gray-400'}`}>
+                                            +{(Array.isArray(diff.assessments_added) ? diff.assessments_added.length : 0).toLocaleString()}
+                                        </span>
+                                        <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${(Array.isArray(diff.assessments_removed) ? diff.assessments_removed.length : 0) > 0 ? 'bg-red-900/40 text-red-300' : 'bg-gray-600 text-gray-400'}`}>
+                                            −{(Array.isArray(diff.assessments_removed) ? diff.assessments_removed.length : 0).toLocaleString()}
+                                        </span>
+                                        <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-gray-600 text-gray-400">
+                                            ={(Array.isArray(diff.assessments_unchanged) ? diff.assessments_unchanged.length : 0).toLocaleString()}
+                                        </span>
+                                    </>
+                                )}
+                            </button>
                             {isToolScan && diff.newly_detected_findings != null && (
                             <button className={tabCls('newly_detected')} onClick={() => setSection('newly_detected')}>
                                 New Discovered
@@ -672,6 +786,9 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                                 </span>
                                 <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-green-900/40 text-green-300">
                                     {(diff.newly_detected_vulns ?? 0).toLocaleString()} vulns
+                                </span>
+                                <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-green-900/40 text-green-300">
+                                    {(diff.newly_detected_assessments_list ?? []).length.toLocaleString()} assessments
                                 </span>
                             </button>
                             )}
@@ -692,7 +809,7 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                                 <PackageDiffTable
                                     entries={diff.packages_added}
                                     label={diff.is_first ? "All packages" : "Added packages"}
-                                    colorClass="text-green-400"
+                                    colorClass={diff.is_first ? "text-cyan-400" : "text-green-400"}
                                 />
                                 {!diff.is_first && (
                                     <PackageDiffTable
@@ -809,6 +926,35 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                                 )}
                             </>
                         )}
+                        {diff && section === 'assessments' && (
+                            <>
+                                <p className="text-sm text-gray-400 mb-4 italic">
+                                    {diff.is_first
+                                        ? `This is the first scan — all ${(diff.assessment_count ?? 0).toLocaleString()} assessments were created during this import.`
+                                        : `${(Array.isArray(diff.assessments_added) ? diff.assessments_added.length : 0).toLocaleString()} new, ${(Array.isArray(diff.assessments_removed) ? diff.assessments_removed.length : 0).toLocaleString()} removed, ${(Array.isArray(diff.assessments_unchanged) ? diff.assessments_unchanged.length : 0).toLocaleString()} unchanged assessment(s).`
+                                    }
+                                </p>
+                                <AssessmentDiffTable
+                                    entries={Array.isArray(diff.assessments_added) ? diff.assessments_added : []}
+                                    label={diff.is_first ? "All assessments" : "New assessments"}
+                                    colorClass={diff.is_first ? "text-cyan-400" : "text-green-400"}
+                                />
+                                {!diff.is_first && (
+                                    <AssessmentDiffTable
+                                        entries={Array.isArray(diff.assessments_removed) ? diff.assessments_removed : []}
+                                        label="Removed assessments"
+                                        colorClass="text-red-400"
+                                    />
+                                )}
+                                {!diff.is_first && (
+                                    <AssessmentDiffTable
+                                        entries={Array.isArray(diff.assessments_unchanged) ? diff.assessments_unchanged : []}
+                                        label="Unchanged assessments"
+                                        colorClass="text-gray-400"
+                                    />
+                                )}
+                            </>
+                        )}
                         {diff && section === 'newly_detected' && isToolScan && (
                             <>
                                 <p className="text-sm text-gray-400 mb-4 italic">
@@ -831,6 +977,15 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                                     />
                                 ) : (
                                     <p className="text-sm text-gray-400 italic">No new vulnerabilities discovered.</p>
+                                )}
+                                {diff.newly_detected_assessments_list && diff.newly_detected_assessments_list.length > 0 ? (
+                                    <AssessmentDiffTable
+                                        entries={diff.newly_detected_assessments_list}
+                                        label="New assessments discovered"
+                                        colorClass="text-green-400"
+                                    />
+                                ) : (
+                                    <p className="text-sm text-gray-400 italic">No new assessments discovered.</p>
                                 )}
                             </>
                         )}
@@ -1265,11 +1420,10 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
     if (loading) {
         return (
-            <div className="w-full px-6 py-6">
-                {menuBar}
-                {progressPanels}
-                <div className="flex items-center justify-center h-32 text-gray-400">
-                    Loading scan history…
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="flex flex-col items-center gap-3 text-white">
+                    <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-sm font-semibold">Loading scan history…</span>
                 </div>
             </div>
         );
@@ -1490,6 +1644,33 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                         </>
                                     )}
 
+                                </div>
+                                {/* Update Assessments row */}
+                                <div className="flex items-center gap-2 flex-wrap mb-1">
+                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Update Assessments:</span>
+                                    {scan.is_first ? (
+                                        <>
+                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.assessment_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                                {(scan.assessment_count ?? 0).toLocaleString()} assessments detected
+                                            </span>
+                                            {scan.newly_detected_assessments != null && (
+                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.newly_detected_assessments ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                                {(scan.newly_detected_assessments ?? 0).toLocaleString()} new assessments discovered
+                                            </span>
+                                            )}
+                                        </>
+                                    ) : (
+                                        <>
+                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.assessment_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                                {(scan.assessment_count ?? 0).toLocaleString()} assessments detected
+                                            </span>
+                                            {scan.newly_detected_assessments != null && (
+                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.newly_detected_assessments ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                                {(scan.newly_detected_assessments ?? 0).toLocaleString()} new assessments discovered
+                                            </span>
+                                            )}
+                                        </>
+                                    )}
                                     {/* Details button */}
                                     <button
                                         onClick={() => { setOpenDiffId(scan.id); setOpenDiffType(scan.scan_type || 'sbom'); }}
@@ -1567,6 +1748,26 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                             </span>
                                         </>
                                     )}
+                                </div>
+                                {/* Assessments row */}
+                                <div className="flex items-center gap-2 flex-wrap mb-1">
+                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Assessments:</span>
+                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.assessment_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                        {(scan.assessment_count ?? 0).toLocaleString()} assessments detected
+                                    </span>
+                                    {!scan.is_first && (scan.assessment_count ?? 0) > 0 && (
+                                        <>
+                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.assessments_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                                {(scan.assessments_added ?? 0).toLocaleString()} new assessments
+                                            </span>
+                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.assessments_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                                {(scan.assessments_removed ?? 0).toLocaleString()} assessments removed
+                                            </span>
+                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
+                                                {(scan.assessments_unchanged ?? 0).toLocaleString()} assessments unchanged
+                                            </span>
+                                        </>
+                                    )}
                                     {/* Details button */}
                                     <button
                                         onClick={() => { setOpenDiffId(scan.id); setOpenDiffType(scan.scan_type || 'sbom'); }}
@@ -1587,6 +1788,9 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                     </span>
                                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${((scan.global_vuln_count ?? scan.vuln_count ?? 0)) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                         {(scan.global_vuln_count ?? scan.vuln_count ?? 0).toLocaleString()} vulnerabilities
+                                    </span>
+                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_assessment_count ?? scan.assessment_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                        {(scan.global_assessment_count ?? scan.assessment_count ?? 0).toLocaleString()} assessments
                                     </span>
                                     <button
                                         onClick={() => setOpenGlobalId(scan.id)}
@@ -1610,6 +1814,9 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                         </span>
                                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_vuln_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                             {(scan.global_vuln_count ?? 0).toLocaleString()} vulnerabilities
+                                        </span>
+                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_assessment_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                            {(scan.global_assessment_count ?? 0).toLocaleString()} assessments
                                         </span>
                                         <button
                                             onClick={() => setOpenGlobalId(scan.id)}

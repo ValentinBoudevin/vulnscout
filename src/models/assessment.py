@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-#
-# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
@@ -128,7 +126,7 @@ class Assessment(Base):
     )
     responses = db.Column(db.JSON, nullable=True)
     finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=True, index=True)
-    variant_id = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True, index=True)
+    variant_id: Mapped[uuid.UUID] = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True, index=True)
 
     finding: Mapped["Finding"] = relationship("Finding", back_populates="assessments")
     variant: Mapped["Variant"] = relationship("Variant", back_populates="assessments")
@@ -408,19 +406,25 @@ class Assessment(Base):
         if self.justification in VALID_JUSTIFICATION_CDX_VEX and not self.impact_statement:
             openvex_impact = self.justification
 
-        ts = ensure_utc_iso(self.timestamp)
+        ts = ensure_utc_iso(self.timestamp) or ensure_utc_iso(datetime.now(timezone.utc))
 
-        return {
+        stmt: dict = {
             "vulnerability": {"name": self.vuln_id},
             "products": [{"@id": p} for p in self.packages],
             "timestamp": ts,
-            "last_updated": ts or "",
+            "last_updated": ts,
             "status": openvex_status,
-            "status_notes": self.status_notes or "",
-            "justification": openvex_justif,
-            "impact_statement": openvex_impact,
-            "action_statement": self.workaround or "",
         }
+        if self.status_notes:
+            stmt["status_notes"] = self.status_notes
+        if openvex_status == "not_affected":
+            if openvex_justif in VALID_JUSTIFICATION_OPENVEX:
+                stmt["justification"] = openvex_justif
+            if openvex_impact:
+                stmt["impact_statement"] = openvex_impact
+        if openvex_status == "affected" and self.workaround:
+            stmt["action_statement"] = self.workaround
+        return stmt
 
     def to_cdx_vex_dict(self) -> Optional[dict]:
         """Return a CycloneDX VEX analysis dict, or ``None`` if the status is invalid."""
@@ -574,23 +578,21 @@ class Assessment(Base):
 
         Does not commit — callers are expected to be inside batch_session()
         or to commit themselves after calling this.
+
+        Lookup is done by the DTO's own UUID so that re-persisting the same
+        assessment (e.g. after an in-memory merge) updates the existing row,
+        while a genuinely new assessment (new UUID from new_dto()) always
+        creates a new historical record — even for the same (finding, variant).
         """
+        # Look up by the DTO's own id to support idempotent re-persist
         existing = None
-        if finding_id is not None:
-            if variant_id is not None:
-                # assessment is linked to (finding, variant)
-                existing = db.session.execute(
-                    db.select(Assessment).where(
-                        Assessment.finding_id == finding_id,
-                        Assessment.variant_id == variant_id,
-                    )
-                ).scalar_one_or_none()
-            else:
-                existing = db.session.execute(
-                    db.select(Assessment).where(Assessment.finding_id == finding_id)
-                ).scalar_one_or_none()
+        assess_id = getattr(assess, "id", None)
+        if assess_id is not None:
+            existing = db.session.get(Assessment, assess_id)
 
         if existing is not None:
+            existing.finding_id = finding_id or existing.finding_id
+            existing.variant_id = variant_id or existing.variant_id
             existing.status = assess.status or existing.status
             existing.simplified_status = STATUS_TO_SIMPLIFIED.get(existing.status, existing.simplified_status)
             existing.status_notes = assess.status_notes or existing.status_notes
@@ -605,7 +607,7 @@ class Assessment(Base):
 
         new_status = assess.status or "under_investigation"
         record = Assessment.create(
-            assessment_id=getattr(assess, "id", None),
+            assessment_id=assess_id,
             status=new_status,
             simplified_status=STATUS_TO_SIMPLIFIED.get(new_status, "Pending Assessment"),
             variant_id=variant_id,
@@ -711,18 +713,16 @@ class Assessment(Base):
         ).scalars().all())
 
     @staticmethod
-    def get_handmade(variant_id: Optional["uuid.UUID | str"] = None) -> list["Assessment"]:
+    def get_handmade(variant_ids: list[uuid.UUID] | None = None) -> list["Assessment"]:
         """Return assessments created/edited via the web UI (``origin='custom'``)."""
-        if isinstance(variant_id, str):
-            variant_id = uuid.UUID(variant_id)
         query = (
             db.select(Assessment)
             .where(Assessment.origin == "custom")
             .options(joinedload(Assessment.finding).joinedload(Finding.package))
             .order_by(Assessment.timestamp.desc())
         )
-        if variant_id is not None:
-            query = query.where(Assessment.variant_id == variant_id)
+        if variant_ids:
+            query = query.where(Assessment.variant_id.in_(variant_ids))
         return list(db.session.execute(query).scalars().unique().all())
 
     def update(

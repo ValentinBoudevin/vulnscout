@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-#
-# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
@@ -44,6 +42,19 @@ class ProjectController:
         if isinstance(project_id, str):
             project_id = uuid.UUID(project_id)
         return Project.get_by_id(project_id)
+
+    @staticmethod
+    def get_by_name(name: str) -> Project | None:
+        """
+        Return an existing project whose name matches *name* (case-sensitive),
+        or None if no project with the name exists.
+
+        :raises ValueError: if *name* is empty or blank.
+        """
+        name = name.strip()
+        if not name:
+            raise ValueError("Project name must not be empty.")
+        return Project.get_by_name(name)
 
     @staticmethod
     def get_all() -> list[Project]:

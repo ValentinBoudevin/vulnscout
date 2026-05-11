@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-#
-# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
@@ -59,6 +57,13 @@ class Project(Base):
     def get_by_id(project_id: uuid.UUID) -> "Project | None":
         """Return the project matching *project_id*, or ``None`` if not found."""
         return db.session.get(Project, project_id)
+
+    @staticmethod
+    def get_by_name(name: str) -> "Project | None":
+        """Return the project matching *name*, or ``None`` if not found."""
+        return db.session.execute(
+            db.select(Project).where(Project.name == name)
+        ).scalar_one_or_none()
 
     @staticmethod
     def get_all() -> list["Project"]:

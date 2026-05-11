@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-#
-# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
 from ..models.package import Package
@@ -116,6 +114,7 @@ class PackagesController:
                         list(package.cpe or []),
                         list(package.purl or []),
                         package.licences or "",
+                        supplier=package.supplier or "",
                     )
                     # Keep caches in sync with DB object
                     self._cache[string_id] = db_pkg
@@ -181,6 +180,7 @@ class PackagesController:
                 v.get("cpe", []),
                 v.get("purl", []),
                 v.get("licences", ""),
+                supplier=v.get("supplier", ""),
             )
             ctrl.add(pkg)
         return ctrl

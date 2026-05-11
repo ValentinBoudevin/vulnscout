@@ -69,6 +69,8 @@ def test_get_packages_list(client):
     assert data[0]["name"] == "cairo"
     assert data[0]["version"] == "1.16.0"
     assert len(data[0]["cpe"]) == 4
+    assert "sbom_documents" in data[0]
+    assert "grype.json" in data[0]["sbom_documents"]
 
 
 def test_get_packages_dict(client):
@@ -80,6 +82,8 @@ def test_get_packages_dict(client):
     assert data["cairo@1.16.0"]["name"] == "cairo"
     assert data["cairo@1.16.0"]["version"] == "1.16.0"
     assert len(data["cairo@1.16.0"]["cpe"]) == 4
+    assert "sbom_documents" in data["cairo@1.16.0"]
+    assert "grype.json" in data["cairo@1.16.0"]["sbom_documents"]
 
 
 def test_get_vulnerabilities_list(client):
@@ -270,14 +274,6 @@ def test_render_document_invalid_ext(client):
     data = json.loads(response.data)
     assert data["error"] is not None
 
-@pytest.mark.skip(reason="patch-finder feature on standby")
-def test_get_patch_finder_status(client):
-    response = client.get("/api/patch-finder/status")
-    assert response.status_code == 200
-    data = json.loads(response.data)
-    assert data["db_ready"] is True
-    assert isinstance(data["vulns_count"], int)
-
 def test_render_spdx_json(client):
     response = client.get("/api/documents/SPDX 2.3?ext=json")
     assert response.status_code == 200
@@ -400,17 +396,3 @@ def test_documents_list_categories_enrichment(monkeypatch, client):
     assert "vex" in item["category"]
     assert item["category"].count("misc") == 1
 
-@pytest.mark.skip(reason="patch-finder feature on standby")
-def test_patch_finder_scan_non_list_payload(client):
-    """POST /api/patch-finder/scan with a non-list payload returns 400 (line 45)."""
-    response = client.post("/api/patch-finder/scan", json={"not": "a list"})
-    assert response.status_code == 400
-
-
-@pytest.mark.skip(reason="patch-finder feature on standby")
-def test_patch_finder_scan_unknown_cve(client):
-    """POST /api/patch-finder/scan with an unknown CVE returns 200 with empty dict."""
-    response = client.post("/api/patch-finder/scan", json=["CVE-0000-99999"])
-    assert response.status_code == 200
-    data = json.loads(response.data)
-    assert data == {}

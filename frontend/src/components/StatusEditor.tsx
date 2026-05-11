@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import MessageBanner from './MessageBanner';
 import type { Variant } from '../handlers/variant';
+import { formatPkgId } from '../helpers/pkgId';
 
 type PostAssessment = {
     vuln_id?: string,
@@ -208,7 +209,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 </div>
             </div>
         )}
-        {availablePackages && availablePackages.length > 1 && (
+        {availablePackages && availablePackages.length >= 1 && (
             <div className="mt-2 mb-2 ml-1">
                 <p className="text-sm font-medium text-gray-300 mb-1">Apply to packages:</p>
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
@@ -229,7 +230,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                                 className="accent-blue-400"
                             />
                             <span className={`font-mono ${isActive ? 'text-gray-200' : 'text-gray-500 italic'}`}
-                                  title={isActive ? undefined : 'Not in active SBOM'}>{pkg}</span>
+                                  title={isActive ? undefined : 'Not in active SBOM'}>{formatPkgId(pkg)}</span>
                         </label>
                         );
                     })}

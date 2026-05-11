@@ -20,6 +20,7 @@ import type { EditAssessmentData } from "./EditAssessment";
 import Variants from '../handlers/variant';
 import { formatSourceName } from '../helpers/sourceNames';
 import { useDocUrl } from '../helpers/useDocUrl';
+import { splitPkgId, formatPkgId, extractSupplierName } from '../helpers/pkgId';
 import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback } from "react";
 
@@ -35,6 +36,7 @@ type Props = {
     currentIndex?: number;
     onNavigate?: (index: number) => void;
     variantId?: string;
+    projectId?: string;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -46,6 +48,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
     timeZoneName: 'shortOffset'
 };
 
+
 type AssessmentGroup = {
     key: string;
     assessments: Assessment[];
@@ -54,7 +57,7 @@ type AssessmentGroup = {
 };
 
   function VulnModal(props: Readonly<Props>) {
-    const { vuln, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId } = props;
+    const { vuln, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-details");
     const [isEditing, setIsEditing] = useState(initialIsEditing);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
@@ -72,11 +75,22 @@ type AssessmentGroup = {
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
     const [editingGroup, setEditingGroup] = useState<AssessmentGroup | null>(null);
 
-    // Fetch variants that have a finding for this specific vulnerability
+    // Project-scoped package list: prefer packages_current (scoped to
+    // the active scan context) and fall back to the full list.
+    const projectPackages = (vuln.packages_current?.length > 0) ? vuln.packages_current : vuln.packages;
+
+    // Fetch variants that have a finding for this specific vulnerability,
+    // filtered to the current project when a projectId is provided.
     useEffect(() => {
         setAvailableVariants([]);
-        Variants.listByVuln(vuln.id).then(setAvailableVariants).catch(() => {});
-    }, [vuln.id]);
+        Variants.listByVuln(vuln.id).then(variants => {
+            if (projectId) {
+                setAvailableVariants(variants.filter(v => v.project_id === projectId));
+            } else {
+                setAvailableVariants(variants);
+            }
+        }).catch(() => {});
+    }, [vuln.id, projectId]);
 
     // Fetch ALL assessments for this vuln (unfiltered) so variant tags are
     // complete even when a variant filter is active in the explorer.
@@ -509,9 +523,9 @@ type AssessmentGroup = {
 
     const addAssessment = async (content: PostAssessment) => {
         content.vuln_id = vuln.id;
-        // packages come from StatusEditor selection; fall back to all vuln packages
+        // packages come from StatusEditor selection; fall back to project-scoped packages
         if (!content.packages || content.packages.length === 0) {
-            content.packages = vuln.packages;
+            content.packages = projectPackages;
         }
 
         // Determine which variants to post to. If none selected, post once without a variant_id.
@@ -811,7 +825,7 @@ type AssessmentGroup = {
                                 </li>
                                 <li key="packages">
                                     <span className="font-bold mr-1">Affects:</span>
-                                    <code>{vuln.packages.join(', ')}</code>
+                                    <code>{vuln.packages.map(formatPkgId).join(', ')}</code>
                                 </li>
                                 <li key="aliases">
                                     <span className="font-bold mr-1">Aliases:</span>
@@ -920,7 +934,7 @@ type AssessmentGroup = {
                                             triggerBanner={showMessage}
                                             defaultStatus={defaultStatus}
                                             variants={availableVariants}
-                                            availablePackages={vuln.packages}
+                                            availablePackages={projectPackages}
                                             defaultSelectedPackages={vuln.packages_current}
                                         />
                                     </li>
@@ -937,12 +951,15 @@ type AssessmentGroup = {
                                             <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
                                             <time className="mb-1 text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
-                                                {group.packages.map(pkg => (
-                                                    <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
-                                                        <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
-                                                        {pkg}
-                                                    </span>
-                                                ))}
+                                                {group.packages.map(pkg => {
+                                                    const { nameVersion, supplier } = splitPkgId(pkg);
+                                                    return (
+                                                        <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300" title={`Supplier: ${extractSupplierName(supplier) || 'unknown supplier'}`}>
+                                                            <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
+                                                            {nameVersion}<span className="ml-1 opacity-70 text-xs">({extractSupplierName(supplier) || 'unknown supplier'})</span>
+                                                        </span>
+                                                    );
+                                                })}
                                             </div>
                                             {(() => {
                                                 // Build the same group key (date + content fingerprint) used by
@@ -1019,7 +1036,7 @@ type AssessmentGroup = {
                                                                 .map(a => a.variant_id)
                                                                 .filter((v): v is string => !!v)
                                                         )]}
-                                                        availablePackages={vuln.packages}
+                                                        availablePackages={projectPackages}
                                                         defaultSelectedPackages={group.packages}
                                                     />
                                                 </div>

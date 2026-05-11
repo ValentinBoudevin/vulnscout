@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-#
-# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
@@ -79,6 +77,13 @@ class Variant(Base):
         return list(db.session.execute(
             db.select(Variant).where(Variant.project_id == project_id).order_by(Variant.name)
         ).scalars().all())
+
+    @staticmethod
+    def get_by_name_and_project(name: str, project_id: uuid.UUID) -> "Variant | None":
+        """Return an existing variant by *name* under *project_id*, or None if it does not exist."""
+        return db.session.execute(
+            db.select(Variant).where(Variant.name == name, Variant.project_id == project_id)
+        ).scalar_one_or_none()
 
     @staticmethod
     def get_or_create(name: str, project_id: uuid.UUID) -> "Variant":

@@ -40,7 +40,9 @@ describe('Packages Table', () => {
                 "fixed": {label: 'medium', index: 3}
             },
             source: ['hardcoded'],
-            variants: []
+            variants: [],
+            sbom_documents: [],
+            supplier: '',
         },
         {
             id: 'xxxyyyzzz@2.0.0',
@@ -51,7 +53,9 @@ describe('Packages Table', () => {
             vulnerabilities: {"active": 4},
             maxSeverity: {"active": {label: 'high', index: 4}},
             source: ['cve-finder'],
-            variants: []
+            variants: [],
+            sbom_documents: [],
+            supplier: '',
         },
         {
             id: 'dddeeefff@1.5.0',
@@ -65,8 +69,52 @@ describe('Packages Table', () => {
                 "fixed": {label: 'low', index: 2}
             },
             source: ['cve-finder', 'hardcoded'],
-            variants: []
+            variants: [],
+            sbom_documents: [],
+            supplier: '',
         }
+    ];
+
+    const packagesWithSuppliers: Package[] = [
+        {
+            id: 'pkg-acme@1.0.0',
+            name: 'pkg-acme',
+            version: '1.0.0',
+            cpe: [],
+            purl: [],
+            vulnerabilities: {},
+            maxSeverity: {},
+            source: ['test'],
+            variants: [],
+            sbom_documents: [],
+            supplier: 'Organization: Acme Corp',
+        },
+        {
+            id: 'pkg-globex@1.0.0',
+            name: 'pkg-globex',
+            version: '1.0.0',
+            cpe: [],
+            purl: [],
+            vulnerabilities: {},
+            maxSeverity: {},
+            source: ['test'],
+            variants: [],
+            sbom_documents: [],
+            supplier: 'Organization: Globex',
+        },
+        {
+            id: 'pkg-acme2@2.0.0',
+            name: 'pkg-acme2',
+            version: '2.0.0',
+            cpe: [],
+            purl: [],
+            vulnerabilities: {},
+            maxSeverity: {},
+            source: ['test'],
+            variants: [],
+            sbom_documents: [],
+            supplier: 'Organization: Acme Corp',
+        },
     ];
 
     Element.prototype.getBoundingClientRect = function () {
@@ -248,7 +296,7 @@ describe('Packages Table', () => {
         const user = userEvent.setup();
 
         // Open the "Source" filter dropdown
-        const source_btn = await screen.getByRole('button', { name: /source/i });
+        const source_btn = await screen.getByRole('button', { name: /^source$/i });
         await user.click(source_btn);
 
         // ACT: select "cve-finder"
@@ -286,7 +334,7 @@ describe('Packages Table', () => {
         const severity_toggle = await screen.getByRole('button', {name: /show severity/i});
         await user.click(severity_toggle);
 
-        const source_btn = await screen.getByRole('button', { name: /source/i });
+        const source_btn = await screen.getByRole('button', { name: /^source$/i });
         await user.click(source_btn);
         const cveFinderCheckbox = await screen.getByRole('checkbox', { name: /cve-finder/i });
         await user.click(cveFinderCheckbox);
@@ -345,7 +393,9 @@ describe('Packages Table', () => {
                 vulnerabilities: {"active": 1},
                 maxSeverity: {"active": {label: 'low', index: 2}},
                 source: ['test'],
-                variants: []
+                variants: [],
+                sbom_documents: [],
+                supplier: '',
             }
         ];
 
@@ -379,7 +429,9 @@ describe('Packages Table', () => {
                 vulnerabilities: {"active": 1},
                 maxSeverity: {"active": {label: 'low', index: 2}},
                 source: ['test'],
-                variants: []
+                variants: [],
+                sbom_documents: [],
+                supplier: '',
             }
         ];
 
@@ -529,7 +581,9 @@ describe('Packages Table', () => {
                 vulnerabilities: {"active": 1},
                 maxSeverity: {"active": {label: 'low', index: 2}},
                 source: ['test'],
-                variants: ['variant-A', 'variant-B']
+                variants: ['variant-A', 'variant-B'],
+                sbom_documents: [],
+                supplier: '',
             }
         ];
 
@@ -550,7 +604,9 @@ describe('Packages Table', () => {
                 vulnerabilities: {"Pending Assessment": 5, "active": 1},
                 maxSeverity: {"active": {label: 'low', index: 2}},
                 source: ['test'],
-                variants: []
+                variants: [],
+                sbom_documents: [],
+                supplier: '',
             },
             {
                 id: 'pkg-b@1.0.0',
@@ -561,7 +617,9 @@ describe('Packages Table', () => {
                 vulnerabilities: {"Pending Assessment": 1, "active": 2},
                 maxSeverity: {"active": {label: 'medium', index: 3}},
                 source: ['test'],
-                variants: []
+                variants: [],
+                sbom_documents: [],
+                supplier: '',
             }
         ];
 
@@ -613,5 +671,49 @@ describe('Packages Table', () => {
         const cpeSpan = await screen.getByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
         expect(cpeSpan).toBeTruthy();
         expect(cpeSpan.getAttribute('title')).toContain('cpe:2.3:a:vendor:aaabbbccc:1.0.0');
+    });
+
+    test('supplier column is hidden by default when no package has supplier info', async () => {
+        render(<TablePackages packages={packages} />);
+        // All packages have empty supplier, so the column should NOT be visible initially
+        expect(screen.queryByRole('columnheader', { name: /^supplier$/i })).toBeNull();
+    });
+
+    test('supplier column is shown by default when at least one package has supplier info', async () => {
+        const packagesWithSupplier: Package[] = [
+            { ...packages[0], supplier: 'Acme Corp' },
+            ...packages.slice(1),
+        ];
+        render(<TablePackages packages={packagesWithSupplier} />);
+        // At least one package has a supplier, so the column should be visible by default
+        const supplierHeader = await screen.findByRole('columnheader', { name: /^supplier$/i });
+        expect(supplierHeader).toBeTruthy();
+    });
+
+    test('filter by supplier', async () => {
+        render(<TablePackages packages={packagesWithSuppliers} />);
+        const user = userEvent.setup();
+
+        // ACT: open the Supplier filter dropdown and select "Acme Corp"
+        const supplierBtn = await screen.getByRole('button', { name: /^supplier$/i });
+        await user.click(supplierBtn);
+
+        const acmeCheckbox = await screen.getByRole('checkbox', { name: /acme corp/i });
+        await user.click(acmeCheckbox);
+
+        // ASSERT: only Acme Corp packages are shown, Globex is hidden
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            expect(html).toContain('pkg-acme');
+            expect(html).toContain('pkg-acme2');
+            expect(html).not.toContain('pkg-globex');
+        }, { timeout: 2000 });
+
+        // REVERT: uncheck "Acme Corp" — all packages should reappear
+        await user.click(acmeCheckbox);
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('cell', { name: /pkg-globex/ }).length).toBeGreaterThan(0);
+        });
     });
 });
