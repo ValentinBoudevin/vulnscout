@@ -42,7 +42,7 @@ type Vulnerability = {
     texts: {
         title: string;
         content: string;
-        packages: string[];
+        packages?: string[];
     }[];
     severity: {
         severity: string;
