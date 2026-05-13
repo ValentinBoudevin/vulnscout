@@ -58,6 +58,91 @@ def _get_vuln_info(vuln_id: str, vuln_cache: dict) -> dict:
     return {"description": description, "aliases": aliases, "url": vuln_url}
 
 
+def sanitize_variant_name(name: str) -> str:
+    """Replace filesystem-unsafe characters in a variant name."""
+    return name.replace("/", "_").replace("\\", "_")
+
+
+def build_openvex_doc(
+    assessments: list,
+    author: str,
+    now_iso: str | None = None,
+    vuln_cache: dict | None = None,
+) -> dict:
+    """Build a single OpenVEX document dict from a list of assessments.
+
+    Parameters
+    ----------
+    assessments:
+        List of DB ``Assessment`` objects.
+    author:
+        Author string written into the document header.
+    now_iso:
+        ISO-8601 timestamp.  Defaults to *now*.
+    vuln_cache:
+        Optional mutable cache ``{vuln_id: VulnModel | None}`` to avoid
+        repeated DB lookups across multiple calls.
+
+    Returns
+    -------
+    dict — a complete OpenVEX document ready for JSON serialisation.
+    """
+    if now_iso is None:
+        now_iso = _dt.now(_tz.utc).isoformat()
+    if vuln_cache is None:
+        vuln_cache = {}
+
+    statements = []
+    for assess in assessments:
+        stmt = assess.to_openvex_dict()
+        if stmt is None:
+            continue
+
+        vuln_info = _get_vuln_info(assess.vuln_id or "", vuln_cache)
+        stmt["vulnerability"] = {
+            "name": assess.vuln_id,
+            "description": vuln_info["description"],
+            "aliases": vuln_info["aliases"],
+            "@id": vuln_info["url"],
+        }
+
+        products = []
+        for pkg_str in assess.packages:
+            if "@" in pkg_str:
+                name, version = pkg_str.rsplit("@", 1)
+            else:
+                name, version = pkg_str, ""
+            products.append({
+                "@id": pkg_str,
+                "identifiers": {
+                    "cpe23": (
+                        f"cpe:2.3:*:*:{name}:{version}"
+                        ":*:*:*:*:*:*:*"
+                    ),
+                    "purl": f"pkg:generic/{name}@{version}",
+                },
+            })
+        stmt["products"] = products
+        stmt.setdefault("action_statement_timestamp", "")
+        stmt["scanners"] = list({
+            assess.source or "local_user_data",
+            assess.origin or "local_user_data",
+        })
+        statements.append(stmt)
+
+    return {
+        "@context": "https://openvex.dev/ns/v0.2.0",
+        "@id": (
+            "https://savoirfairelinux.com/sbom/openvex/"
+            + str(_uuid.uuid4())
+        ),
+        "author": author,
+        "timestamp": now_iso,
+        "version": 1,
+        "statements": statements,
+    }
+
+
 def build_openvex_archive(
     handmade_assessments: list,
     variant_names: dict[str, str],
@@ -100,60 +185,11 @@ def build_openvex_archive(
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode='w:gz') as tar:
         for vid, assessments in by_variant.items():
-            filename = (
+            filename = sanitize_variant_name(
                 variant_names.get(vid, "unassigned") if vid else "unassigned"
             ) + ".json"
-            filename = filename.replace("/", "_").replace("\\", "_")
 
-            statements = []
-            for assess in assessments:
-                stmt = assess.to_openvex_dict()
-                if stmt is None:
-                    continue
-
-                vuln_info = _get_vuln_info(assess.vuln_id or "", vuln_cache)
-                stmt["vulnerability"] = {
-                    "name": assess.vuln_id,
-                    "description": vuln_info["description"],
-                    "aliases": vuln_info["aliases"],
-                    "@id": vuln_info["url"],
-                }
-
-                products = []
-                for pkg_str in assess.packages:
-                    if "@" in pkg_str:
-                        name, version = pkg_str.rsplit("@", 1)
-                    else:
-                        name, version = pkg_str, ""
-                    products.append({
-                        "@id": pkg_str,
-                        "identifiers": {
-                            "cpe23": (
-                                f"cpe:2.3:*:*:{name}:{version}"
-                                ":*:*:*:*:*:*:*"
-                            ),
-                            "purl": f"pkg:generic/{name}@{version}",
-                        },
-                    })
-                stmt["products"] = products
-                stmt.setdefault("action_statement_timestamp", "")
-                stmt["scanners"] = list({
-                    assess.source or "local_user_data",
-                    assess.origin or "local_user_data",
-                })
-                statements.append(stmt)
-
-            doc = {
-                "@context": "https://openvex.dev/ns/v0.2.0",
-                "@id": (
-                    "https://savoirfairelinux.com/sbom/openvex/"
-                    + str(_uuid.uuid4())
-                ),
-                "author": author,
-                "timestamp": now_iso,
-                "version": 1,
-                "statements": statements,
-            }
+            doc = build_openvex_doc(assessments, author, now_iso, vuln_cache)
 
             json_bytes = json.dumps(doc, indent=2).encode("utf-8")
             info = tarfile.TarInfo(name=filename)
@@ -298,7 +334,7 @@ def build_variant_by_name_map() -> dict:
 
     variant_by_name: dict = {}
     for v in DBVariant.get_all():
-        sanitised = v.name.replace("/", "_").replace("\\", "_")
+        sanitised = sanitize_variant_name(v.name)
         variant_by_name[sanitised] = v
         variant_by_name[v.name] = v
     return variant_by_name
@@ -360,4 +396,60 @@ def import_archive_bytes(
         total_skipped += s
 
     tar.close()
+    return total_created, total_errors, total_skipped, variant_files_found
+
+
+def import_directory(
+    dir_path: str,
+    variant_by_name: dict,
+) -> tuple[list[dict], list[dict], int, int]:
+    """Import OpenVEX assessments from a directory of JSON files.
+
+    Each ``.json`` file is matched to a variant by its filename (sans
+    extension).
+
+    Returns
+    -------
+    (created, errors, skipped, variant_files_found)
+    """
+    total_created: list[dict] = []
+    total_errors: list[dict] = []
+    total_skipped = 0
+    variant_files_found = 0
+
+    json_files = sorted(f for f in os.listdir(dir_path) if f.endswith(".json"))
+    if not json_files:
+        raise ValueError("No .json files found in directory")
+
+    for json_name in json_files:
+        variant_name = json_name[: -len(".json")]
+        variant = variant_by_name.get(variant_name)
+        if variant is None:
+            total_errors.append({
+                "file": json_name,
+                "error": f"No variant found matching name '{variant_name}'",
+            })
+            continue
+
+        json_path = os.path.join(dir_path, json_name)
+        try:
+            with open(json_path) as fh:
+                doc = json.load(fh)
+        except Exception:
+            total_errors.append({"file": json_name, "error": "Invalid JSON"})
+            continue
+
+        if not is_openvex_doc(doc):
+            total_errors.append({
+                "file": json_name,
+                "error": "Not a valid OpenVEX document",
+            })
+            continue
+
+        variant_files_found += 1
+        c, e, s = import_statements(doc["statements"], variant.id)
+        total_created.extend(c)
+        total_errors.extend(e)
+        total_skipped += s
+
     return total_created, total_errors, total_skipped, variant_files_found
