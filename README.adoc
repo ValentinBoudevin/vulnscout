@@ -278,11 +278,15 @@ VulnScout lets you export and re-import the assessments you have manually create
 
 ==== Exporting Custom Assessments
 
-The `--export-custom-assessments` flag produces a `.tar.gz` archive containing one OpenVEX JSON file per variant. The archive is written to the outputs directory (default: `.vulnscout/outputs/`).
+The `--export-custom-assessments` flag produces one OpenVEX JSON file per variant, written individually to the outputs directory (default: `.vulnscout/outputs/`).
 
 [source,shell]
 ----
+# Export as individual files (one per variant)
 ./vulnscout --project demo --export-custom-assessments
+
+# Export as a compressed .tar.gz archive
+./vulnscout --project demo --export-custom-assessments --compress
 ----
 
 ==== Importing Custom Assessments

@@ -30,10 +30,12 @@ from collections import defaultdict
               help="Directory where the exported file is written.")
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
-              help="Variant name. If empty, all variants will be exported in an archive.")
+              help="Variant name. If empty, all variants will be exported.")
+@click.option("--compress", is_flag=True, default=False,
+              help="Write a .tar.gz archive instead of individual files.")
 @with_appcontext
-def export_custom_assessments_command(output_dir: str, project: str, variant: str | None) -> None:
-    """Export handmade (custom) assessments as an (archive of) OpenVEX file(s)."""
+def export_custom_assessments_command(output_dir: str, project: str, variant: str | None, compress: bool) -> None:
+    """Export handmade (custom) assessments as OpenVEX file(s)."""
 
     author = os.getenv("AUTHOR_NAME", "Savoir-faire Linux")
     now_iso = _dt.now(_tz.utc).isoformat()
@@ -155,43 +157,71 @@ def export_custom_assessments_command(output_dir: str, project: str, variant: st
         }
         return doc
 
+    def _sanitize(name: str) -> str:
+        return name.replace("/", "_").replace("\\", "_")
+
     if variant is None:
-        # export all variants from project as archive
         by_variant: dict[_uuid.UUID, list[DBAssessment]] = defaultdict(list)
         for assess in handmade:
             assert assess.variant_id is not None
             by_variant[assess.variant_id].append(assess)
 
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+        if compress:
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+                for vid, assessments in by_variant.items():
+                    variant_obj = DBVariant.get_by_id(vid)
+                    assert variant_obj
+                    filename = _sanitize(variant_obj.name) + ".json"
+
+                    doc = generate_doc(assessments)
+                    json_bytes = _json.dumps(doc, indent=2).encode("utf-8")
+                    info = tarfile.TarInfo(name=filename)
+                    info.size = len(json_bytes)
+                    tar.addfile(info, io.BytesIO(json_bytes))
+
+            out_path = os.path.join(output_dir, "custom_assessments.tar.gz")
+            with open(out_path, "wb") as fh:
+                fh.write(buf.getvalue())
+            click.echo(f"Custom assessments exported: {out_path}")
+        else:
+            out_paths = []
             for vid, assessments in by_variant.items():
                 variant_obj = DBVariant.get_by_id(vid)
-                assert variant_obj  # Variant cannot be null since we filtrered by variant before
-                filename = variant_obj.name + ".json"
-                filename = filename.replace("/", "_").replace("\\", "_")
+                assert variant_obj
+                filename = _sanitize(variant_obj.name) + ".json"
 
                 doc = generate_doc(assessments)
-                json_bytes = _json.dumps(doc, indent=2).encode("utf-8")
+                out_path = os.path.join(output_dir, filename)
+                with open(out_path, "w") as file:
+                    _json.dump(doc, file, indent=2)
+                out_paths.append(out_path)
+            for p in out_paths:
+                click.echo(f"Custom assessments exported: {p}")
+    else:
+        assert variant_obj
+        filename = _sanitize(variant_obj.name) + ".json"
+
+        if compress:
+            doc = generate_doc(handmade)
+            json_bytes = _json.dumps(doc, indent=2).encode("utf-8")
+
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode='w:gz') as tar:
                 info = tarfile.TarInfo(name=filename)
                 info.size = len(json_bytes)
                 tar.addfile(info, io.BytesIO(json_bytes))
 
-        out_path = os.path.join(output_dir, "custom_assessments.tar.gz")
-        with open(out_path, "wb") as fh:
-            fh.write(buf.getvalue())
-    else:
-        assert variant_obj
-        # Declared above, assert here so type checker no longer
-        # considers it possibly Unbound
-        filename = variant_obj.name + ".json"
-        filename = filename.replace("/", "_").replace("\\", "_")
+            out_path = os.path.join(output_dir, "custom_assessments.tar.gz")
+            with open(out_path, "wb") as fh:
+                fh.write(buf.getvalue())
+        else:
+            doc = generate_doc(handmade)
+            out_path = os.path.join(output_dir, filename)
+            with open(out_path, "w") as file:
+                _json.dump(doc, file, indent=2)
 
-        doc = generate_doc(handmade)
-        out_path = os.path.join(output_dir, filename)
-        with open(out_path, "w") as file:
-            _json.dump(doc, file)
-
-    click.echo(f"Custom assessments exported: {out_path}")
+        click.echo(f"Custom assessments exported: {out_path}")
 
 
 @click.command("import-custom-assessments")

@@ -417,6 +417,9 @@ cmd_export_custom_assessments() {
     if [[ -n "$VARIANT_NAME" ]]; then
         export_args+=(--variant "$VARIANT_NAME")
     fi
+    if [[ "${COMPRESS:-false}" == "true" ]]; then
+        export_args+=(--compress)
+    fi
 
     cd "$BASE_DIR"
     local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
@@ -661,6 +664,8 @@ while [[ $# -gt 0 ]]; do
             EXPORT_FORMATS+=("openvex"); shift ;;
         --export-custom-assessments)
             EXPORT_CUSTOM_ASSESSMENTS=true; shift ;;
+        --compress)
+            COMPRESS=true; shift ;;
         --import-custom-assessments)
             IMPORT_CUSTOM_ASSESSMENTS_FILE="$2"; shift 2 ;;
         --list-projects|--list-scans)
