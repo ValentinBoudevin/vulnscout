@@ -291,15 +291,18 @@ The `--export-custom-assessments` flag produces one OpenVEX JSON file per varian
 
 ==== Importing Custom Assessments
 
-The `--import-custom-assessments` flag reads a `.json` or `.tar.gz` file and replays the assessment statements into the database, matching them to existing vulnerabilities and packages.
+The `--import-custom-assessments` flag reads a `.json` file, `.tar.gz` archive, or a directory of OpenVEX JSON files and replays the assessment statements into the database, matching them to existing vulnerabilities and packages.
 
 [source,shell]
 ----
 # Import from a single OpenVEX JSON file
 ./vulnscout --project demo --import-custom-assessments /path/to/assessments.json
 
-# Import from a tar.gz archive previously exported
+# Import from a tar.gz archive
 ./vulnscout --project demo --import-custom-assessments /path/to/custom_assessments.tar.gz
+
+# Import from a directory of OpenVEX JSON files (one per variant)
+./vulnscout --project demo --import-custom-assessments /path/to/assessments/
 ----
 
 Both commands can be combined with other flags:

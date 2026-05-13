@@ -693,6 +693,111 @@ def test_import_custom_assessments_targz_variant_flag(app, tmp_path):
     assert "cannot use the --variant" in result.output.lower()
 
 
+def test_import_custom_assessments_directory_success(app, tmp_path):
+    """Import from a directory of JSON files."""
+    doc = {
+        "@context": "https://openvex.dev/ns/v0.2.0",
+        "statements": [{
+            "vulnerability": {"name": "CVE-2020-35492"},
+            "status": "affected",
+            "products": [{"@id": "cairo@1.16.0"}],
+            "status_notes": "imported from dir",
+        }],
+    }
+    json_file = tmp_path / f"{_VARIANT_NAME}.json"
+    json_file.write_text(json.dumps(doc))
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            str(tmp_path),
+        ])
+    assert result.exit_code == 0, result.output
+    assert "Imported 1 assessments" in result.output
+
+
+def test_import_custom_assessments_directory_no_matching(app, tmp_path):
+    """Import from a directory with no matching variant files exits 1."""
+    doc = {
+        "@context": "https://openvex.dev/ns/v0.2.0",
+        "statements": [],
+    }
+    json_file = tmp_path / "unknown_variant.json"
+    json_file.write_text(json.dumps(doc))
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            str(tmp_path),
+        ])
+    assert result.exit_code == 1
+    assert "no valid openvex" in result.output.lower()
+
+
+def test_import_custom_assessments_directory_variant_flag(app, tmp_path):
+    """Import from a directory with --variant fails."""
+    (tmp_path / f"{_VARIANT_NAME}.json").write_text("{}")
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
+            str(tmp_path),
+        ])
+    assert result.exit_code == 1
+    assert "cannot use the --variant" in result.output.lower()
+
+
+def test_import_custom_assessments_directory_empty(app, tmp_path):
+    """Import from an empty directory exits 1."""
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            str(empty_dir),
+        ])
+    assert result.exit_code == 1
+    assert "no .json files found" in result.output.lower()
+
+
+def test_export_import_roundtrip_directory(app, tmp_path):
+    """Export individual files then import directory produces same assessments."""
+    _create_custom_assessment(app)
+
+    # Export (individual files)
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "export-custom-assessments",
+            "--project", _PROJECT_NAME,
+            "--output-dir", str(tmp_path),
+        ])
+    assert result.exit_code == 0, result.output
+
+    # Delete all to have a clean slate, then import directory
+    with app.app_context():
+        from src.extensions import db as _db
+        from src.models.assessment import Assessment
+        for a in Assessment.get_handmade():
+            a.delete()
+        _db.session.commit()
+
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            str(tmp_path),
+        ])
+    assert result.exit_code == 0, result.output
+    assert "Imported 1 assessments" in result.output
+
+
 def test_export_import_roundtrip(app, tmp_path):
     """Export then import produces same number of assessments."""
     _create_custom_assessment(app)

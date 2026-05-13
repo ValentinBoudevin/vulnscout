@@ -230,8 +230,8 @@ def export_custom_assessments_command(output_dir: str, project: str, variant: st
 @click.option("--variant", "-v", default=None, help="Variant name. Defaults to the file name.")
 @with_appcontext
 def import_custom_assessments_command(file_path: str, project: str, variant: str | None) -> None:
-    """Import custom assessments from a .json or .tar.gz OpenVEX file."""
-    if not os.path.isfile(file_path):
+    """Import custom assessments from a .json, .tar.gz, or directory of OpenVEX files."""
+    if not os.path.isfile(file_path) and not os.path.isdir(file_path):
         click.echo(f"Error: file not found: {file_path}", err=True)
         raise SystemExit(1)
 
@@ -431,6 +431,68 @@ def import_custom_assessments_command(file_path: str, project: str, variant: str
                 click.echo(f"  {err}", err=True)
             raise SystemExit(1)
 
+    elif os.path.isdir(file_path):
+        if variant:
+            click.echo("Error: cannot use the --variant argument with a directory of custom assessments.")
+            raise SystemExit(1)
+
+        json_files = sorted(f for f in os.listdir(file_path) if f.endswith(".json"))
+        if not json_files:
+            click.echo("Error: no .json files found in directory.", err=True)
+            raise SystemExit(1)
+
+        variant_files_found = 0
+        total_created = []
+        total_errors = []
+        total_skipped = 0
+        for json_name in json_files:
+            variant_name = json_name[:-len(".json")]
+            variant_obj = variant_by_name.get(variant_name)
+            if variant_obj is None:
+                total_errors.append({
+                    "file": json_name,
+                    "error": (
+                        f"No variant found matching name "
+                        f"'{variant_name}'"
+                    ),
+                })
+                continue
+
+            json_path = os.path.join(file_path, json_name)
+            try:
+                with open(json_path) as fh:
+                    doc = _json.load(fh)
+            except Exception:
+                total_errors.append({
+                    "file": json_name,
+                    "error": "Invalid JSON",
+                })
+                continue
+
+            if not _is_openvex(doc):
+                total_errors.append({
+                    "file": json_name,
+                    "error": "Not a valid OpenVEX document",
+                })
+                continue
+
+            variant_files_found += 1
+            c, e, s = _import_statements(
+                doc["statements"], variant_obj.id
+            )
+            total_created.extend(c)
+            total_errors.extend(e)
+            total_skipped += s
+
+        if variant_files_found == 0 and not total_created:
+            click.echo(
+                "Error: no valid OpenVEX files matching known "
+                "variants found in directory.", err=True
+            )
+            for err in total_errors:
+                click.echo(f"  {err}", err=True)
+            raise SystemExit(1)
+
     elif file_path.endswith(".json"):
         if variant:
             assert variant_obj
@@ -466,7 +528,7 @@ def import_custom_assessments_command(file_path: str, project: str, variant: str
     else:
         click.echo(
             "Error: unsupported file type. "
-            "Please provide a .json or .tar.gz file.",
+            "Please provide a .json, .tar.gz file, or directory.",
             err=True,
         )
         raise SystemExit(1)
