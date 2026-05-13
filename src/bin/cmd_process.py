@@ -14,8 +14,6 @@ from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
 from ..controllers.conditions_parser import ConditionParser
-from ..controllers.projects import ProjectController
-from ..controllers.variants import VariantController
 from ..controllers.scans import ScanController
 from ..controllers.sbom_documents import SBOMDocumentController
 from ..models.sbom_document import SBOMDocument
@@ -31,7 +29,7 @@ import json
 import os
 from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
-from ._common import DEFAULT_VARIANT_NAME
+from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
 
 
 def _ts_key(ts) -> str:
@@ -201,8 +199,7 @@ def create_project_context(
     """
     variant_name = variant or DEFAULT_VARIANT_NAME
 
-    project_obj = ProjectController.get_or_create(project)
-    variant_obj = VariantController.get_or_create(variant_name, project_obj.id)
+    project_obj, variant_obj = resolve_project_variant(project, variant, create=True)
 
     # Determine scan type: if there are any SBOM inputs (spdx, cdx, yocto_cve)
     # or openvex, it's an "sbom" scan.  Grype-only → "tool" scan.

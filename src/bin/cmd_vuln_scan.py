@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Vulnerability scanning commands: ``flask nvd-scan`` and ``flask osv-scan``."""
 
-from ..controllers.projects import ProjectController
-from ..controllers.variants import VariantController
 from ..controllers.nvd_db import NVD_DB
 from ..controllers.osv_client import OSVClient
 from ..models.scan import Scan as ScanModel
@@ -16,7 +14,7 @@ from ..models.assessment import Assessment
 from ..models.package import Package
 from ..extensions import db as _db
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant, active_package_ids_for_scans
-from ._common import DEFAULT_VARIANT_NAME
+from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
 import click
 import os
 from flask.cli import with_appcontext
@@ -33,9 +31,7 @@ def nvd_scan_command(project: str, variant: str | None) -> None:
     Queries the NVD API for every CPE found in the variant's active packages
     and creates findings/observations in a new tool scan.
     """
-    variant_name = variant or DEFAULT_VARIANT_NAME
-    project_obj = ProjectController.get_or_create(project)
-    variant_obj = VariantController.get_or_create(variant_name, project_obj.id)
+    project_obj, variant_obj = resolve_project_variant(project, variant, create=True)
     variant_uuid = variant_obj.id
 
     nvd_api_key = os.getenv("NVD_API_KEY")
@@ -241,9 +237,7 @@ def osv_scan_command(project: str, variant: str | None) -> None:
     packages and creates findings/observations in a new tool scan.
     """
 
-    variant_name = variant or DEFAULT_VARIANT_NAME
-    project_obj = ProjectController.get_or_create(project)
-    variant_obj = VariantController.get_or_create(variant_name, project_obj.id)
+    project_obj, variant_obj = resolve_project_variant(project, variant, create=True)
     variant_uuid = variant_obj.id
 
     osv = OSVClient()

@@ -10,7 +10,6 @@ import tarfile
 import uuid as _uuid
 import os
 from flask.cli import with_appcontext
-from ..controllers.projects import ProjectController
 from ..helpers.assessment_io import (
     is_openvex_doc,
     build_variant_by_name_map,
@@ -23,7 +22,7 @@ from ..models.finding import Finding
 from ..extensions import db as _db
 from datetime import datetime as _dt, timezone as _tz
 from collections import defaultdict
-from ._common import get_default_author
+from ._common import get_default_author, resolve_project, resolve_project_variant
 
 
 @click.command("export-custom-assessments")
@@ -41,17 +40,11 @@ def export_custom_assessments_command(output_dir: str, project: str, variant: st
     author = get_default_author()
     now_iso = _dt.now(_tz.utc).isoformat()
 
-    project_obj = ProjectController.get_by_name(project)
-    if not project_obj:
-        click.echo(f"Error: project not found: {project}")
-        raise SystemExit(1)
+    project_obj = resolve_project(project)
 
     variants: list[DBVariant]
     if variant:
-        variant_obj = DBVariant.get_by_name_and_project(variant, project_obj.id)
-        if not variant_obj:
-            click.echo(f"Error: variant not found: {variant}")
-            raise SystemExit(1)
+        _, variant_obj = resolve_project_variant(project, variant, create=False)
         variants = [variant_obj]
     else:
         variants = DBVariant.get_by_project(project_obj.id)
@@ -236,17 +229,12 @@ def import_custom_assessments_command(file_path: str, project: str, variant: str
         click.echo(f"Error: file not found: {file_path}", err=True)
         raise SystemExit(1)
 
-    project_obj = ProjectController.get_by_name(project)
-    if not project_obj:
-        click.echo(f"Error: project not found: {project}")
-        raise SystemExit(1)
+    resolve_project(project)  # validate project exists
 
     if variant:
-        variant_obj = DBVariant.get_by_name_and_project(variant, project_obj.id)
-        if not variant_obj:
-            click.echo(f"Error: variant not found: {variant}")
-            raise SystemExit(1)
+        _, variant_obj = resolve_project_variant(project, variant, create=False)
     else:
+        project_obj = resolve_project(project)
         all_variants = DBVariant.get_by_project(project_obj.id)
         variant_by_name: dict[str, "DBVariant"] = {}
         for v in all_variants:
