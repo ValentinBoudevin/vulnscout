@@ -20,6 +20,76 @@ import os
 from flask.cli import with_appcontext
 
 
+# ---------------------------------------------------------------------------
+# Shared helpers for vuln scan commands
+# ---------------------------------------------------------------------------
+
+def _resolve_active_packages(variant_uuid):
+    """Resolve active packages for a variant, raising on failure."""
+    click.echo("Resolving active packages…")
+    latest_ids = active_sbom_scan_ids_for_variant(variant_uuid)
+    if not latest_ids:
+        raise click.ClickException("No scans found for variant")
+    all_pkg_ids = active_package_ids_for_scans(latest_ids)
+    if not all_pkg_ids:
+        raise click.ClickException("No packages found for variant")
+    return _db.session.execute(
+        _db.select(Package).where(Package.id.in_(all_pkg_ids))
+    ).scalars().all()
+
+
+def _create_tool_scan(variant_uuid, scan_source: str):
+    """Create a new tool scan for the given variant."""
+    return ScanModel.create(
+        description="empty description",
+        variant_id=variant_uuid,
+        scan_type="tool",
+        scan_source=scan_source,
+    )
+
+
+def _echo_query_results(idx: int, total: int, label: str, vuln_ids: list[str],
+                        noun: str = "vuln(s)", no_results: str = "no vulnerabilities"):
+    """Print progress line for a query result."""
+    if vuln_ids:
+        ids_str = ', '.join(vuln_ids[:10])
+        ellip = '…' if len(vuln_ids) > 10 else ''
+        click.echo(
+            f"[{idx}/{total}] {label} → "
+            f"{len(vuln_ids)} {noun}: {ids_str}{ellip}"
+        )
+    else:
+        click.echo(f"[{idx}/{total}] {label} → {no_results}")
+
+
+def _persist_finding(pkg_id, vuln_id, scan_id, variant_uuid, origin: str,
+                     observation_pairs: set, assessed_findings: set):
+    """Create Finding, Observation and initial Assessment (if missing) for a package+vuln pair."""
+    finding = FindingModel.get_or_create(pkg_id, vuln_id)
+    pair = (finding.id, scan_id)
+    if pair not in observation_pairs:
+        observation_pairs.add(pair)
+        Observation.create(finding_id=finding.id, scan_id=scan_id, commit=False)
+    fv_key = (finding.id, variant_uuid)
+    if fv_key not in assessed_findings:
+        assessed_findings.add(fv_key)
+        has_assess = _db.session.execute(
+            _db.select(Assessment.id).where(
+                Assessment.finding_id == finding.id,
+                Assessment.variant_id == variant_uuid,
+            ).limit(1)
+        ).scalar_one_or_none()
+        if has_assess is None:
+            Assessment.create(
+                status="under_investigation",
+                simplified_status="Pending Assessment",
+                finding_id=finding.id,
+                variant_id=variant_uuid,
+                origin=origin,
+                commit=False,
+            )
+
+
 @click.command("nvd-scan")
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
@@ -37,23 +107,9 @@ def nvd_scan_command(project: str, variant: str | None) -> None:
     nvd_api_key = os.getenv("NVD_API_KEY")
     nvd = NVD_DB(nvd_api_key=nvd_api_key)
 
-    # 1. Get active packages for this variant
-    click.echo("Resolving active packages…")
-    latest_ids = active_sbom_scan_ids_for_variant(variant_uuid)
+    packages = _resolve_active_packages(variant_uuid)
 
-    if not latest_ids:
-        raise click.ClickException("No scans found for variant")
-
-    all_pkg_ids = active_package_ids_for_scans(latest_ids)
-
-    if not all_pkg_ids:
-        raise click.ClickException("No packages found for variant")
-
-    packages = _db.session.execute(
-        _db.select(Package).where(Package.id.in_(all_pkg_ids))
-    ).scalars().all()
-
-    # 2. Collect CPE names from packages
+    # Collect CPE names from packages
     # Accept any CPE with a non-wildcard product (parts[4]).
     # Wildcard part/vendor/version are handled via virtualMatchString.
     cpe_to_pkgs: dict = {}
@@ -73,13 +129,7 @@ def nvd_scan_command(project: str, variant: str | None) -> None:
         f"{len(cpe_to_pkgs)} unique CPEs to query"
     )
 
-    # 3. Create a tool scan
-    scan = ScanModel.create(
-        description="empty description",
-        variant_id=variant_uuid,
-        scan_type="tool",
-        scan_source="nvd",
-    )
+    scan = _create_tool_scan(variant_uuid, "nvd")
     total_cpes = len(cpe_to_pkgs)
     cves_found: set = set()
     observation_pairs: set = set()
@@ -111,15 +161,7 @@ def nvd_scan_command(project: str, variant: str | None) -> None:
             v.get("cve", {}).get("id", "")
             for v in nvd_vulns if v.get("cve", {}).get("id")
         ]
-        if cpe_cves:
-            ids_str = ', '.join(cpe_cves[:10])
-            ellip = '…' if len(cpe_cves) > 10 else ''
-            click.echo(
-                f"[{idx}/{total_cpes}] {cpe_name} → "
-                f"{len(cpe_cves)} CVE(s): {ids_str}{ellip}"
-            )
-        else:
-            click.echo(f"[{idx}/{total_cpes}] {cpe_name} → no CVEs")
+        _echo_query_results(idx, total_cpes, cpe_name, cpe_cves, "CVE(s)", "no CVEs")
 
         for nvd_vuln in nvd_vulns:
             cve = nvd_vuln.get("cve", {})
@@ -192,31 +234,8 @@ def nvd_scan_command(project: str, variant: str | None) -> None:
                         pass
 
             for pkg in pkgs:
-                finding = FindingModel.get_or_create(pkg.id, cve_id)
-                pair = (finding.id, scan.id)
-                if pair not in observation_pairs:
-                    observation_pairs.add(pair)
-                    Observation.create(
-                        finding_id=finding.id, scan_id=scan.id, commit=False,
-                    )
-                fv_key = (finding.id, variant_uuid)
-                if fv_key not in assessed_findings:
-                    assessed_findings.add(fv_key)
-                    has_assess = _db.session.execute(
-                        _db.select(Assessment.id).where(
-                            Assessment.finding_id == finding.id,
-                            Assessment.variant_id == variant_uuid,
-                        ).limit(1)
-                    ).scalar_one_or_none()
-                    if has_assess is None:
-                        Assessment.create(
-                            status="under_investigation",
-                            simplified_status="Pending Assessment",
-                            finding_id=finding.id,
-                            variant_id=variant_uuid,
-                            origin="nvd",
-                            commit=False,
-                        )
+                _persist_finding(pkg.id, cve_id, scan.id, variant_uuid, "nvd",
+                                 observation_pairs, assessed_findings)
 
     _db.session.commit()
     click.echo(
@@ -242,23 +261,9 @@ def osv_scan_command(project: str, variant: str | None) -> None:
 
     osv = OSVClient()
 
-    # 1. Get active packages for this variant
-    click.echo("Resolving active packages…")
-    latest_ids = active_sbom_scan_ids_for_variant(variant_uuid)
+    packages = _resolve_active_packages(variant_uuid)
 
-    if not latest_ids:
-        raise click.ClickException("No scans found for variant")
-
-    all_pkg_ids = active_package_ids_for_scans(latest_ids)
-
-    if not all_pkg_ids:
-        raise click.ClickException("No packages found for variant")
-
-    packages = _db.session.execute(
-        _db.select(Package).where(Package.id.in_(all_pkg_ids))
-    ).scalars().all()
-
-    # 2. Collect packages with PURL identifiers
+    # Collect packages with PURL identifiers
     pkg_purl_list: list[tuple] = []
     seen_purls: set = set()
     for pkg in packages:
@@ -280,13 +285,7 @@ def osv_scan_command(project: str, variant: str | None) -> None:
         f"{total_pkgs} with PURL identifiers to query"
     )
 
-    # 3. Create a tool scan
-    scan = ScanModel.create(
-        description="empty description",
-        variant_id=variant_uuid,
-        scan_type="tool",
-        scan_source="osv",
-    )
+    scan = _create_tool_scan(variant_uuid, "osv")
     vulns_found: set = set()
     observation_pairs: set = set()
     assessed_findings: set = set()
@@ -304,15 +303,7 @@ def osv_scan_command(project: str, variant: str | None) -> None:
             continue
 
         vuln_ids = [v.get("id", "") for v in osv_vulns if v.get("id")]
-        if vuln_ids:
-            ids_str = ', '.join(vuln_ids[:10])
-            ellip = '…' if len(vuln_ids) > 10 else ''
-            click.echo(
-                f"[{idx}/{total_pkgs}] {pkg_label} → "
-                f"{len(vuln_ids)} vuln(s): {ids_str}{ellip}"
-            )
-        else:
-            click.echo(f"[{idx}/{total_pkgs}] {pkg_label} → no vulnerabilities")
+        _echo_query_results(idx, total_pkgs, pkg_label, vuln_ids)
 
         for osv_vuln in osv_vulns:
             vuln_id = osv_vuln.get("id", "")
@@ -346,31 +337,8 @@ def osv_scan_command(project: str, variant: str | None) -> None:
                             description=osv_desc, commit=False,
                         )
 
-                finding = FindingModel.get_or_create(pkg.id, vid)
-                pair = (finding.id, scan.id)
-                if pair not in observation_pairs:
-                    observation_pairs.add(pair)
-                    Observation.create(
-                        finding_id=finding.id, scan_id=scan.id, commit=False,
-                    )
-                fv_key = (finding.id, variant_uuid)
-                if fv_key not in assessed_findings:
-                    assessed_findings.add(fv_key)
-                    has_assess = _db.session.execute(
-                        _db.select(Assessment.id).where(
-                            Assessment.finding_id == finding.id,
-                            Assessment.variant_id == variant_uuid,
-                        ).limit(1)
-                    ).scalar_one_or_none()
-                    if has_assess is None:
-                        Assessment.create(
-                            status="under_investigation",
-                            simplified_status="Pending Assessment",
-                            finding_id=finding.id,
-                            variant_id=variant_uuid,
-                            origin="osv",
-                            commit=False,
-                        )
+                _persist_finding(pkg.id, vid, scan.id, variant_uuid, "osv",
+                                 observation_pairs, assessed_findings)
 
     _db.session.commit()
     click.echo(
