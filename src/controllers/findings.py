@@ -4,6 +4,7 @@
 import uuid
 from typing import Optional
 from ..models.finding import Finding
+from ._base import ensure_uuid, resolve_entity, validate_non_empty
 
 
 class FindingController:
@@ -39,9 +40,7 @@ class FindingController:
     @staticmethod
     def get(finding_id: uuid.UUID | str) -> Optional[Finding]:
         """Return the finding matching *finding_id*, or ``None`` if not found."""
-        if isinstance(finding_id, str):
-            finding_id = uuid.UUID(finding_id)
-        return Finding.get_by_id(finding_id)
+        return Finding.get_by_id(ensure_uuid(finding_id))
 
     @staticmethod
     def get_by_package(package_id: uuid.UUID | str) -> list[Finding]:
@@ -63,9 +62,7 @@ class FindingController:
 
         :raises ValueError: if *vulnerability_id* is empty or blank.
         """
-        vulnerability_id = vulnerability_id.strip()
-        if not vulnerability_id:
-            raise ValueError("Vulnerability id must not be empty.")
+        vulnerability_id = validate_non_empty(vulnerability_id, "Vulnerability id")
         return Finding.create(package_id, vulnerability_id)
 
     @staticmethod
@@ -74,9 +71,7 @@ class FindingController:
 
         :raises ValueError: if *vulnerability_id* is empty or blank.
         """
-        vulnerability_id = vulnerability_id.strip()
-        if not vulnerability_id:
-            raise ValueError("Vulnerability id must not be empty.")
+        vulnerability_id = validate_non_empty(vulnerability_id, "Vulnerability id")
         return Finding.get_or_create(package_id, vulnerability_id)
 
     @staticmethod
@@ -85,11 +80,5 @@ class FindingController:
 
         :raises ValueError: if the finding is not found.
         """
-        if isinstance(finding, Finding):
-            resolved = finding
-        else:
-            found = FindingController.get(finding)
-            if found is None:
-                raise ValueError("Finding not found.")
-            resolved = found
+        resolved = resolve_entity(finding, FindingController.get, "Finding")
         resolved.delete()
