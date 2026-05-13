@@ -2,20 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """SBOM export and report generation commands: ``flask export`` and ``flask report``."""
 
-from ..controllers.projects import ProjectController
-from ..controllers.variants import VariantController
-from ..controllers.scans import ScanController
-from ..controllers.sbom_documents import SBOMDocumentController
-from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
-from ..controllers.assessments import AssessmentsController
 from ..views.spdx import SPDX
 from ..views.spdx3 import SPDX3
 from ..views.cyclonedx import CycloneDx
 from ..views.openvex import OpenVex
 from ..views.templates import Templates
 from .cmd_process import evaluate_condition
-from ._common import get_default_author
+from ._common import get_default_author, build_controllers
 from datetime import date as _date
 import click
 import json
@@ -32,11 +26,7 @@ from flask.cli import with_appcontext
 @with_appcontext
 def export_command(export_format: str, output_dir: str) -> None:
     """Export the current project data as an SBOM (SPDX, CycloneDX, or OpenVEX)."""
-    pkgCtrl = PackagesController()
-    pkgCtrl._preload_cache()
-    vulnCtrl = VulnerabilitiesController(pkgCtrl)
-    assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
-    ctrls = {"packages": pkgCtrl, "vulnerabilities": vulnCtrl, "assessments": assessCtrl}
+    ctrls = build_controllers(preload_cache=True)
     author = get_default_author()
 
     os.makedirs(output_dir, exist_ok=True)
@@ -88,20 +78,11 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
     Also honours the GENERATE_DOCUMENTS env var (comma-separated list) when
     invoked; TEMPLATE_NAME is always generated regardless.
     """
-    pkgCtrl = PackagesController()
-    vulnCtrl = VulnerabilitiesController(pkgCtrl)
-    assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
+    controllers = build_controllers(include_all=True)
+    vulnCtrl = controllers["vulnerabilities"]
+    pkgCtrl = controllers["packages"]
     vulnCtrl = VulnerabilitiesController.from_dict(pkgCtrl, vulnCtrl.to_dict())
-
-    controllers = {
-        "packages": pkgCtrl,
-        "vulnerabilities": vulnCtrl,
-        "assessments": assessCtrl,
-        "projects": ProjectController(),
-        "variants": VariantController(),
-        "scans": ScanController(),
-        "sbom_documents": SBOMDocumentController(),
-    }
+    controllers["vulnerabilities"] = vulnCtrl
     templ = Templates(controllers)
 
     # Reuse failed_vulns from flask process if available, otherwise evaluate now

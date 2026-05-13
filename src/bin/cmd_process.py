@@ -10,9 +10,6 @@ from ..views.openvex import OpenVex
 from ..views.yocto_vulns import YoctoVulns
 from ..views.grype_vulns import GrypeVulns
 from ..views.templates import Templates
-from ..controllers.packages import PackagesController
-from ..controllers.vulnerabilities import VulnerabilitiesController
-from ..controllers.assessments import AssessmentsController
 from ..controllers.conditions_parser import ConditionParser
 from ..controllers.scans import ScanController
 from ..controllers.sbom_documents import SBOMDocumentController
@@ -29,7 +26,7 @@ import json
 import os
 from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
-from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
+from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant, build_controllers
 
 
 def _ts_key(ts) -> str:
@@ -105,7 +102,7 @@ def read_inputs(controllers, scan_id=None):
     if use_fastspdx:
         verbose("merger_ci: Using FastSPDX parser")
 
-    pkgCtrl: PackagesController = controllers["packages"]
+    pkgCtrl = controllers["packages"]
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
 
     for doc in docs:
@@ -299,18 +296,12 @@ def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None
 
 def _run_main() -> dict:
     """Core processing logic (usable both from the CLI command and directly)."""
-    pkgCtrl = PackagesController()
-    # pkgCtrl._preload_cache()  # bulk-load pkg UUIDs + findings into cache; eliminates per-vuln SELECT queries
-    vulnCtrl = VulnerabilitiesController(pkgCtrl)
-    assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
+    controllers = build_controllers()
+    vulnCtrl = controllers["vulnerabilities"]
+    assessCtrl = controllers["assessments"]
     latest_scan = ScanModel.get_latest()
     if latest_scan:
         assessCtrl.current_variant_id = latest_scan.variant_id
-    controllers = {
-        "packages": pkgCtrl,
-        "vulnerabilities": vulnCtrl,
-        "assessments": assessCtrl
-    }
 
     # Wrap all ingestion + post-treatment inside batch_session so that the
     # hundreds/thousands of individual model commit() calls are deferred to a
