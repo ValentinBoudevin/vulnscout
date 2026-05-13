@@ -7,6 +7,7 @@ import uuid
 from ..models import Assessment, Package, Finding
 from ..helpers.verbose import verbose
 from ..extensions import db
+from ._base import to_dict_with_fallback
 
 
 def _persist_assessment_to_db(
@@ -253,13 +254,10 @@ class AssessmentsController:
 
     def to_dict(self) -> dict:
         """Return all assessments preferring in-memory data when available."""
-        if self.assessments:
-            return {k: v.to_dict() for k, v in self.assessments.items()}
-        try:
-            return {str(a.id): a.to_dict() for a in Assessment.get_all()}
-        except Exception as e:
-            verbose(f"[AssessmentsController.to_dict] {e}")
-            return {}
+        return to_dict_with_fallback(
+            self.assessments, Assessment.get_all,
+            lambda a: str(a.id), "AssessmentsController",
+        )
 
     @staticmethod
     def from_dict(pkgCtrl, vulnCtrl, data: dict):

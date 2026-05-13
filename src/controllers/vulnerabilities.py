@@ -15,6 +15,7 @@ from ..controllers.packages import PackagesController
 from ..controllers.epss_db import EPSS_DB
 from ..controllers.nvd_db import NVD_DB
 from ..helpers.verbose import verbose
+from ._base import to_dict_with_fallback
 from ..models.cvss import CVSS
 from ..models.metrics import Metrics as MetricsModel
 from ..extensions import db
@@ -636,13 +637,10 @@ class VulnerabilitiesController:
 
     def to_dict(self) -> dict:
         """Export the list of vulnerabilities preferring in-memory data when available."""
-        if self.vulnerabilities:
-            return {k: v.to_dict() for k, v in self.vulnerabilities.items()}
-        try:
-            return {r.id: r.to_dict() for r in Vulnerability.get_all()}
-        except Exception as e:
-            verbose(f"[VulnerabilitiesController.to_dict] {e}")
-            return {}
+        return to_dict_with_fallback(
+            self.vulnerabilities, Vulnerability.get_all,
+            lambda r: r.id, "VulnerabilitiesController",
+        )
 
     @staticmethod
     def from_dict(pkgCtrl, data: dict):

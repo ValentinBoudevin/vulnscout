@@ -38,3 +38,21 @@ def validate_non_empty(value: str, field_name: str) -> str:
     if not value:
         raise ValueError(f"{field_name} must not be empty.")
     return value
+
+
+def to_dict_with_fallback(cache: dict, db_get_all, key_fn, label: str) -> dict:
+    """Return a ``{key: dict}`` mapping preferring *cache* when populated.
+
+    Falls back to *db_get_all* (a callable returning an iterable of model
+    records) when *cache* is empty.  *key_fn* extracts the dict key from
+    each DB record.  Exceptions are logged via :func:`verbose` using
+    *label* for context.
+    """
+    if cache:
+        return {k: v.to_dict() for k, v in cache.items()}
+    try:
+        return {key_fn(r): r.to_dict() for r in db_get_all()}
+    except Exception as e:
+        from ..helpers.verbose import verbose
+        verbose(f"[{label}.to_dict] {e}")
+        return {}
