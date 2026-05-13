@@ -80,6 +80,19 @@ def _should_refetch(fetched_at: Optional[datetime.datetime], delay: Optional[dat
     return (datetime.datetime.utcnow() - fetched_at) >= delay
 
 
+def _batch_commit(done: int, total: int, label: str) -> None:
+    """Try to commit the DB session and log progress.
+
+    On failure, roll back and log via :func:`verbose`.
+    """
+    try:
+        db.session.commit()
+        print(f"=== {label}: committed {done}/{total}", flush=True)
+    except Exception as e:
+        verbose(f"[{label} commit at {done}] {e}")
+        db.session.rollback()
+
+
 def _persist_vuln_to_db(
         vuln: Vulnerability, pkg_id_cache=None, finding_cache=None,
         db_record_cache=None, use_savepoint: bool = True) -> None:
@@ -405,12 +418,7 @@ class VulnerabilitiesController:
             tracker.update("epss_enrichment", processed, total, f"EPSS enrichment: {processed}/{total}")
             # Commit once every 500 CVEs processed.
             if processed % DB_COMMIT_EVERY < BATCH_SIZE:
-                try:
-                    db.session.commit()
-                    print(f"=== EPSS: committed {processed}/{total}", flush=True)
-                except Exception as e:
-                    verbose(f"[fetch_epss_scores commit at {processed}] {e}")
-                    db.session.rollback()
+                _batch_commit(processed, total, "EPSS")
 
         # Final commit for any remaining deferred EPSS updates.
         try:
@@ -585,12 +593,7 @@ class VulnerabilitiesController:
             done += 1
             tracker.update("nvd_enrichment", done, total, f"NVD enrichment: {done}/{total} ({vuln.id})")
             if done % DB_COMMIT_EVERY == 0:
-                try:
-                    db.session.commit()
-                    print(f"=== NVD: committed {done}/{total}", flush=True)
-                except Exception as e:
-                    verbose(f"[fetch_nvd_data commit at {done}] {e}")
-                    db.session.rollback()
+                _batch_commit(done, total, "NVD")
 
         # Fetch GHSA dates concurrently with a thread pool and a timeout
         if ghsa_vulns:
