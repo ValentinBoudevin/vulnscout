@@ -15,6 +15,7 @@ from ..views.cyclonedx import CycloneDx
 from ..views.openvex import OpenVex
 from ..views.templates import Templates
 from .cmd_process import evaluate_condition
+from ._common import get_default_author
 from datetime import date as _date
 import click
 import json
@@ -36,7 +37,7 @@ def export_command(export_format: str, output_dir: str) -> None:
     vulnCtrl = VulnerabilitiesController(pkgCtrl)
     assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
     ctrls = {"packages": pkgCtrl, "vulnerabilities": vulnCtrl, "assessments": assessCtrl}
-    author = os.getenv("AUTHOR_NAME", "Savoir-faire Linux")
+    author = get_default_author()
 
     os.makedirs(output_dir, exist_ok=True)
     fmt = export_format.lower()
@@ -118,7 +119,7 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
             failed_vulns = evaluate_condition(controllers, match_condition)
 
     metadata = {
-        "author": os.getenv("AUTHOR_NAME", "Savoir-faire Linux"),
+        "author": get_default_author(),
         "client_name": os.getenv("CLIENT_NAME", ""),
         "export_date": _date.today().isoformat(),
         "ignore_before": "1970-01-01T00:00",

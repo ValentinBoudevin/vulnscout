@@ -16,7 +16,7 @@ from ..models.assessment import Assessment
 from ..models.package import Package
 from ..extensions import db as _db
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant, active_package_ids_for_scans
-from .cmd_process import DEFAULT_VARIANT_NAME
+from ._common import DEFAULT_VARIANT_NAME
 import click
 import os
 from flask.cli import with_appcontext

@@ -23,6 +23,7 @@ from ..models.finding import Finding
 from ..extensions import db as _db
 from datetime import datetime as _dt, timezone as _tz
 from collections import defaultdict
+from ._common import get_default_author
 
 
 @click.command("export-custom-assessments")
@@ -37,7 +38,7 @@ from collections import defaultdict
 def export_custom_assessments_command(output_dir: str, project: str, variant: str | None, compress: bool) -> None:
     """Export handmade (custom) assessments as OpenVEX file(s)."""
 
-    author = os.getenv("AUTHOR_NAME", "Savoir-faire Linux")
+    author = get_default_author()
     now_iso = _dt.now(_tz.utc).isoformat()
 
     project_obj = ProjectController.get_by_name(project)

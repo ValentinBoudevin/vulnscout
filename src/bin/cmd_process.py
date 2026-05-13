@@ -31,8 +31,7 @@ import json
 import os
 from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
-
-DEFAULT_VARIANT_NAME = "default"
+from ._common import DEFAULT_VARIANT_NAME
 
 
 def _ts_key(ts) -> str:
