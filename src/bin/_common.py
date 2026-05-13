@@ -55,14 +55,16 @@ def resolve_project_variant(project: str, variant: str | None, *, create: bool =
         project_obj = ProjectController.get_or_create(project)
         variant_obj = VariantController.get_or_create(variant_name, project_obj.id)
     else:
-        project_obj = ProjectController.get_by_name(project)
-        if not project_obj:
+        _proj = ProjectController.get_by_name(project)
+        if not _proj:
             click.echo(f"Error: project not found: {project}")
             raise SystemExit(1)
-        variant_obj = DBVariant.get_by_name_and_project(variant_name, project_obj.id)
-        if not variant_obj:
+        project_obj = _proj
+        _var = DBVariant.get_by_name_and_project(variant_name, project_obj.id)
+        if not _var:
             click.echo(f"Error: variant not found: {variant_name}")
             raise SystemExit(1)
+        variant_obj = _var
 
     return project_obj, variant_obj
 
