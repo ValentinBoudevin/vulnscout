@@ -39,6 +39,62 @@ def _parse_effort_hours(value) -> int:
     raise ValueError(f"Invalid effort value: {value!r}")
 
 
+def _validate_effort(eff: dict):
+    """Validate and parse effort dict with optimistic/likely/pessimistic keys.
+
+    Returns ``(opt, lik, pes, None)`` on success or ``(None, None, None, error_string)``
+    on failure.
+    """
+    if not all(k in eff for k in ("optimistic", "likely", "pessimistic")):
+        return None, None, None, "Invalid effort values"
+    try:
+        opt = _parse_effort_hours(eff["optimistic"])
+        lik = _parse_effort_hours(eff["likely"])
+        pes = _parse_effort_hours(eff["pessimistic"])
+    except (ValueError, TypeError):
+        return None, None, None, "Invalid effort values"
+    if not (opt <= lik <= pes):
+        return None, None, None, "Invalid effort values"
+    return opt, lik, pes, None
+
+
+def _validate_and_apply_cvss(new_cvss: dict, record_id: str, log_prefix: str = ""):
+    """Validate CVSS payload and persist to Metrics.
+
+    Returns an error string on validation failure, ``None`` on success.
+    """
+    required_keys = {"base_score", "vector_string", "version"}
+    if not required_keys.issubset(new_cvss.keys()):
+        return "Invalid CVSS data"
+    cvss_obj = CVSS.from_dict(new_cvss)
+    try:
+        Metrics.from_cvss(cvss_obj, record_id)
+    except Exception as e:
+        verbose(f"[{log_prefix} cvss] {e}")
+    return None
+
+
+def _apply_effort(record, variant_id, opt, lik, pes, log_prefix: str = ""):
+    """Persist effort values to the first finding's TimeEstimate."""
+    try:
+        from ..models.time_estimate import TimeEstimate
+        for finding in (record.findings or []):
+            if variant_id is not None:
+                existing = TimeEstimate.get_by_finding_and_variant(finding.id, variant_id)
+            else:
+                existing = finding.time_estimate
+            if existing is not None:
+                existing.update(optimistic=opt, likely=lik, pessimistic=pes)
+            else:
+                TimeEstimate.create(
+                    finding_id=finding.id, variant_id=variant_id,
+                    optimistic=opt, likely=lik, pessimistic=pes
+                )
+            break
+    except Exception as e:
+        verbose(f"[{log_prefix} effort] {e}")
+
+
 # Formats that are exclusively vulnerability scanners (never pure package BOMs)
 _DEDICATED_SCANNER_FORMATS = frozenset({"grype", "yocto_cve_check"})
 
@@ -518,51 +574,24 @@ def init_app(app):
                 return {"error": "Invalid request data"}, 400
 
             if "effort" in payload_data:
-                # Store effort on the first finding's time-estimate
                 eff = payload_data["effort"]
-                if not all(k in eff for k in ("optimistic", "likely", "pessimistic")):
-                    return "Invalid effort values", 400
-                try:
-                    opt = _parse_effort_hours(eff["optimistic"])
-                    lik = _parse_effort_hours(eff["likely"])
-                    pes = _parse_effort_hours(eff["pessimistic"])
-                except (ValueError, TypeError):
-                    return "Invalid effort values", 400
-                if not (opt <= lik <= pes):
-                    return "Invalid effort values", 400
+                opt, lik, pes, err = _validate_effort(eff)
+                if err:
+                    return err, 400
                 variant_id = payload_data.get("variant_id")
                 if variant_id is not None:
                     variant_id, err = parse_uuid_or_400(variant_id, "variant_id")
                     if err:
                         return err
-                try:
-                    from ..models.time_estimate import TimeEstimate
-                    for finding in (record.findings or []):
-                        if variant_id is not None:
-                            existing = TimeEstimate.get_by_finding_and_variant(finding.id, variant_id)
-                        else:
-                            existing = finding.time_estimate
-                        if existing is not None:
-                            existing.update(optimistic=opt, likely=lik, pessimistic=pes)
-                        else:
-                            TimeEstimate.create(
-                                finding_id=finding.id, variant_id=variant_id,
-                                optimistic=opt, likely=lik, pessimistic=pes
-                            )
-                        break
-                except Exception as e:
-                    verbose(f"[PATCH /api/vulnerabilities/{record.id} effort] {e}")
+                _apply_effort(record, variant_id, opt, lik, pes,
+                              log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
 
             if "cvss" in payload_data:
-                new_cvss = payload_data["cvss"]
-                required_keys = {"base_score", "vector_string", "version"}
-                if not required_keys.issubset(new_cvss.keys()):
-                    return "Invalid CVSS data", 400
-                cvss_obj = CVSS.from_dict(new_cvss)
-                try:
-                    Metrics.from_cvss(cvss_obj, record.id)
-                except Exception as e:
-                    verbose(f"[PATCH /api/vulnerabilities/{record.id} cvss] {e}")
+                cvss_err = _validate_and_apply_cvss(
+                    payload_data["cvss"], record.id,
+                    log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
+                if cvss_err:
+                    return cvss_err, 400
 
         return record.to_dict()
 
@@ -589,18 +618,9 @@ def init_app(app):
 
             if "effort" in item:
                 eff = item["effort"]
-                if not all(k in eff for k in ("optimistic", "likely", "pessimistic")):
-                    errors.append({"id": item["id"], "error": "Invalid effort values"})
-                    continue
-                try:
-                    opt = _parse_effort_hours(eff["optimistic"])
-                    lik = _parse_effort_hours(eff["likely"])
-                    pes = _parse_effort_hours(eff["pessimistic"])
-                except (ValueError, TypeError):
-                    errors.append({"id": item["id"], "error": "Invalid effort values"})
-                    continue
-                if not (opt <= lik <= pes):
-                    errors.append({"id": item["id"], "error": "Invalid effort values"})
+                opt, lik, pes, err = _validate_effort(eff)
+                if err:
+                    errors.append({"id": item["id"], "error": err})
                     continue
                 item_variant_id = item.get("variant_id")
                 if item_variant_id is not None:
@@ -608,35 +628,16 @@ def init_app(app):
                     if err:
                         errors.append({"id": item["id"], "error": "Invalid variant_id"})
                         continue
-                try:
-                    from ..models.time_estimate import TimeEstimate
-                    for finding in (record.findings or []):
-                        if item_variant_id is not None:
-                            existing = TimeEstimate.get_by_finding_and_variant(finding.id, item_variant_id)
-                        else:
-                            existing = finding.time_estimate
-                        if existing is not None:
-                            existing.update(optimistic=opt, likely=lik, pessimistic=pes)
-                        else:
-                            TimeEstimate.create(
-                                finding_id=finding.id, variant_id=item_variant_id,
-                                optimistic=opt, likely=lik, pessimistic=pes
-                            )
-                        break
-                except Exception as e:
-                    verbose(f"[PATCH /api/vulnerabilities/batch {item['id']!r} effort] {e}")
+                _apply_effort(record, item_variant_id, opt, lik, pes,
+                              log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}")
 
             if "cvss" in item:
-                new_cvss = item["cvss"]
-                required_keys = {"base_score", "vector_string", "version"}
-                if not required_keys.issubset(new_cvss.keys()):
-                    errors.append({"id": item["id"], "error": "Invalid CVSS data"})
+                cvss_err = _validate_and_apply_cvss(
+                    item["cvss"], record.id,
+                    log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}")
+                if cvss_err:
+                    errors.append({"id": item["id"], "error": cvss_err})
                     continue
-                cvss_obj = CVSS.from_dict(new_cvss)
-                try:
-                    Metrics.from_cvss(cvss_obj, record.id)
-                except Exception as e:
-                    verbose(f"[PATCH /api/vulnerabilities/batch {item['id']!r} cvss] {e}")
 
             results.append(record.to_dict())
 
