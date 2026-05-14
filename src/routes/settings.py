@@ -144,18 +144,48 @@ def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id
 
 def init_app(app):
 
+    def _validate_name_from_request(entity_label: str):
+        """Parse and validate the ``name`` field from a JSON request body.
+
+        Returns ``(name, None)`` on success or ``(None, Response)`` on failure.
+        """
+        data = request.get_json(silent=True)
+        if not data or not isinstance(data.get("name"), str):
+            return None, (jsonify({"error": "Missing or invalid 'name' field."}), 400)
+        name = data["name"].strip()
+        if not name:
+            return None, (jsonify({"error": f"{entity_label} name must not be empty."}), 400)
+        return name, None
+
+    def _delete_entity(entity_id, controller, id_label, entity_label):
+        """Validate, look up and delete an entity by UUID.
+
+        Returns a Flask response tuple.
+        """
+        _, err = parse_uuid_or_400(entity_id, id_label)
+        if err:
+            return err
+
+        entity = controller.get(entity_id)
+        if entity is None:
+            return jsonify({"error": f"{entity_label} not found."}), 404
+
+        def _do_delete():
+            e = controller.get(entity_id)
+            if e is not None:
+                controller.delete(e)
+
+        _retry_on_lock(_do_delete)
+        return jsonify({"message": f"{entity_label} deleted."}), 200
+
     # ------------------------------------------------------------------
     # Rename project
     # ------------------------------------------------------------------
     @app.route('/api/projects/<project_id>/rename', methods=['PATCH'])
     def rename_project(project_id):
-        data = request.get_json(silent=True)
-        if not data or not isinstance(data.get("name"), str):
-            return jsonify({"error": "Missing or invalid 'name' field."}), 400
-
-        new_name = data["name"].strip()
-        if not new_name:
-            return jsonify({"error": "Project name must not be empty."}), 400
+        new_name, err = _validate_name_from_request("Project")
+        if err:
+            return err
 
         _, err = parse_uuid_or_400(project_id, "project ID")
         if err:
@@ -184,13 +214,9 @@ def init_app(app):
     # ------------------------------------------------------------------
     @app.route('/api/variants/<variant_id>/rename', methods=['PATCH'])
     def rename_variant(variant_id):
-        data = request.get_json(silent=True)
-        if not data or not isinstance(data.get("name"), str):
-            return jsonify({"error": "Missing or invalid 'name' field."}), 400
-
-        new_name = data["name"].strip()
-        if not new_name:
-            return jsonify({"error": "Variant name must not be empty."}), 400
+        new_name, err = _validate_name_from_request("Variant")
+        if err:
+            return err
 
         _, err = parse_uuid_or_400(variant_id, "variant ID")
         if err:
@@ -219,13 +245,9 @@ def init_app(app):
     # ------------------------------------------------------------------
     @app.route('/api/projects', methods=['POST'])
     def create_project():
-        data = request.get_json(silent=True)
-        if not data or not isinstance(data.get("name"), str):
-            return jsonify({"error": "Missing or invalid 'name' field."}), 400
-
-        new_name = data["name"].strip()
-        if not new_name:
-            return jsonify({"error": "Project name must not be empty."}), 400
+        new_name, err = _validate_name_from_request("Project")
+        if err:
+            return err
 
         # Check uniqueness
         existing = ProjectController.get_all()
@@ -245,13 +267,9 @@ def init_app(app):
         if err:
             return err
 
-        data = request.get_json(silent=True)
-        if not data or not isinstance(data.get("name"), str):
-            return jsonify({"error": "Missing or invalid 'name' field."}), 400
-
-        new_name = data["name"].strip()
-        if not new_name:
-            return jsonify({"error": "Variant name must not be empty."}), 400
+        new_name, err = _validate_name_from_request("Variant")
+        if err:
+            return err
 
         project = ProjectController.get(project_id)
         if project is None:
@@ -271,42 +289,14 @@ def init_app(app):
     # ------------------------------------------------------------------
     @app.route('/api/projects/<project_id>', methods=['DELETE'])
     def delete_project(project_id):
-        _, err = parse_uuid_or_400(project_id, "project ID")
-        if err:
-            return err
-
-        project = ProjectController.get(project_id)
-        if project is None:
-            return jsonify({"error": "Project not found."}), 404
-
-        def _do_delete():
-            p = ProjectController.get(project_id)
-            if p is not None:
-                ProjectController.delete(p)
-
-        _retry_on_lock(_do_delete)
-        return jsonify({"message": "Project deleted."}), 200
+        return _delete_entity(project_id, ProjectController, "project ID", "Project")
 
     # ------------------------------------------------------------------
     # Delete variant
     # ------------------------------------------------------------------
     @app.route('/api/variants/<variant_id>', methods=['DELETE'])
     def delete_variant(variant_id):
-        _, err = parse_uuid_or_400(variant_id, "variant ID")
-        if err:
-            return err
-
-        variant = VariantController.get(variant_id)
-        if variant is None:
-            return jsonify({"error": "Variant not found."}), 404
-
-        def _do_delete():
-            v = VariantController.get(variant_id)
-            if v is not None:
-                VariantController.delete(v)
-
-        _retry_on_lock(_do_delete)
-        return jsonify({"message": "Variant deleted."}), 200
+        return _delete_entity(variant_id, VariantController, "variant ID", "Variant")
 
     # ------------------------------------------------------------------
     # Upload SBOM
