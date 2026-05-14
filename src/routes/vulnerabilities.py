@@ -30,6 +30,21 @@ from ._scan_helpers import parse_uuid_or_400
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
 
 
+def _sbom_pkg_filter(pkg_ids):
+    """Return a SQLAlchemy filter clause restricting tool-scan findings to SBOM packages.
+
+    Assumes the query already joins ``Finding`` and ``Scan``.  When
+    *pkg_ids* is empty the function returns ``None`` (no filter needed).
+    """
+    if not pkg_ids:
+        return None
+    return db.or_(
+        Scan.scan_type.is_(None),
+        Scan.scan_type == "sbom",
+        Finding.package_id.in_(pkg_ids),
+    )
+
+
 def _parse_effort_hours(value) -> int:
     """Parse an effort value (ISO 8601 duration string or integer hours) to whole hours."""
     if isinstance(value, int):
@@ -247,14 +262,9 @@ def init_app(app):
                     .join(Scan, Observation.scan_id == Scan.id)
                     .where(Observation.scan_id.in_(scan_ids))
                 )
-                if _pkg_ids:
-                    q = q.where(
-                        db.or_(
-                            Scan.scan_type.is_(None),
-                            Scan.scan_type == "sbom",
-                            Finding.package_id.in_(_pkg_ids),
-                        )
-                    )
+                _flt = _sbom_pkg_filter(_pkg_ids)
+                if _flt is not None:
+                    q = q.where(_flt)
                 return set(db.session.execute(q.distinct()).scalars().all())
 
             base_ids = _vuln_ids_for_scans(base_latest_ids)
@@ -284,14 +294,9 @@ def init_app(app):
                         .join(Scan, Observation.scan_id == Scan.id)
                         .where(Observation.scan_id.in_(compare_latest_ids))
                     )
-                    if compare_pkg_ids:
-                        query = query.where(
-                            db.or_(
-                                Scan.scan_type.is_(None),
-                                Scan.scan_type == "sbom",
-                                Finding.package_id.in_(compare_pkg_ids),
-                            )
-                        )
+                    _flt = _sbom_pkg_filter(compare_pkg_ids)
+                    if _flt is not None:
+                        query = query.where(_flt)
                     query = query.distinct().order_by(Vulnerability.id)
                     if base_ids:
                         query = query.where(~Vulnerability.id.in_(list(base_ids)))
@@ -323,14 +328,9 @@ def init_app(app):
                     .join(Scan, Observation.scan_id == Scan.id)
                     .where(Observation.scan_id.in_(latest_ids))
                 )
-                if _pkg_ids:
-                    query = query.where(
-                        db.or_(
-                            Scan.scan_type.is_(None),
-                            Scan.scan_type == "sbom",
-                            Finding.package_id.in_(_pkg_ids),
-                        )
-                    )
+                _flt = _sbom_pkg_filter(_pkg_ids)
+                if _flt is not None:
+                    query = query.where(_flt)
                 records = list(db.session.execute(
                     query.distinct().order_by(Vulnerability.id)
                 ).scalars().all())
@@ -381,14 +381,9 @@ def init_app(app):
                     .join(Scan, Observation.scan_id == Scan.id)
                     .where(Observation.scan_id.in_(latest_ids))
                 )
-                if _pkg_ids:
-                    vuln_ids_base = vuln_ids_base.where(
-                        db.or_(
-                            Scan.scan_type.is_(None),
-                            Scan.scan_type == "sbom",
-                            Finding.package_id.in_(_pkg_ids),
-                        )
-                    )
+                _flt = _sbom_pkg_filter(_pkg_ids)
+                if _flt is not None:
+                    vuln_ids_base = vuln_ids_base.where(_flt)
                 vuln_ids_subq = vuln_ids_base.distinct().scalar_subquery()
 
                 records = list(db.session.execute(
