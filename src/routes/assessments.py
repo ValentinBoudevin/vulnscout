@@ -14,6 +14,7 @@ from ..helpers.verbose import verbose
 from ..extensions import db, batch_session
 from ..models.vulnerability import Vulnerability as DBVuln
 from ..models.variant import Variant as DBVariant
+from ._scan_helpers import parse_uuid_or_400
 from ..helpers.assessment_io import (
     build_openvex_archive,
     is_openvex_doc,
@@ -64,19 +65,15 @@ def init_app(app):
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         if variant_id:
-            import uuid
-            try:
-                variant_uuid = uuid.UUID(variant_id)
-            except ValueError:
-                return {"error": "Invalid variant_id"}, 400
+            variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
             assessments = [a.to_dict() for a in DBAssessment.get_by_variant(variant_uuid)]
         elif project_id:
-            import uuid
             from ..models.variant import Variant as DBVariant
-            try:
-                project_uuid = uuid.UUID(project_id)
-            except ValueError:
-                return {"error": "Invalid project_id"}, 400
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
             variants = DBVariant.get_by_project(project_uuid)
             variant_ids = [v.id for v in variants]
             if variant_ids:
@@ -99,22 +96,19 @@ def init_app(app):
         vulnerability's ``texts`` dict so the front-end can display tooltips
         without extra requests.
         """
-        import uuid as _uuid
         from ..models.variant import Variant as DBVariant
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         vid = None
         if variant_id:
-            try:
-                vid = _uuid.UUID(variant_id)
-            except ValueError:
-                return {"error": "Invalid variant_id"}, 400
+            vid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
             assessments = [a.to_dict() for a in DBAssessment.get_handmade([vid])]
         elif project_id:
-            try:
-                pid = _uuid.UUID(project_id)
-            except ValueError:
-                return {"error": "Invalid project_id"}, 400
+            pid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
             variant_ids = [variant.id for variant in DBVariant.get_by_project(pid)]
             assessments = [a.to_dict() for a in DBAssessment.get_handmade(variant_ids)]
         else:
@@ -384,11 +378,9 @@ def init_app(app):
         variant_id_raw = payload_data.get('variant_id') or None
         variant_id = None
         if variant_id_raw:
-            try:
-                import uuid as _uuid
-                variant_id = _uuid.UUID(variant_id_raw)
-            except (ValueError, AttributeError):
-                return {"error": "Invalid variant_id"}, 400
+            variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
+            if err:
+                return err
 
         # Persist to DB — one Assessment record per package
         # Use a single timestamp so grouped rows share the exact same value.
@@ -463,10 +455,8 @@ def init_app(app):
                 variant_id_raw = item.get('variant_id') or None
                 variant_id = None
                 if variant_id_raw:
-                    try:
-                        import uuid as _uuid
-                        variant_id = _uuid.UUID(variant_id_raw)
-                    except (ValueError, AttributeError):
+                    variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
+                    if err:
                         errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
                         continue
                 pkg_list = assessment.packages or []

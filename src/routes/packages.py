@@ -14,6 +14,7 @@ from ..helpers.active_scans import (
     active_sbom_scan_ids_for_project,
 )
 from ._scan_queries import _packages_by_scan_ids, _package_rows
+from ._scan_helpers import parse_uuid_or_400
 
 
 def init_app(app):
@@ -25,11 +26,12 @@ def init_app(app):
         project_id = request.args.get('project_id')
         compare_variant_id = request.args.get('compare_variant_id')
         if variant_id and compare_variant_id:
-            try:
-                base_uuid = uuid.UUID(variant_id)
-                compare_uuid = uuid.UUID(compare_variant_id)
-            except ValueError:
-                return {"error": "Invalid variant_id or compare_variant_id"}, 400
+            base_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            compare_uuid, err = parse_uuid_or_400(compare_variant_id, "compare_variant_id")
+            if err:
+                return err
             operation = request.args.get('operation', 'difference')
 
             def _pkg_ids_for_variant(variant_uuid):
@@ -70,10 +72,9 @@ def init_app(app):
                 ).scalars().all())
             active_scan_ids = []  # compare mode: do not restrict by scan
         elif variant_id:
-            try:
-                variant_uuid = uuid.UUID(variant_id)
-            except ValueError:
-                return {"error": "Invalid variant_id"}, 400
+            variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
             sbom_ids = active_sbom_scan_ids_for_variant(variant_uuid)
             if not sbom_ids:
                 pkgs = []
@@ -84,10 +85,9 @@ def init_app(app):
                 pkgs = sorted(pkg_lookup.values(), key=lambda p: p.name)
             active_scan_ids = sbom_ids
         elif project_id:
-            try:
-                project_uuid = uuid.UUID(project_id)
-            except ValueError:
-                return {"error": "Invalid project_id"}, 400
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
             sbom_ids = active_sbom_scan_ids_for_project(project_uuid)
             if not sbom_ids:
                 pkgs = []

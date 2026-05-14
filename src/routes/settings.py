@@ -21,6 +21,7 @@ from ..controllers.assessments import AssessmentsController
 from ..extensions import db, batch_session
 from ..models.scan import Scan as ScanModel
 from ..helpers.verbose import verbose
+from ._scan_helpers import parse_uuid_or_400
 
 
 # Tracks in-progress SBOM uploads: upload_id → {status, message, ts}
@@ -156,10 +157,9 @@ def init_app(app):
         if not new_name:
             return jsonify({"error": "Project name must not be empty."}), 400
 
-        try:
-            uuid.UUID(project_id)
-        except ValueError:
-            return jsonify({"error": "Invalid project ID."}), 400
+        _, err = parse_uuid_or_400(project_id, "project ID")
+        if err:
+            return err
 
         project = ProjectController.get(project_id)
         if project is None:
@@ -192,10 +192,9 @@ def init_app(app):
         if not new_name:
             return jsonify({"error": "Variant name must not be empty."}), 400
 
-        try:
-            uuid.UUID(variant_id)
-        except ValueError:
-            return jsonify({"error": "Invalid variant ID."}), 400
+        _, err = parse_uuid_or_400(variant_id, "variant ID")
+        if err:
+            return err
 
         variant = VariantController.get(variant_id)
         if variant is None:
@@ -242,10 +241,9 @@ def init_app(app):
     # ------------------------------------------------------------------
     @app.route('/api/projects/<project_id>/variants', methods=['POST'])
     def create_variant(project_id):
-        try:
-            uuid.UUID(project_id)
-        except ValueError:
-            return jsonify({"error": "Invalid project ID."}), 400
+        _, err = parse_uuid_or_400(project_id, "project ID")
+        if err:
+            return err
 
         data = request.get_json(silent=True)
         if not data or not isinstance(data.get("name"), str):
@@ -273,10 +271,9 @@ def init_app(app):
     # ------------------------------------------------------------------
     @app.route('/api/projects/<project_id>', methods=['DELETE'])
     def delete_project(project_id):
-        try:
-            uuid.UUID(project_id)
-        except ValueError:
-            return jsonify({"error": "Invalid project ID."}), 400
+        _, err = parse_uuid_or_400(project_id, "project ID")
+        if err:
+            return err
 
         project = ProjectController.get(project_id)
         if project is None:
@@ -295,10 +292,9 @@ def init_app(app):
     # ------------------------------------------------------------------
     @app.route('/api/variants/<variant_id>', methods=['DELETE'])
     def delete_variant(variant_id):
-        try:
-            uuid.UUID(variant_id)
-        except ValueError:
-            return jsonify({"error": "Invalid variant ID."}), 400
+        _, err = parse_uuid_or_400(variant_id, "variant ID")
+        if err:
+            return err
 
         variant = VariantController.get(variant_id)
         if variant is None:

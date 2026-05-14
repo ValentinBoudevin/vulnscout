@@ -1,8 +1,6 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-import uuid
-
 from flask import request
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload, aliased
@@ -27,6 +25,7 @@ from ..helpers.active_scans import (
     active_scan_ids_for_project,
     active_package_ids_for_scans,
 )
+from ._scan_helpers import parse_uuid_or_400
 
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
 
@@ -163,11 +162,12 @@ def init_app(app):
         compare_variant_id = request.args.get('compare_variant_id')
         current_scan_ids: list = []
         if variant_id and compare_variant_id:
-            try:
-                base_uuid = uuid.UUID(variant_id)
-                compare_uuid = uuid.UUID(compare_variant_id)
-            except ValueError:
-                return {"error": "Invalid variant_id or compare_variant_id"}, 400
+            base_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            compare_uuid, err = parse_uuid_or_400(compare_variant_id, "compare_variant_id")
+            if err:
+                return err
             base_latest_ids = active_scan_ids_for_variant(base_uuid)
             compare_latest_ids = active_scan_ids_for_variant(compare_uuid)
             current_scan_ids = compare_latest_ids
@@ -241,10 +241,9 @@ def init_app(app):
                         query = query.where(~Vulnerability.id.in_(list(base_ids)))
                     records = list(db.session.execute(query).scalars().all())
         elif variant_id:
-            try:
-                variant_uuid = uuid.UUID(variant_id)
-            except ValueError:
-                return {"error": "Invalid variant_id"}, 400
+            variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
             _scope_variant = variant_uuid
             _scope_project = None
             latest_ids = active_scan_ids_for_variant(variant_uuid)
@@ -303,10 +302,9 @@ def init_app(app):
                     for r in records:
                         r.packages = _pkgs_by_vuln_var.get(str(r.id), [])
         elif project_id:
-            try:
-                project_uuid = uuid.UUID(project_id)
-            except ValueError:
-                return {"error": "Invalid project_id"}, 400
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
             _scope_variant = None
             _scope_project = project_uuid
             latest_ids = active_scan_ids_for_project(project_uuid)
@@ -534,10 +532,9 @@ def init_app(app):
                     return "Invalid effort values", 400
                 variant_id = payload_data.get("variant_id")
                 if variant_id is not None:
-                    try:
-                        variant_id = uuid.UUID(variant_id)
-                    except (ValueError, AttributeError):
-                        return {"error": "Invalid variant_id"}, 400
+                    variant_id, err = parse_uuid_or_400(variant_id, "variant_id")
+                    if err:
+                        return err
                 try:
                     from ..models.time_estimate import TimeEstimate
                     for finding in (record.findings or []):
@@ -607,9 +604,8 @@ def init_app(app):
                     continue
                 item_variant_id = item.get("variant_id")
                 if item_variant_id is not None:
-                    try:
-                        item_variant_id = uuid.UUID(item_variant_id)
-                    except (ValueError, AttributeError):
+                    item_variant_id, err = parse_uuid_or_400(item_variant_id, "variant_id")
+                    if err:
                         errors.append({"id": item["id"], "error": "Invalid variant_id"})
                         continue
                 try:
