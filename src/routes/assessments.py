@@ -35,6 +35,29 @@ def _resolve_package(pkg_string_id: str) -> "Package":
     return Package.find_or_create(name, version, supplier=_supplier)
 
 
+def _create_assessment_record(assessment, finding_id, variant_id, timestamp=None):
+    """Create a single DBAssessment row from a validated DTO.
+
+    Shared between ``add_assessment`` (single) and ``add_assessments_batch``.
+    """
+    kwargs = dict(
+        status=assessment.status,
+        simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
+        finding_id=finding_id,
+        variant_id=variant_id,
+        origin="custom",
+        status_notes=assessment.status_notes,
+        justification=assessment.justification,
+        impact_statement=assessment.impact_statement,
+        workaround=getattr(assessment, "workaround", None),
+        responses=list(assessment.responses) if assessment.responses else [],
+        commit=True,
+    )
+    if timestamp is not None:
+        kwargs["timestamp"] = timestamp
+    return DBAssessment.create(**kwargs)
+
+
 def init_app(app):
 
     if "OPENVEX_FILE" not in app.config:
@@ -400,20 +423,8 @@ def init_app(app):
                     # Always create a new record — never merge with an existing one.
                     # from_vuln_assessment does a find-or-update which would overwrite
                     # previous user assessments on the same (finding, variant).
-                    db_a = DBAssessment.create(
-                        status=assessment.status,
-                        simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
-                        finding_id=finding.id,
-                        variant_id=variant_id,
-                        origin="custom",
-                        status_notes=assessment.status_notes,
-                        justification=assessment.justification,
-                        impact_statement=assessment.impact_statement,
-                        workaround=getattr(assessment, "workaround", None),
-                        responses=list(assessment.responses) if assessment.responses else [],
-                        timestamp=shared_timestamp,
-                        commit=True,
-                    )
+                    db_a = _create_assessment_record(
+                        assessment, finding.id, variant_id, timestamp=shared_timestamp)
                     created.append(db_a.to_dict())
         except Exception as e:
             return {"error": f"DB error: {e}"}, 500
@@ -479,19 +490,8 @@ def init_app(app):
                             finding = Finding.get_or_create(db_pkg.id, vuln_id)
                             finding_cache[f_key] = finding
                         # Always create a new record — never overwrite an existing assessment
-                        db_a = DBAssessment.create(
-                            status=assessment.status,
-                            simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
-                            finding_id=finding.id,
-                            variant_id=variant_id,
-                            origin="custom",
-                            status_notes=assessment.status_notes,
-                            justification=assessment.justification,
-                            impact_statement=assessment.impact_statement,
-                            workaround=getattr(assessment, "workaround", None),
-                            responses=list(assessment.responses) if assessment.responses else [],
-                            commit=True,
-                        )
+                        db_a = _create_assessment_record(
+                            assessment, finding.id, variant_id)
                         results.append(db_a.to_dict())
                     except Exception as e:
                         errors.append({"vuln_id": vuln_id, "error": str(e)})
