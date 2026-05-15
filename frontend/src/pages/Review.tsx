@@ -11,6 +11,8 @@ import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook } from '@fortawesome/free-solid-svg-icons';
+import Vulnerabilities from '../handlers/vulnerabilities';
+import { downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
@@ -275,24 +277,63 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setSelectedSuppliers([]);
     };
 
-    const handleExportReview = useCallback(() => {
-        const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/export", window.location.href);
-        fetch(url.toString(), { mode: 'cors' })
-            .then(res => {
-                if (!res.ok) throw new Error(`Export failed (${res.status})`);
-                return res.blob();
-            })
-            .then(blob => {
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = 'review_openvex.tar.gz';
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                URL.revokeObjectURL(a.href);
-            })
-            .catch(err => console.error('Export error:', err));
-    }, []);
+    const handleExportReview = useCallback(async () => {
+        try {
+            const vulns = await Vulnerabilities.list(variantId, projectId);
+
+            const exportedAssessments = assessments.map(a => ({
+                vuln_id: a.vuln_id,
+                status: a.status,
+                simplified_status: a.simplified_status,
+                justification: a.justification ?? null,
+                impact_statement: a.impact_statement ?? null,
+                status_notes: a.status_notes ?? null,
+                workaround: a.workaround ?? null,
+                packages: a.packages,
+                variant_id: a.variant_id ?? null,
+            }));
+
+            const cvssEntries: { vuln_id: string; version: string; vector_string: string; base_score: number; author: string }[] = [];
+            const timeEstimates: { vuln_id: string; optimistic: string; likely: string; pessimistic: string }[] = [];
+
+            for (const v of vulns) {
+                for (const c of v.severity.cvss) {
+                    if (c.author && c.author !== 'nvd' && c.author !== 'unknown') {
+                        cvssEntries.push({
+                            vuln_id: v.id,
+                            version: c.version,
+                            vector_string: c.vector_string,
+                            base_score: c.base_score,
+                            author: c.author,
+                        });
+                    }
+                }
+                if (v.effort.optimistic.total_seconds > 0 || v.effort.likely.total_seconds > 0 || v.effort.pessimistic.total_seconds > 0) {
+                    timeEstimates.push({
+                        vuln_id: v.id,
+                        optimistic: v.effort.optimistic.formatAsIso8601(),
+                        likely: v.effort.likely.formatAsIso8601(),
+                        pessimistic: v.effort.pessimistic.formatAsIso8601(),
+                    });
+                }
+            }
+
+            const data = {
+                version: 1,
+                exported_at: new Date().toISOString(),
+                assessments: exportedAssessments,
+                cvss: cvssEntries,
+                time_estimates: timeEstimates,
+            };
+
+            const ts = formatTimestampForFilename();
+            const filename = `custom_data_${sanitizeFilename(variantId ?? projectId ?? 'all')}_${ts}.json`;
+            downloadJson(data, filename);
+        } catch (err) {
+            console.error('Export error:', err);
+            showMessage('Failed to export custom data.', 'error');
+        }
+    }, [assessments, variantId, projectId, showMessage]);
 
     const handleImportReview = useCallback(() => {
         fileInputRef.current?.click();
@@ -301,33 +342,167 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const handleFileSelected = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) return;
-        const formData = new FormData();
-        formData.append('file', file);
-        const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href);
-        setImportStatus("Importing...");
-        fetch(url.toString(), { method: 'POST', body: formData, mode: 'cors' })
-            .then(res => res.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    // Reload the assessments list
-                    Assessments.listReview(variantId, projectId).then(data => setAssessments(groupAssessments(data)));
-                } else {
-                    setImportStatus(`Error: ${data.error || 'Unknown error'}`);
-                    setTimeout(() => setImportStatus(null), 4000);
+
+        // Old OpenVEX format: .tar.gz or .tgz files — use legacy import path
+        if (file.name.endsWith('.tar.gz') || file.name.endsWith('.tgz')) {
+            const formData = new FormData();
+            formData.append('file', file);
+            const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href);
+            setImportStatus("Importing...");
+            fetch(url.toString(), { method: 'POST', body: formData, mode: 'cors' })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        Assessments.listReview(variantId, projectId).then(data => setAssessments(groupAssessments(data)));
+                        showMessage('Assessments imported successfully!', 'success');
+                    } else {
+                        showMessage(`Import error: ${data.error || 'Unknown error'}`, 'error');
+                    }
+                    setImportStatus(null);
+                })
+                .catch(err => {
+                    console.error(err);
+                    showMessage('Import failed', 'error');
+                    setImportStatus(null);
+                })
+                .finally(() => {
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                });
+            return;
+        }
+
+        // New JSON format or legacy single OpenVEX JSON
+        const reader = new FileReader();
+        reader.onload = async () => {
+            try {
+                const text = reader.result as string;
+                const parsed = JSON.parse(text);
+
+                // Detect old OpenVEX format: has @context with "openvex"
+                if (parsed?.['@context'] && String(parsed['@context']).includes('openvex')) {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href);
+                    setImportStatus("Importing...");
+                    const res = await fetch(url.toString(), { method: 'POST', body: formData, mode: 'cors' });
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
+                        showMessage('Assessments imported successfully!', 'success');
+                    } else {
+                        showMessage(`Import error: ${data.error || 'Unknown error'}`, 'error');
+                    }
+                    setImportStatus(null);
+                    if (fileInputRef.current) fileInputRef.current.value = '';
                     return;
                 }
+
+                // New custom data format
+                if (!parsed?.version || !parsed?.assessments) {
+                    showMessage('Invalid file format. Expected a VulnScout custom data export.', 'error');
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                    return;
+                }
+
+                setImportStatus("Importing...");
+                const summary: string[] = [];
+
+                // Import assessments via existing backend endpoint
+                if (Array.isArray(parsed.assessments) && parsed.assessments.length > 0) {
+                    // Build an OpenVEX-like document to feed the existing import endpoint
+                    const statements = parsed.assessments.map((a: any) => ({
+                        status: a.status,
+                        justification: a.justification ?? '',
+                        impact_statement: a.impact_statement ?? '',
+                        status_notes: a.status_notes ?? '',
+                        action_statement: a.workaround ?? '',
+                        vulnerability: { name: a.vuln_id },
+                        products: (a.packages ?? []).map((p: string) => ({ '@id': p })),
+                    }));
+                    const openvexDoc = {
+                        '@context': 'https://openvex.dev/ns/v0.2.0',
+                        '@id': 'urn:vulnscout:import:' + Date.now(),
+                        author: 'vulnscout-import',
+                        timestamp: new Date().toISOString(),
+                        version: 1,
+                        statements,
+                    };
+                    const blob = new Blob([JSON.stringify(openvexDoc)], { type: 'application/json' });
+                    const importFile = new File([blob], 'import.json', { type: 'application/json' });
+                    const formData = new FormData();
+                    formData.append('file', importFile);
+                    const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href);
+                    const res = await fetch(url.toString(), { method: 'POST', body: formData, mode: 'cors' });
+                    const result = await res.json();
+                    const count = result.created?.length ?? 0;
+                    const skipped = result.skipped ?? 0;
+                    summary.push(`${count} assessment(s) imported${skipped ? `, ${skipped} skipped` : ''}`);
+                }
+
+                // Import CVSS and time estimates via batch PATCH
+                const batchItems: any[] = [];
+                if (Array.isArray(parsed.cvss)) {
+                    for (const c of parsed.cvss) {
+                        if (!c.vuln_id || !c.vector_string || !c.version) continue;
+                        let existing = batchItems.find((b: any) => b.id === c.vuln_id);
+                        if (!existing) {
+                            existing = { id: c.vuln_id };
+                            batchItems.push(existing);
+                        }
+                        existing.cvss = {
+                            base_score: c.base_score,
+                            vector_string: c.vector_string,
+                            version: c.version,
+                        };
+                    }
+                }
+                if (Array.isArray(parsed.time_estimates)) {
+                    for (const t of parsed.time_estimates) {
+                        if (!t.vuln_id) continue;
+                        let existing = batchItems.find((b: any) => b.id === t.vuln_id);
+                        if (!existing) {
+                            existing = { id: t.vuln_id };
+                            batchItems.push(existing);
+                        }
+                        existing.effort = {
+                            optimistic: t.optimistic,
+                            likely: t.likely,
+                            pessimistic: t.pessimistic,
+                        };
+                        if (t.variant_id) existing.variant_id = t.variant_id;
+                    }
+                }
+
+                if (batchItems.length > 0) {
+                    const batchUrl = new URL(import.meta.env.VITE_API_URL + "/api/vulnerabilities/batch", window.location.href);
+                    const batchRes = await fetch(batchUrl.toString(), {
+                        method: 'PATCH',
+                        mode: 'cors',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ vulnerabilities: batchItems }),
+                    });
+                    const batchResult = await batchRes.json();
+                    const cvssCount = parsed.cvss?.length ?? 0;
+                    const effortCount = parsed.time_estimates?.length ?? 0;
+                    if (cvssCount > 0) summary.push(`${cvssCount} CVSS score(s)`);
+                    if (effortCount > 0) summary.push(`${effortCount} time estimate(s)`);
+                    if (batchResult.error_count) summary.push(`${batchResult.error_count} error(s)`);
+                }
+
+                // Reload assessments
+                Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
+                showMessage(summary.length > 0 ? `Imported: ${summary.join(', ')}` : 'Import complete (no data changed)', 'success');
                 setImportStatus(null);
-            })
-            .catch(err => {
+            } catch (err) {
                 console.error(err);
-                setImportStatus("Import failed");
-                setTimeout(() => setImportStatus(null), 4000);
-            })
-            .finally(() => {
-                // Reset file input so the same file can be re-selected
+                showMessage('Import failed — invalid file', 'error');
+                setImportStatus(null);
+            } finally {
                 if (fileInputRef.current) fileInputRef.current.value = '';
-            });
-    }, [variantId, projectId]);
+            }
+        };
+        reader.readAsText(file);
+    }, [variantId, projectId, showMessage]);
 
     const handleDeleteRow = useCallback(async () => {
         if (!rowToDelete) return;
@@ -590,8 +765,13 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     if (loading) {
         return (
-            <div className="flex items-center justify-center h-64">
-                <div className="w-8 h-8 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin"></div>
+            <div className="relative h-64">
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+                    <div className="flex flex-col items-center gap-3 text-white">
+                        <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-sm font-semibold">Loading assessments...</span>
+                    </div>
+                </div>
             </div>
         );
     }
@@ -745,10 +925,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <button
                         onClick={handleImportReview}
                         className="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white border border-green-500 flex items-center gap-1.5"
-                        title="Import assessments from an OpenVEX file"
+                        title="Import custom data (assessments, CVSS, time estimates)"
                     >
                         <FontAwesomeIcon icon={faFileImport} />
-                        Import Review
+                        Import Custom Data
                     </button>
                     <input
                         ref={fileInputRef}
@@ -761,10 +941,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <button
                         onClick={handleExportReview}
                         className="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white border border-green-500 flex items-center gap-1.5"
-                        title="Export review assessments as OpenVEX"
+                        title="Export custom data (assessments, CVSS, time estimates)"
                     >
                         <FontAwesomeIcon icon={faFileExport} />
-                        Export Review
+                        Export Custom Data
                     </button>
                 </div>
             </div>
