@@ -29,7 +29,7 @@ def parse_uuid_or_400(value: str, label: str = "id"):
     """
     try:
         return uuid_module.UUID(value), None
-    except ValueError:
+    except (ValueError, AttributeError):
         return None, (jsonify({"error": f"Invalid {label}"}), 400)
 
 
