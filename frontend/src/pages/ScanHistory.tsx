@@ -20,8 +20,9 @@ import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
 import ScanProgressPanel from "../components/ScanProgressPanel";
 import { useDocUrl } from "../helpers/useDocUrl";
 import { extractSupplierName } from "../helpers/pkgId";
+import { downloadJson, sanitizeFilename, formatTimestampForFilename } from "../helpers/exportJson";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook } from "@fortawesome/free-solid-svg-icons";
+import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook, faDownload } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
 import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
@@ -1009,6 +1010,153 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
 }
 
 // ---------------------------------------------------------------------------
+// Export helpers
+// ---------------------------------------------------------------------------
+
+function stripFindingIds(entry: FindingDiffEntry) {
+    return {
+        vulnerability_id: entry.vulnerability_id,
+        package_name: entry.package_name,
+        package_version: entry.package_version,
+        supplier: extractSupplierName(entry.package_supplier || '') || undefined,
+    };
+}
+
+function stripPackageIds(entry: PackageDiffEntry) {
+    return {
+        package_name: entry.package_name,
+        package_version: entry.package_version,
+        supplier: extractSupplierName(entry.package_supplier || '') || undefined,
+    };
+}
+
+function stripPackageUpgradeIds(entry: PackageUpgradeEntry) {
+    return {
+        package_name: entry.package_name,
+        old_version: entry.old_version,
+        new_version: entry.new_version,
+        supplier: extractSupplierName(entry.package_supplier || '') || undefined,
+    };
+}
+
+function stripFindingUpgradeIds(entry: FindingUpgradeEntry) {
+    return {
+        vulnerability_id: entry.vulnerability_id,
+        package_name: entry.package_name,
+        old_version: entry.old_version,
+        new_version: entry.new_version,
+        supplier: extractSupplierName(entry.package_supplier || '') || undefined,
+    };
+}
+
+function stripAssessment(entry: AssessmentDiffEntry) {
+    return {
+        vulnerability_id: entry.vulnerability_id,
+        status: entry.status,
+        simplified_status: entry.simplified_status,
+        justification: entry.justification,
+        impact_statement: entry.impact_statement,
+        status_notes: entry.status_notes,
+    };
+}
+
+function scanMeta(scan: Scan) {
+    return {
+        scan_id: scan.id,
+        timestamp: scan.timestamp,
+        scan_type: (scan.scan_type || 'sbom') === 'tool' ? 'vulnerability_scan' : 'import_sbom',
+        scan_source: scan.scan_source ?? undefined,
+        project_name: scan.project_name ?? undefined,
+        variant_id: scan.variant_id,
+        variant_name: scan.variant_name ?? undefined,
+    };
+}
+
+function buildDiffExport(scan: Scan, diff: ScanDiff) {
+    const meta = scanMeta(scan);
+    const isTool = (scan.scan_type || 'sbom') === 'tool';
+
+    if (isTool) {
+        return {
+            ...meta,
+            vulnerabilities: diff.all_vulns ?? diff.vulns_added,
+            findings: (diff.all_findings ?? diff.findings_added).map(stripFindingIds),
+            newly_detected_vulns: diff.newly_detected_vulns_list ?? [],
+            newly_detected_findings: (diff.newly_detected_findings_list ?? []).map(stripFindingIds),
+            newly_detected_assessments: (diff.newly_detected_assessments_list ?? []).map(stripAssessment),
+        };
+    }
+
+    // Import SBOM
+    const base: Record<string, unknown> = {
+        ...meta,
+        vulnerabilities: diff.all_vulns ?? [...diff.vulns_added, ...diff.vulns_unchanged],
+        findings: (diff.all_findings ?? [...diff.findings_added, ...diff.findings_unchanged]).map(stripFindingIds),
+        packages: [...diff.packages_added, ...diff.packages_unchanged].map(stripPackageIds),
+        assessments: [...(diff.assessments_added ?? []), ...(diff.assessments_unchanged ?? [])].map(stripAssessment),
+    };
+
+    if (!diff.is_first) {
+        base.diff = {
+            vulns_added: diff.vulns_added,
+            vulns_removed: diff.vulns_removed,
+            vulns_unchanged: diff.vulns_unchanged,
+            findings_added: diff.findings_added.map(stripFindingIds),
+            findings_removed: diff.findings_removed.map(stripFindingIds),
+            findings_upgraded: diff.findings_upgraded.map(stripFindingUpgradeIds),
+            findings_unchanged: diff.findings_unchanged.map(stripFindingIds),
+            packages_added: diff.packages_added.map(stripPackageIds),
+            packages_removed: diff.packages_removed.map(stripPackageIds),
+            packages_upgraded: diff.packages_upgraded.map(stripPackageUpgradeIds),
+            packages_unchanged: diff.packages_unchanged.map(stripPackageIds),
+            assessments_added: (diff.assessments_added ?? []).map(stripAssessment),
+            assessments_removed: (diff.assessments_removed ?? []).map(stripAssessment),
+            assessments_unchanged: (diff.assessments_unchanged ?? []).map(stripAssessment),
+        };
+    }
+
+    return base;
+}
+
+function buildGlobalResultExport(scan: Scan, result: GlobalResult) {
+    return {
+        ...scanMeta(scan),
+        packages: result.packages.map(p => ({
+            package_name: p.package_name,
+            package_version: p.package_version,
+            supplier: extractSupplierName(p.package_supplier || '') || undefined,
+            sources: p.sources,
+        })),
+        findings: result.findings.map(f => ({
+            vulnerability_id: f.vulnerability_id,
+            package_name: f.package_name,
+            package_version: f.package_version,
+            supplier: extractSupplierName(f.package_supplier || '') || undefined,
+            sources: f.sources,
+        })),
+        vulnerabilities: result.vulnerabilities.map(v => ({
+            vulnerability_id: v.vulnerability_id,
+            sources: v.sources,
+        })),
+        assessments: (result.assessments ?? []).map(stripAssessment),
+    };
+}
+
+function exportFilename(type: 'diff' | 'total', scan: Scan, timestamp?: string) {
+    const proj = sanitizeFilename(scan.project_name || 'project');
+    const variant = sanitizeFilename(scan.variant_name || scan.variant_id);
+    const ts = timestamp ?? formatTimestampForFilename();
+    return `scans_${type}_${proj}_${variant}_${ts}.json`;
+}
+
+function singleExportFilename(type: 'diff' | 'total', scan: Scan) {
+    const proj = sanitizeFilename(scan.project_name || 'project');
+    const variant = sanitizeFilename(scan.variant_name || scan.variant_id);
+    const ts = formatTimestampForFilename(scan.timestamp);
+    return `scan_${type}_${proj}_${variant}_${ts}.json`;
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -1027,6 +1175,14 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const [showGrype, setShowGrype] = useState(true);
     const [showOsv, setShowOsv] = useState(true);
     const [showNvd, setShowNvd] = useState(true);
+
+    // Export state
+    const [exportMenuScanId, setExportMenuScanId] = useState<string | null>(null);
+    const [exportingScanId, setExportingScanId] = useState<string | null>(null);
+    const [exportAllMenuOpen, setExportAllMenuOpen] = useState(false);
+    const [exportingAll, setExportingAll] = useState(false);
+    const exportMenuRef = useRef<HTMLDivElement>(null);
+    const exportAllMenuRef = useRef<HTMLDivElement>(null);
 
     // Scan menu state
     const [scanMenuOpen, setScanMenuOpen] = useState(false);
@@ -1069,6 +1225,31 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
             setDeletingId(null);
             refreshScans();
             onScanComplete?.();
+        }
+    }
+
+    // -- Per-scan export --
+    async function handleExportScanDiff(scan: Scan) {
+        setExportingScanId(scan.id);
+        setExportMenuScanId(null);
+        try {
+            const diff = await ScansHandler.getDiff(scan.id);
+            if (!diff) return;
+            downloadJson(buildDiffExport(scan, diff), singleExportFilename('diff', scan));
+        } finally {
+            setExportingScanId(null);
+        }
+    }
+
+    async function handleExportScanResult(scan: Scan) {
+        setExportingScanId(scan.id);
+        setExportMenuScanId(null);
+        try {
+            const result = await ScansHandler.getGlobalResult(scan.id);
+            if (!result) return;
+            downloadJson(buildGlobalResultExport(scan, result), singleExportFilename('total', scan));
+        } finally {
+            setExportingScanId(null);
         }
     }
 
@@ -1130,6 +1311,31 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
             return () => document.removeEventListener('mousedown', handleClickOutside);
         }
     }, [scanMenuOpen]);
+
+    // Close export menus on outside click
+    useEffect(() => {
+        function handleClickOutside(e: MouseEvent) {
+            if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+                setExportMenuScanId(null);
+            }
+        }
+        if (exportMenuScanId) {
+            document.addEventListener('mousedown', handleClickOutside);
+            return () => document.removeEventListener('mousedown', handleClickOutside);
+        }
+    }, [exportMenuScanId]);
+
+    useEffect(() => {
+        function handleClickOutside(e: MouseEvent) {
+            if (exportAllMenuRef.current && !exportAllMenuRef.current.contains(e.target as Node)) {
+                setExportAllMenuOpen(false);
+            }
+        }
+        if (exportAllMenuOpen) {
+            document.addEventListener('mousedown', handleClickOutside);
+            return () => document.removeEventListener('mousedown', handleClickOutside);
+        }
+    }, [exportAllMenuOpen]);
 
     function toggleVariant(vid: string) {
         setSelectedVariantIds(prev => {
@@ -1207,6 +1413,54 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         return true;
     });
 
+    // -- Export All (grouped by project/variant) --
+    async function handleExportAll(type: 'diff' | 'total') {
+        setExportAllMenuOpen(false);
+        setExportingAll(true);
+        try {
+            // Group scans by (project_name, variant_id)
+            const groups = new Map<string, Scan[]>();
+            for (const scan of filteredScans) {
+                const key = `${scan.project_name ?? ''}::${scan.variant_id}`;
+                const arr = groups.get(key) ?? [];
+                arr.push(scan);
+                groups.set(key, arr);
+            }
+
+            const ts = formatTimestampForFilename();
+
+            for (const groupScans of groups.values()) {
+                const representative = groupScans[0];
+
+                if (type === 'diff') {
+                    const results = await Promise.all(
+                        groupScans.map(async (scan) => {
+                            const diff = await ScansHandler.getDiff(scan.id);
+                            return diff ? buildDiffExport(scan, diff) : null;
+                        })
+                    );
+                    const data = results.filter(Boolean);
+                    if (data.length > 0) {
+                        downloadJson(data, exportFilename('diff', representative, ts));
+                    }
+                } else {
+                    const results = await Promise.all(
+                        groupScans.map(async (scan) => {
+                            const result = await ScansHandler.getGlobalResult(scan.id);
+                            return result ? buildGlobalResultExport(scan, result) : null;
+                        })
+                    );
+                    const data = results.filter(Boolean);
+                    if (data.length > 0) {
+                        downloadJson(data, exportFilename('total', representative, ts));
+                    }
+                }
+            }
+        } finally {
+            setExportingAll(false);
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Linear timeline — source-to-color mapping for tool scan squares
     // -----------------------------------------------------------------------
@@ -1276,7 +1530,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                 NVD
             </button>
 
-            {/* Right side: doc link + scan menu */}
+            {/* Right side: doc link + export + scan menu */}
             <div className="ml-auto flex items-center gap-3">
                 <a
                     href={docUrl}
@@ -1288,6 +1542,44 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                 >
                     <FontAwesomeIcon icon={faBook} />
                 </a>
+
+                {/* Export All dropdown */}
+                {filteredScans.length > 0 && (
+                    <div className="relative" ref={exportAllMenuRef}>
+                        <button
+                            onClick={() => setExportAllMenuOpen(o => !o)}
+                            disabled={exportingAll}
+                            className={[
+                                "inline-flex items-center gap-2 px-3 py-1.5 rounded text-sm font-semibold transition-colors",
+                                exportingAll
+                                    ? "bg-sky-800/50 text-sky-300 cursor-wait"
+                                    : "bg-sky-900 hover:bg-sky-950 text-white",
+                            ].join(' ')}
+                            title="Export scan history"
+                        >
+                            <FontAwesomeIcon icon={faDownload} />
+                            {exportingAll ? 'Exporting…' : 'Export'}
+                        </button>
+
+                        {exportAllMenuOpen && (
+                            <div className="absolute right-0 top-full mt-1 z-50 w-52 rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-2">
+                                <button
+                                    onClick={() => handleExportAll('diff')}
+                                    className="w-full text-left px-3 py-2 text-sm text-neutral-200 hover:bg-sky-900/40 rounded transition-colors"
+                                >
+                                    Export All Diffs
+                                </button>
+                                <button
+                                    onClick={() => handleExportAll('total')}
+                                    className="w-full text-left px-3 py-2 text-sm text-neutral-200 hover:bg-sky-900/40 rounded transition-colors"
+                                >
+                                    Export All Scan Results
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 {/* Run Scans dropdown */}
                 {canTriggerScan && (
                     <div className="relative" ref={scanMenuRef}>
@@ -1453,6 +1745,14 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
     return (
         <>
+            {(exportingAll || exportingScanId) && (
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+                    <div className="flex flex-col items-center gap-3 text-white">
+                        <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-sm font-semibold">Exporting…</span>
+                    </div>
+                </div>
+            )}
             {openDiffId && (
                 <DiffModal scanId={openDiffId} scanType={openDiffType} onClose={() => setOpenDiffId(null)} />
             )}
@@ -1519,13 +1819,47 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                             <div className="flex-1 min-w-0 py-2 pl-3">
                             <div className="group/card relative p-4 bg-white dark:bg-neutral-700 rounded-lg shadow-sm border border-gray-100 dark:border-neutral-600">
                                 {/* Delete button — top-right corner */}
-                                <button
-                                    onClick={() => setDeletingId(scan.id)}
-                                    title="Delete scan"
-                                    className="absolute top-2 right-2 z-10 opacity-0 group-hover/card:opacity-100 text-neutral-400 hover:text-red-400 transition-all p-1"
-                                >
-                                    <FontAwesomeIcon icon={faTrash} className="text-sm" />
-                                </button>
+                                <div className="absolute top-2 right-2 z-10 flex items-center gap-1 opacity-0 group-hover/card:opacity-100 transition-all">
+                                    {/* Export button */}
+                                    <div className="relative" ref={exportMenuScanId === scan.id ? exportMenuRef : undefined}>
+                                        <button
+                                            onClick={() => setExportMenuScanId(exportMenuScanId === scan.id ? null : scan.id)}
+                                            disabled={exportingScanId === scan.id}
+                                            title="Export scan"
+                                            className={[
+                                                "p-1 transition-colors",
+                                                exportingScanId === scan.id
+                                                    ? "text-cyan-400 cursor-wait"
+                                                    : "text-neutral-400 hover:text-cyan-400",
+                                            ].join(' ')}
+                                        >
+                                            <FontAwesomeIcon icon={faDownload} className="text-sm" />
+                                        </button>
+                                        {exportMenuScanId === scan.id && (
+                                            <div className="absolute right-0 top-full mt-1 z-50 w-48 rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-1.5">
+                                                <button
+                                                    onClick={() => handleExportScanDiff(scan)}
+                                                    className="w-full text-left px-3 py-1.5 text-xs text-neutral-200 hover:bg-sky-900/40 rounded transition-colors"
+                                                >
+                                                    Export Diff
+                                                </button>
+                                                <button
+                                                    onClick={() => handleExportScanResult(scan)}
+                                                    className="w-full text-left px-3 py-1.5 text-xs text-neutral-200 hover:bg-sky-900/40 rounded transition-colors"
+                                                >
+                                                    Export Scan Result
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <button
+                                        onClick={() => setDeletingId(scan.id)}
+                                        title="Delete scan"
+                                        className="text-neutral-400 hover:text-red-400 transition-colors p-1"
+                                    >
+                                        <FontAwesomeIcon icon={faTrash} className="text-sm" />
+                                    </button>
+                                </div>
                                 {/* Row 1: timestamp + scan type badge */}
                                 <div className="flex items-center gap-2 mb-1">
                                     <time className="text-sm font-semibold text-gray-500 dark:text-neutral-400">
