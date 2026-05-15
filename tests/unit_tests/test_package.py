@@ -282,6 +282,20 @@ def test_purl_epoch_forms_deduplicate():
     assert len([p for p in pkg.purl if "procps" in p and "deb" in p]) == 1
 
 
+def test_rpm_purl_epoch_qualifier_normalized_to_version_prefix():
+    pkg = Package("bash", "1:5.1.8-6.el9")
+    pkg.add_purl("pkg:rpm/fedora/bash@5.1.8-6.el9?arch=x86_64&epoch=1")
+    assert "pkg:rpm/fedora/bash@1:5.1.8-6.el9?arch=x86_64" in pkg.purl
+
+
+def test_rpm_purl_epoch_forms_deduplicate():
+    pkg = Package("bash", "1:5.1.8-6.el9")
+    pkg.add_purl("pkg:rpm/fedora/bash@5.1.8-6.el9?arch=x86_64&epoch=1")
+    pkg.add_purl("pkg:rpm/fedora/bash@1:5.1.8-6.el9?arch=x86_64")
+    # Both normalize to the same canonical form — no duplicate
+    assert len([p for p in pkg.purl if "bash" in p and "rpm" in p]) == 1
+
+
 def test_purl_normalization_non_deb_unchanged():
     pkg = Package("mypackage", "1.0.0")
     generic_purl = "pkg:generic/mypackage@1.0.0"

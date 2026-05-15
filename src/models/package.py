@@ -22,15 +22,19 @@ from packageurl import PackageURL
 def _normalize_purl(purl: str) -> str:
     """Normalize PURL to a canonical form.
 
-    Handles two normalizations for ``deb`` type PURLs:
+    Handles two normalizations for ``deb`` and ``rpm`` type PURLs:
     - URL-decodes percent-encoded characters in the version (e.g. ``2%3A`` → ``2:``)
     - Moves ``epoch=N`` qualifier into the version field as ``N:version``
+
+    ``epoch`` is the only qualifier that requires this special treatment per the PURL spec.
+    All other standard normalizations (qualifier ordering, component encoding) are handled
+    transparently by the ``packageurl-python`` library during parse and re-serialisation.
 
     Falls back to the original string if parsing fails.
     """
     try:
         p = PackageURL.from_string(purl)
-        if p.type == "deb" and p.qualifiers and "epoch" in p.qualifiers and p.version is not None:
+        if p.type in ("deb", "rpm") and p.qualifiers and "epoch" in p.qualifiers and p.version is not None:
             epoch = p.qualifiers["epoch"]
             new_qualifiers = {k: v for k, v in p.qualifiers.items() if k != "epoch"}
             new_version = f"{epoch}:{p.version}"
