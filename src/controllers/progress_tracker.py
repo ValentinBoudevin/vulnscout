@@ -22,12 +22,13 @@ class ProgressTracker:
     _completed_message: str = "Enrichment completed successfully"
 
     _instance = None
-    _lock = Lock()
+    _lock: Lock
 
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
+            cls._lock = Lock()
         return cls._instance
 
     def __init__(self):
