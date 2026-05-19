@@ -30,10 +30,12 @@ from collections import defaultdict
               help="Directory where the exported file is written.")
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
-              help="Variant name. If empty, all variants will be exported in an archive.")
+              help="Variant name. If empty, all variants will be exported.")
+@click.option("--compress", is_flag=True, default=False,
+              help="Write a .tar.gz archive instead of individual files.")
 @with_appcontext
-def export_custom_assessments_command(output_dir: str, project: str, variant: str | None) -> None:
-    """Export handmade (custom) assessments as an (archive of) OpenVEX file(s)."""
+def export_custom_assessments_command(output_dir: str, project: str, variant: str | None, compress: bool) -> None:
+    """Export handmade (custom) assessments as OpenVEX file(s)."""
 
     author = os.getenv("AUTHOR_NAME", "Savoir-faire Linux")
     now_iso = _dt.now(_tz.utc).isoformat()
@@ -155,43 +157,71 @@ def export_custom_assessments_command(output_dir: str, project: str, variant: st
         }
         return doc
 
+    def _sanitize(name: str) -> str:
+        return name.replace("/", "_").replace("\\", "_")
+
     if variant is None:
-        # export all variants from project as archive
         by_variant: dict[_uuid.UUID, list[DBAssessment]] = defaultdict(list)
         for assess in handmade:
             assert assess.variant_id is not None
             by_variant[assess.variant_id].append(assess)
 
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+        if compress:
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+                for vid, assessments in by_variant.items():
+                    variant_obj = DBVariant.get_by_id(vid)
+                    assert variant_obj
+                    filename = _sanitize(variant_obj.name) + ".json"
+
+                    doc = generate_doc(assessments)
+                    json_bytes = _json.dumps(doc, indent=2).encode("utf-8")
+                    info = tarfile.TarInfo(name=filename)
+                    info.size = len(json_bytes)
+                    tar.addfile(info, io.BytesIO(json_bytes))
+
+            out_path = os.path.join(output_dir, "custom_assessments.tar.gz")
+            with open(out_path, "wb") as fh:
+                fh.write(buf.getvalue())
+            click.echo(f"Custom assessments exported: {out_path}")
+        else:
+            out_paths = []
             for vid, assessments in by_variant.items():
                 variant_obj = DBVariant.get_by_id(vid)
-                assert variant_obj  # Variant cannot be null since we filtrered by variant before
-                filename = variant_obj.name + ".json"
-                filename = filename.replace("/", "_").replace("\\", "_")
+                assert variant_obj
+                filename = _sanitize(variant_obj.name) + ".json"
 
                 doc = generate_doc(assessments)
-                json_bytes = _json.dumps(doc, indent=2).encode("utf-8")
+                out_path = os.path.join(output_dir, filename)
+                with open(out_path, "w") as file:
+                    _json.dump(doc, file, indent=2)
+                out_paths.append(out_path)
+            for p in out_paths:
+                click.echo(f"Custom assessments exported: {p}")
+    else:
+        assert variant_obj
+        filename = _sanitize(variant_obj.name) + ".json"
+
+        if compress:
+            doc = generate_doc(handmade)
+            json_bytes = _json.dumps(doc, indent=2).encode("utf-8")
+
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode='w:gz') as tar:
                 info = tarfile.TarInfo(name=filename)
                 info.size = len(json_bytes)
                 tar.addfile(info, io.BytesIO(json_bytes))
 
-        out_path = os.path.join(output_dir, "custom_assessments.tar.gz")
-        with open(out_path, "wb") as fh:
-            fh.write(buf.getvalue())
-    else:
-        assert variant_obj
-        # Declared above, assert here so type checker no longer
-        # considers it possibly Unbound
-        filename = variant_obj.name + ".json"
-        filename = filename.replace("/", "_").replace("\\", "_")
+            out_path = os.path.join(output_dir, "custom_assessments.tar.gz")
+            with open(out_path, "wb") as fh:
+                fh.write(buf.getvalue())
+        else:
+            doc = generate_doc(handmade)
+            out_path = os.path.join(output_dir, filename)
+            with open(out_path, "w") as file:
+                _json.dump(doc, file, indent=2)
 
-        doc = generate_doc(handmade)
-        out_path = os.path.join(output_dir, filename)
-        with open(out_path, "w") as file:
-            _json.dump(doc, file)
-
-    click.echo(f"Custom assessments exported: {out_path}")
+        click.echo(f"Custom assessments exported: {out_path}")
 
 
 @click.command("import-custom-assessments")
@@ -200,8 +230,8 @@ def export_custom_assessments_command(output_dir: str, project: str, variant: st
 @click.option("--variant", "-v", default=None, help="Variant name. Defaults to the file name.")
 @with_appcontext
 def import_custom_assessments_command(file_path: str, project: str, variant: str | None) -> None:
-    """Import custom assessments from a .json or .tar.gz OpenVEX file."""
-    if not os.path.isfile(file_path):
+    """Import custom assessments from a .json, .tar.gz, or directory of OpenVEX files."""
+    if not os.path.isfile(file_path) and not os.path.isdir(file_path):
         click.echo(f"Error: file not found: {file_path}", err=True)
         raise SystemExit(1)
 
@@ -401,6 +431,68 @@ def import_custom_assessments_command(file_path: str, project: str, variant: str
                 click.echo(f"  {err}", err=True)
             raise SystemExit(1)
 
+    elif os.path.isdir(file_path):
+        if variant:
+            click.echo("Error: cannot use the --variant argument with a directory of custom assessments.")
+            raise SystemExit(1)
+
+        json_files = sorted(f for f in os.listdir(file_path) if f.endswith(".json"))
+        if not json_files:
+            click.echo("Error: no .json files found in directory.", err=True)
+            raise SystemExit(1)
+
+        variant_files_found = 0
+        total_created = []
+        total_errors = []
+        total_skipped = 0
+        for json_name in json_files:
+            variant_name = json_name[:-len(".json")]
+            variant_obj = variant_by_name.get(variant_name)
+            if variant_obj is None:
+                total_errors.append({
+                    "file": json_name,
+                    "error": (
+                        f"No variant found matching name "
+                        f"'{variant_name}'"
+                    ),
+                })
+                continue
+
+            json_path = os.path.join(file_path, json_name)
+            try:
+                with open(json_path) as fh:
+                    doc = _json.load(fh)
+            except Exception:
+                total_errors.append({
+                    "file": json_name,
+                    "error": "Invalid JSON",
+                })
+                continue
+
+            if not _is_openvex(doc):
+                total_errors.append({
+                    "file": json_name,
+                    "error": "Not a valid OpenVEX document",
+                })
+                continue
+
+            variant_files_found += 1
+            c, e, s = _import_statements(
+                doc["statements"], variant_obj.id
+            )
+            total_created.extend(c)
+            total_errors.extend(e)
+            total_skipped += s
+
+        if variant_files_found == 0 and not total_created:
+            click.echo(
+                "Error: no valid OpenVEX files matching known "
+                "variants found in directory.", err=True
+            )
+            for err in total_errors:
+                click.echo(f"  {err}", err=True)
+            raise SystemExit(1)
+
     elif file_path.endswith(".json"):
         if variant:
             assert variant_obj
@@ -436,7 +528,7 @@ def import_custom_assessments_command(file_path: str, project: str, variant: str
     else:
         click.echo(
             "Error: unsupported file type. "
-            "Please provide a .json or .tar.gz file.",
+            "Please provide a .json, .tar.gz file, or directory.",
             err=True,
         )
         raise SystemExit(1)

@@ -266,13 +266,19 @@ VulnScout lets you export and re-import the assessments you have manually create
 
 ### Exporting Custom Assessments
 
-The `--export-custom-assessments` flag produces a `.tar.gz` archive containing one OpenVEX JSON file per variant:
+The `--export-custom-assessments` flag produces one OpenVEX JSON file per variant, written directly to the outputs directory:
 
 ```bash
 ./vulnscout --project demo --export-custom-assessments
 ```
 
-You can also use the `--variant` flag to select from which variant to export an OpenVEX file. In this case, the exported file is a simple `.json` file:
+To bundle the exported files into a `.tar.gz` archive instead, add the `--compress` flag:
+
+```bash
+./vulnscout --project demo --export-custom-assessments --compress
+```
+
+You can also use the `--variant` flag to export only a single variant:
 
 ```bash
 ./vulnscout --project demo --variant x86 --export-custom-assessments
@@ -280,7 +286,7 @@ You can also use the `--variant` flag to select from which variant to export an 
 
 ### Importing Custom Assessments
 
-The `--import-custom-assessments` flag reads a `.json` or `.tar.gz` file and replays the assessment statements into the database. If `--variant` is not specified, the variant is inferred from the file name.
+The `--import-custom-assessments` flag reads a `.json` file, `.tar.gz` archive, or a directory of OpenVEX JSON files and replays the assessment statements into the database. If `--variant` is not specified, the variant is inferred from the file name.
 
 ```bash
 # Import from a single OpenVEX JSON file
@@ -289,8 +295,11 @@ The `--import-custom-assessments` flag reads a `.json` or `.tar.gz` file and rep
 # Import from a single OpenVEX JSON file without specifying the variant
 ./vulnscout --project demo --import-custom-assessments /path/to/assessments/x86.json
 
-# Import from a tar.gz archive previously exported
+# Import from a tar.gz archive
 ./vulnscout --project demo --import-custom-assessments /path/to/custom_assessments.tar.gz
+
+# Import from a directory of OpenVEX JSON files (one per variant)
+./vulnscout --project demo --import-custom-assessments /path/to/assessments/
 ```
 
 ---
