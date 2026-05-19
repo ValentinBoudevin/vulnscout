@@ -7,24 +7,21 @@ import pytest
 from datetime import datetime, timezone
 
 from src.controllers.nvd_progress import NVDProgressTracker
+from src.controllers.progress_tracker import ProgressTracker
 
 
 @pytest.fixture(autouse=True)
-def reset_singleton():
-    """Reset the NVDProgressTracker singleton before and after each test."""
-    NVDProgressTracker._instance = None
-    yield
-    NVDProgressTracker._instance = None
+def fresh_tracker(monkeypatch):
+    """Replace the module-level NVDProgressTracker with a fresh instance for each test."""
+    import src.controllers.nvd_progress as mod
+    fresh = ProgressTracker(default_phase="enrichment",
+                            completed_message="Enrichment completed successfully")
+    monkeypatch.setattr(mod, "NVDProgressTracker", fresh)
+    yield fresh
 
 
-def test_singleton_pattern():
-    t1 = NVDProgressTracker()
-    t2 = NVDProgressTracker()
-    assert t1 is t2
-
-
-def test_initial_state():
-    tracker = NVDProgressTracker()
+def test_initial_state(fresh_tracker):
+    tracker = fresh_tracker
     data = tracker.get_progress()
     assert data["in_progress"] is False
     assert data["phase"] == "idle"
@@ -35,8 +32,8 @@ def test_initial_state():
     assert data["started_at"] is None
 
 
-def test_start_default_phase():
-    tracker = NVDProgressTracker()
+def test_start_default_phase(fresh_tracker):
+    tracker = fresh_tracker
     tracker.start()
     data = tracker.get_progress()
     assert data["in_progress"] is True
@@ -45,16 +42,16 @@ def test_start_default_phase():
     datetime.fromisoformat(data["started_at"])
 
 
-def test_start_custom_phase():
-    tracker = NVDProgressTracker()
+def test_start_custom_phase(fresh_tracker):
+    tracker = fresh_tracker
     tracker.start(phase="nvd_fetch")
     data = tracker.get_progress()
     assert data["phase"] == "nvd_fetch"
     assert data["message"] == "Starting nvd_fetch"
 
 
-def test_update_progress():
-    tracker = NVDProgressTracker()
+def test_update_progress(fresh_tracker):
+    tracker = fresh_tracker
     tracker.start()
     tracker.update("loading", 25, 100, message="Loading CVEs")
     data = tracker.get_progress()
@@ -66,15 +63,15 @@ def test_update_progress():
     datetime.fromisoformat(data["last_update"])
 
 
-def test_update_auto_message():
-    tracker = NVDProgressTracker()
+def test_update_auto_message(fresh_tracker):
+    tracker = fresh_tracker
     tracker.start()
     tracker.update("processing", 3, 10)
     assert tracker.get_progress()["message"] == "processing: 3/10"
 
 
-def test_complete():
-    tracker = NVDProgressTracker()
+def test_complete(fresh_tracker):
+    tracker = fresh_tracker
     tracker.start()
     tracker.complete()
     data = tracker.get_progress()
@@ -83,8 +80,8 @@ def test_complete():
     assert "completed" in data["message"].lower()
 
 
-def test_error():
-    tracker = NVDProgressTracker()
+def test_error(fresh_tracker):
+    tracker = fresh_tracker
     tracker.start()
     tracker.error("API timeout")
     data = tracker.get_progress()
@@ -93,17 +90,17 @@ def test_error():
     assert data["message"] == "API timeout"
 
 
-def test_get_progress_returns_copy():
-    tracker = NVDProgressTracker()
+def test_get_progress_returns_copy(fresh_tracker):
+    tracker = fresh_tracker
     tracker.start(phase="test")
     snapshot = tracker.get_progress()
     snapshot["phase"] = "mutated"
     assert tracker.get_progress()["phase"] == "test"
 
 
-def test_thread_safety():
+def test_thread_safety(fresh_tracker):
     import threading
-    tracker = NVDProgressTracker()
+    tracker = fresh_tracker
     tracker.start()
     errors = []
 

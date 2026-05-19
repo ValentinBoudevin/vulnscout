@@ -7,34 +7,16 @@ from threading import Lock
 
 
 class ProgressTracker:
-    """Thread-safe singleton base class for tracking enrichment progress.
+    """Thread-safe tracker for enrichment progress.
 
-    Subclasses only need to set two class-level attributes:
-
-    * ``_default_phase`` – the phase name used by :meth:`start` when none
-      is given (e.g. ``"epss_enrichment"``).
-    * ``_completed_message`` – message written by :meth:`complete`.
-
-    Each concrete subclass maintains its **own** singleton instance.
+    Each instance tracks its own progress state independently.
     """
 
-    _default_phase: str = "enrichment"
-    _completed_message: str = "Enrichment completed successfully"
-
-    _instance = None
-    _lock: Lock
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-            cls._lock = Lock()
-        return cls._instance
-
-    def __init__(self):
-        if self._initialized:
-            return
-
+    def __init__(self, default_phase: str = "enrichment",
+                 completed_message: str = "Enrichment completed successfully"):
+        self._default_phase = default_phase
+        self._completed_message = completed_message
+        self._lock = Lock()
         self._data = {
             "in_progress": False,
             "phase": "idle",
@@ -44,7 +26,6 @@ class ProgressTracker:
             "last_update": None,
             "started_at": None,
         }
-        self._initialized = True
 
     def start(self, phase: Optional[str] = None):
         """Mark the start of an enrichment process."""

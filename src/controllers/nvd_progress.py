@@ -3,9 +3,7 @@
 
 from .progress_tracker import ProgressTracker
 
-
-class NVDProgressTracker(ProgressTracker):
-    """Singleton tracker for NVD enrichment progress."""
-
-    _default_phase = "enrichment"
-    _completed_message = "Enrichment completed successfully"
+NVDProgressTracker = ProgressTracker(
+    default_phase="enrichment",
+    completed_message="Enrichment completed successfully",
+)

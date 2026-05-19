@@ -4,6 +4,8 @@
 import typing
 import uuid
 
+T = typing.TypeVar("T")
+
 
 def ensure_uuid(value: uuid.UUID | str) -> uuid.UUID:
     """Normalise *value* to a :class:`uuid.UUID`."""
@@ -12,11 +14,11 @@ def ensure_uuid(value: uuid.UUID | str) -> uuid.UUID:
     return value
 
 
-def resolve_entity[T](
-    entity: T | uuid.UUID | str,
-    getter: typing.Callable[[uuid.UUID], T | None],
+def resolve_entity(
+    entity: "T | uuid.UUID | str",
+    getter: typing.Callable[[uuid.UUID], "T | None"],
     label: str = "Record",
-) -> T:
+) -> "T":
     """Resolve *entity* to a model instance.
 
     *entity* may already be a model instance, a UUID, or a UUID string.

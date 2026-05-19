@@ -376,7 +376,7 @@ class VulnerabilitiesController:
             msg += f" ({skipped_fresh} already up-to-date, skipped)"
         print(msg, flush=True)
 
-        tracker = EPSSProgressTracker()
+        tracker = EPSSProgressTracker
         tracker.start("epss_enrichment")
         tracker.update("epss_enrichment", 0, total, f"EPSS enrichment: 0/{total}")
 
@@ -539,7 +539,7 @@ class VulnerabilitiesController:
         if skipped_fresh:
             msg += f" ({skipped_fresh} already up-to-date, skipped)"
         print(msg, flush=True)
-        tracker = NVDProgressTracker()
+        tracker = NVDProgressTracker
         tracker.start("nvd_enrichment")
 
         # NVD lookups via API

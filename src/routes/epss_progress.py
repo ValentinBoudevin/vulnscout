@@ -27,6 +27,6 @@ def init_app(app):
                 "started_at": str
             }
         """
-        tracker = EPSSProgressTracker()
+        tracker = EPSSProgressTracker
         progress = tracker.get_progress()
         return jsonify(progress), 200
