@@ -1,6 +1,7 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import typing
 import uuid
 
 
@@ -11,11 +12,15 @@ def ensure_uuid(value: uuid.UUID | str) -> uuid.UUID:
     return value
 
 
-def resolve_entity(entity, getter, label: str = "Record"):
+def resolve_entity[T](
+    entity: T | uuid.UUID | str,
+    getter: typing.Callable[[uuid.UUID], T | None],
+    label: str = "Record",
+) -> T:
     """Resolve *entity* to a model instance.
 
     *entity* may already be a model instance, a UUID, or a UUID string.
-    *getter* is a callable that accepts a UUID-or-string and returns the
+    *getter* is a callable that accepts a UUID and returns the
     instance or ``None``.
 
     :raises ValueError: when the entity cannot be found.
@@ -23,6 +28,8 @@ def resolve_entity(entity, getter, label: str = "Record"):
     # If it's not a basic type (UUID / str), assume it's already a model instance.
     if not isinstance(entity, (uuid.UUID, str)):
         return entity
+    if isinstance(entity, str):
+        entity = uuid.UUID(entity)
     found = getter(entity)
     if found is None:
         raise ValueError(f"{label} not found.")
