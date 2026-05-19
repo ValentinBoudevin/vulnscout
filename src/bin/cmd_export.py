@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """SBOM export and report generation commands: ``flask export`` and ``flask report``."""
 
+from __future__ import annotations
+
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..views.spdx import SPDX
 from ..views.spdx3 import SPDX3
@@ -14,7 +16,11 @@ from datetime import date as _date
 import click
 import json
 import os
+from typing import TYPE_CHECKING
 from flask.cli import with_appcontext
+
+if TYPE_CHECKING:
+    from ..controllers.packages import PackagesController
 
 
 @click.command("export")
@@ -79,8 +85,8 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
     invoked; TEMPLATE_NAME is always generated regardless.
     """
     controllers = build_controllers(include_all=True)
-    vulnCtrl = controllers["vulnerabilities"]
-    pkgCtrl = controllers["packages"]
+    vulnCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
+    pkgCtrl: PackagesController = controllers["packages"]
     vulnCtrl = VulnerabilitiesController.from_dict(pkgCtrl, vulnCtrl.to_dict())
     controllers["vulnerabilities"] = vulnCtrl
     templ = Templates(controllers)

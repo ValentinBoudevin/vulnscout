@@ -2,8 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Shared constants and helpers for CLI commands."""
 
+from __future__ import annotations
+
 import os
+from typing import TYPE_CHECKING
 import click
+
+if TYPE_CHECKING:
+    from ..models.project import Project
+    from ..models.variant import Variant
 
 DEFAULT_VARIANT_NAME = "default"
 
@@ -13,7 +20,7 @@ def get_default_author() -> str:
     return os.getenv("AUTHOR_NAME", "Savoir-faire Linux")
 
 
-def resolve_project(project: str):
+def resolve_project(project: str) -> Project:
     """Look up a project by name.
 
     Returns the project object or exits with an error.
@@ -27,7 +34,7 @@ def resolve_project(project: str):
     return project_obj
 
 
-def resolve_project_variant(project: str, variant: str | None, *, create: bool = False):
+def resolve_project_variant(project: str, variant: str | None, *, create: bool = False) -> tuple[Project, Variant]:
     """Look up (or create) a project and variant by name.
 
     Parameters
@@ -108,10 +115,10 @@ def build_controllers(*, preload_cache: bool = False, include_all: bool = False)
         from ..controllers.scans import ScanController
         from ..controllers.sbom_documents import SBOMDocumentController
         controllers.update({
-            "projects": ProjectController(),
-            "variants": VariantController(),
-            "scans": ScanController(),
-            "sbom_documents": SBOMDocumentController(),
+            "projects": ProjectController,
+            "variants": VariantController,
+            "scans": ScanController,
+            "sbom_documents": SBOMDocumentController,
         })
 
     return controllers

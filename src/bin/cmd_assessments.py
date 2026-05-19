@@ -92,13 +92,21 @@ def export_custom_assessments_command(output_dir: str, project: str, variant: st
             filename = sanitize_variant_name(vobj.name) + ".json"
             named_groups[filename] = assessments
 
-        out_path = _write_tar(named_groups)
-        click.echo(f"Custom assessments exported: {out_path}")
+        if compress:
+            out_path = _write_tar(named_groups)
+            click.echo(f"Custom assessments exported: {out_path}")
+        else:
+            for filename, assessments in named_groups.items():
+                out_path = _write_doc(assessments, filename)
+                click.echo(f"Custom assessments exported: {out_path}")
     else:
         assert variant_obj
         filename = sanitize_variant_name(variant_obj.name) + ".json"
 
-        out_path = _write_doc(handmade, filename)
+        if compress:
+            out_path = _write_tar({filename: handmade})
+        else:
+            out_path = _write_doc(handmade, filename)
         click.echo(f"Custom assessments exported: {out_path}")
 
 
@@ -115,6 +123,7 @@ def import_custom_assessments_command(file_path: str, project: str, variant: str
 
     resolve_project(project)  # validate project exists
 
+    variant_obj: DBVariant | None = None
     if variant:
         _, variant_obj = resolve_project_variant(project, variant, create=False)
 

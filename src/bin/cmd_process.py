@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """SBOM ingestion & processing commands: ``flask merge`` and ``flask process``."""
 
+from __future__ import annotations
+
 from ..views.cyclonedx import CycloneDx
 from ..views.spdx import SPDX
 from ..views.fast_spdx import FastSPDX
@@ -24,9 +26,15 @@ from ..extensions import batch_session, db as _db
 import click
 import json
 import os
+from typing import TYPE_CHECKING
 from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
 from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant, build_controllers
+
+if TYPE_CHECKING:
+    from ..controllers.packages import PackagesController
+    from ..controllers.vulnerabilities import VulnerabilitiesController
+    from ..controllers.assessments import AssessmentsController
 
 
 def _ts_key(ts) -> str:
@@ -102,7 +110,7 @@ def read_inputs(controllers, scan_id=None):
     if use_fastspdx:
         verbose("merger_ci: Using FastSPDX parser")
 
-    pkgCtrl = controllers["packages"]
+    pkgCtrl: PackagesController = controllers["packages"]
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
 
     for doc in docs:
@@ -297,8 +305,8 @@ def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None
 def _run_main() -> dict:
     """Core processing logic (usable both from the CLI command and directly)."""
     controllers = build_controllers()
-    vulnCtrl = controllers["vulnerabilities"]
-    assessCtrl = controllers["assessments"]
+    vulnCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
+    assessCtrl: AssessmentsController = controllers["assessments"]
     latest_scan = ScanModel.get_latest()
     if latest_scan:
         assessCtrl.current_variant_id = latest_scan.variant_id
