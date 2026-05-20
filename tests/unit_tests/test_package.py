@@ -260,3 +260,58 @@ def test_sort_packages_mixed_suppliers():
     assert result[0].supplier == ""
     # Remaining two are deterministic (alphabetical)
     assert result[1].supplier < result[2].supplier
+
+
+def test_purl_epoch_qualifier_normalized_to_version_prefix():
+    pkg = Package("procps", "2:3.3.12-3ubuntu1.2")
+    pkg.add_purl("pkg:deb/ubuntu/procps@3.3.12-3ubuntu1.2?arch=arm64&distro=ubuntu-18.04&epoch=2")
+    assert "pkg:deb/ubuntu/procps@2:3.3.12-3ubuntu1.2?arch=arm64&distro=ubuntu-18.04" in pkg.purl
+
+
+def test_purl_url_encoded_epoch_normalized():
+    pkg = Package("procps", "2:3.3.12-3ubuntu1.2")
+    pkg.add_purl("pkg:deb/ubuntu/procps@2%3A3.3.12-3ubuntu1.2?arch=arm64&distro=ubuntu-18.04")
+    assert "pkg:deb/ubuntu/procps@2:3.3.12-3ubuntu1.2?arch=arm64&distro=ubuntu-18.04" in pkg.purl
+
+
+def test_purl_epoch_forms_deduplicate():
+    pkg = Package("procps", "2:3.3.12-3ubuntu1.2")
+    pkg.add_purl("pkg:deb/ubuntu/procps@2%3A3.3.12-3ubuntu1.2?arch=arm64&distro=ubuntu-18.04")
+    pkg.add_purl("pkg:deb/ubuntu/procps@3.3.12-3ubuntu1.2?arch=arm64&distro=ubuntu-18.04&epoch=2")
+    # Both normalize to the same canonical form — no duplicate
+    assert len([p for p in pkg.purl if "procps" in p and "deb" in p]) == 1
+
+
+def test_rpm_purl_epoch_qualifier_normalized_to_version_prefix():
+    pkg = Package("bash", "1:5.1.8-6.el9")
+    pkg.add_purl("pkg:rpm/fedora/bash@5.1.8-6.el9?arch=x86_64&epoch=1")
+    assert "pkg:rpm/fedora/bash@1:5.1.8-6.el9?arch=x86_64" in pkg.purl
+
+
+def test_rpm_purl_epoch_forms_deduplicate():
+    pkg = Package("bash", "1:5.1.8-6.el9")
+    pkg.add_purl("pkg:rpm/fedora/bash@5.1.8-6.el9?arch=x86_64&epoch=1")
+    pkg.add_purl("pkg:rpm/fedora/bash@1:5.1.8-6.el9?arch=x86_64")
+    # Both normalize to the same canonical form — no duplicate
+    assert len([p for p in pkg.purl if "bash" in p and "rpm" in p]) == 1
+
+
+def test_purl_normalization_non_deb_unchanged():
+    pkg = Package("mypackage", "1.0.0")
+    generic_purl = "pkg:generic/mypackage@1.0.0"
+    pkg.add_purl(generic_purl)
+    assert generic_purl in pkg.purl
+
+
+def test_purl_malformed_stored_as_is():
+    pkg = Package("mypackage", "1.0.0")
+    malformed = "not-a-valid-purl-at-all"
+    pkg.add_purl(malformed)
+    assert malformed in pkg.purl
+
+
+def test_purl_epoch_qualifier_without_version_not_corrupted():
+    pkg = Package("procps", "")
+    no_version_purl = "pkg:deb/ubuntu/procps?epoch=2"
+    pkg.add_purl(no_version_purl)
+    assert "None" not in pkg.purl[0]

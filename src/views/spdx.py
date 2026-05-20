@@ -102,21 +102,16 @@ class SPDX:
                 verbose(f"[SPDX.merge_components] failed to read supplier for {package.name!r}")
 
             pkg = Package(package.name, package.version or "", [], [], "", supplier=supplier)
-            cpe_type = "a"
-
-            if package.primary_package_purpose == PackagePurpose.OPERATING_SYSTEM:
-                cpe_type = "o"
-            if package.primary_package_purpose == PackagePurpose.DEVICE:
-                cpe_type = "h"
             license_declared = package.license_declared
             if license_declared is not None:
                 license_str = str(license_declared)
                 pkg.licences = license_str
-            pkg.add_cpe(f"cpe:2.3:{cpe_type}:*:{package.name or '*'}:{package.version or '*'}:*:*:*:*:*:*:*")
 
             for external_ref in package.external_references:
                 if external_ref.reference_type == "purl":
                     pkg.add_purl(external_ref.locator)
+                elif external_ref.reference_type == "cpe23Type":
+                    pkg.add_cpe(external_ref.locator)
 
             pkg.generate_generic_cpe()
             pkg.generate_generic_purl()
