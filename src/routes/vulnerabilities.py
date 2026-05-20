@@ -1,8 +1,6 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-import uuid
-
 from flask import request
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload, aliased
@@ -27,8 +25,24 @@ from ..helpers.active_scans import (
     active_scan_ids_for_project,
     active_package_ids_for_scans,
 )
+from ._scan_helpers import parse_uuid_or_400
 
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
+
+
+def _sbom_pkg_filter(pkg_ids):
+    """Return a SQLAlchemy filter clause restricting tool-scan findings to SBOM packages.
+
+    Assumes the query already joins ``Finding`` and ``Scan``.  When
+    *pkg_ids* is empty the function returns ``None`` (no filter needed).
+    """
+    if not pkg_ids:
+        return None
+    return db.or_(
+        Scan.scan_type.is_(None),
+        Scan.scan_type == "sbom",
+        Finding.package_id.in_(pkg_ids),
+    )
 
 
 def _parse_effort_hours(value) -> int:
@@ -38,6 +52,62 @@ def _parse_effort_hours(value) -> int:
     if isinstance(value, str):
         return int(Iso8601Duration(value).total_seconds // 3600)
     raise ValueError(f"Invalid effort value: {value!r}")
+
+
+def _validate_effort(eff: dict):
+    """Validate and parse effort dict with optimistic/likely/pessimistic keys.
+
+    Returns ``(opt, lik, pes, None)`` on success or ``(None, None, None, error_string)``
+    on failure.
+    """
+    if not all(k in eff for k in ("optimistic", "likely", "pessimistic")):
+        return None, None, None, "Invalid effort values"
+    try:
+        opt = _parse_effort_hours(eff["optimistic"])
+        lik = _parse_effort_hours(eff["likely"])
+        pes = _parse_effort_hours(eff["pessimistic"])
+    except (ValueError, TypeError):
+        return None, None, None, "Invalid effort values"
+    if not (opt <= lik <= pes):
+        return None, None, None, "Invalid effort values"
+    return opt, lik, pes, None
+
+
+def _validate_and_apply_cvss(new_cvss: dict, record_id: str, log_prefix: str = ""):
+    """Validate CVSS payload and persist to Metrics.
+
+    Returns an error string on validation failure, ``None`` on success.
+    """
+    required_keys = {"base_score", "vector_string", "version"}
+    if not required_keys.issubset(new_cvss.keys()):
+        return "Invalid CVSS data"
+    cvss_obj = CVSS.from_dict(new_cvss)
+    try:
+        Metrics.from_cvss(cvss_obj, record_id)
+    except Exception as e:
+        verbose(f"[{log_prefix} cvss] {e}")
+    return None
+
+
+def _apply_effort(record, variant_id, opt, lik, pes, log_prefix: str = ""):
+    """Persist effort values to the first finding's TimeEstimate."""
+    try:
+        from ..models.time_estimate import TimeEstimate
+        for finding in (record.findings or []):
+            if variant_id is not None:
+                existing = TimeEstimate.get_by_finding_and_variant(finding.id, variant_id)
+            else:
+                existing = finding.time_estimate
+            if existing is not None:
+                existing.update(optimistic=opt, likely=lik, pessimistic=pes)
+            else:
+                TimeEstimate.create(
+                    finding_id=finding.id, variant_id=variant_id,
+                    optimistic=opt, likely=lik, pessimistic=pes
+                )
+            break
+    except Exception as e:
+        verbose(f"[{log_prefix} effort] {e}")
 
 
 # Formats that are exclusively vulnerability scanners (never pure package BOMs)
@@ -163,11 +233,12 @@ def init_app(app):
         compare_variant_id = request.args.get('compare_variant_id')
         current_scan_ids: list = []
         if variant_id and compare_variant_id:
-            try:
-                base_uuid = uuid.UUID(variant_id)
-                compare_uuid = uuid.UUID(compare_variant_id)
-            except ValueError:
-                return {"error": "Invalid variant_id or compare_variant_id"}, 400
+            base_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            compare_uuid, err = parse_uuid_or_400(compare_variant_id, "compare_variant_id")
+            if err:
+                return err
             base_latest_ids = active_scan_ids_for_variant(base_uuid)
             compare_latest_ids = active_scan_ids_for_variant(compare_uuid)
             current_scan_ids = compare_latest_ids
@@ -191,14 +262,9 @@ def init_app(app):
                     .join(Scan, Observation.scan_id == Scan.id)
                     .where(Observation.scan_id.in_(scan_ids))
                 )
-                if _pkg_ids:
-                    q = q.where(
-                        db.or_(
-                            Scan.scan_type.is_(None),
-                            Scan.scan_type == "sbom",
-                            Finding.package_id.in_(_pkg_ids),
-                        )
-                    )
+                _flt = _sbom_pkg_filter(_pkg_ids)
+                if _flt is not None:
+                    q = q.where(_flt)
                 return set(db.session.execute(q.distinct()).scalars().all())
 
             base_ids = _vuln_ids_for_scans(base_latest_ids)
@@ -228,23 +294,17 @@ def init_app(app):
                         .join(Scan, Observation.scan_id == Scan.id)
                         .where(Observation.scan_id.in_(compare_latest_ids))
                     )
-                    if compare_pkg_ids:
-                        query = query.where(
-                            db.or_(
-                                Scan.scan_type.is_(None),
-                                Scan.scan_type == "sbom",
-                                Finding.package_id.in_(compare_pkg_ids),
-                            )
-                        )
+                    _flt = _sbom_pkg_filter(compare_pkg_ids)
+                    if _flt is not None:
+                        query = query.where(_flt)
                     query = query.distinct().order_by(Vulnerability.id)
                     if base_ids:
                         query = query.where(~Vulnerability.id.in_(list(base_ids)))
                     records = list(db.session.execute(query).scalars().all())
         elif variant_id:
-            try:
-                variant_uuid = uuid.UUID(variant_id)
-            except ValueError:
-                return {"error": "Invalid variant_id"}, 400
+            variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
             _scope_variant = variant_uuid
             _scope_project = None
             latest_ids = active_scan_ids_for_variant(variant_uuid)
@@ -268,14 +328,9 @@ def init_app(app):
                     .join(Scan, Observation.scan_id == Scan.id)
                     .where(Observation.scan_id.in_(latest_ids))
                 )
-                if _pkg_ids:
-                    query = query.where(
-                        db.or_(
-                            Scan.scan_type.is_(None),
-                            Scan.scan_type == "sbom",
-                            Finding.package_id.in_(_pkg_ids),
-                        )
-                    )
+                _flt = _sbom_pkg_filter(_pkg_ids)
+                if _flt is not None:
+                    query = query.where(_flt)
                 records = list(db.session.execute(
                     query.distinct().order_by(Vulnerability.id)
                 ).scalars().all())
@@ -303,10 +358,9 @@ def init_app(app):
                     for r in records:
                         r.packages = _pkgs_by_vuln_var.get(str(r.id), [])
         elif project_id:
-            try:
-                project_uuid = uuid.UUID(project_id)
-            except ValueError:
-                return {"error": "Invalid project_id"}, 400
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
             _scope_variant = None
             _scope_project = project_uuid
             latest_ids = active_scan_ids_for_project(project_uuid)
@@ -327,14 +381,9 @@ def init_app(app):
                     .join(Scan, Observation.scan_id == Scan.id)
                     .where(Observation.scan_id.in_(latest_ids))
                 )
-                if _pkg_ids:
-                    vuln_ids_base = vuln_ids_base.where(
-                        db.or_(
-                            Scan.scan_type.is_(None),
-                            Scan.scan_type == "sbom",
-                            Finding.package_id.in_(_pkg_ids),
-                        )
-                    )
+                _flt = _sbom_pkg_filter(_pkg_ids)
+                if _flt is not None:
+                    vuln_ids_base = vuln_ids_base.where(_flt)
                 vuln_ids_subq = vuln_ids_base.distinct().scalar_subquery()
 
                 records = list(db.session.execute(
@@ -520,52 +569,24 @@ def init_app(app):
                 return {"error": "Invalid request data"}, 400
 
             if "effort" in payload_data:
-                # Store effort on the first finding's time-estimate
                 eff = payload_data["effort"]
-                if not all(k in eff for k in ("optimistic", "likely", "pessimistic")):
-                    return "Invalid effort values", 400
-                try:
-                    opt = _parse_effort_hours(eff["optimistic"])
-                    lik = _parse_effort_hours(eff["likely"])
-                    pes = _parse_effort_hours(eff["pessimistic"])
-                except (ValueError, TypeError):
-                    return "Invalid effort values", 400
-                if not (opt <= lik <= pes):
-                    return "Invalid effort values", 400
+                opt, lik, pes, err = _validate_effort(eff)
+                if err:
+                    return err, 400
                 variant_id = payload_data.get("variant_id")
                 if variant_id is not None:
-                    try:
-                        variant_id = uuid.UUID(variant_id)
-                    except (ValueError, AttributeError):
-                        return {"error": "Invalid variant_id"}, 400
-                try:
-                    from ..models.time_estimate import TimeEstimate
-                    for finding in (record.findings or []):
-                        if variant_id is not None:
-                            existing = TimeEstimate.get_by_finding_and_variant(finding.id, variant_id)
-                        else:
-                            existing = finding.time_estimate
-                        if existing is not None:
-                            existing.update(optimistic=opt, likely=lik, pessimistic=pes)
-                        else:
-                            TimeEstimate.create(
-                                finding_id=finding.id, variant_id=variant_id,
-                                optimistic=opt, likely=lik, pessimistic=pes
-                            )
-                        break
-                except Exception as e:
-                    verbose(f"[PATCH /api/vulnerabilities/{record.id} effort] {e}")
+                    variant_id, err = parse_uuid_or_400(variant_id, "variant_id")
+                    if err:
+                        return err
+                _apply_effort(record, variant_id, opt, lik, pes,
+                              log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
 
             if "cvss" in payload_data:
-                new_cvss = payload_data["cvss"]
-                required_keys = {"base_score", "vector_string", "version"}
-                if not required_keys.issubset(new_cvss.keys()):
-                    return "Invalid CVSS data", 400
-                cvss_obj = CVSS.from_dict(new_cvss)
-                try:
-                    Metrics.from_cvss(cvss_obj, record.id)
-                except Exception as e:
-                    verbose(f"[PATCH /api/vulnerabilities/{record.id} cvss] {e}")
+                cvss_err = _validate_and_apply_cvss(
+                    payload_data["cvss"], record.id,
+                    log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
+                if cvss_err:
+                    return cvss_err, 400
 
         return record.to_dict()
 
@@ -592,55 +613,26 @@ def init_app(app):
 
             if "effort" in item:
                 eff = item["effort"]
-                if not all(k in eff for k in ("optimistic", "likely", "pessimistic")):
-                    errors.append({"id": item["id"], "error": "Invalid effort values"})
-                    continue
-                try:
-                    opt = _parse_effort_hours(eff["optimistic"])
-                    lik = _parse_effort_hours(eff["likely"])
-                    pes = _parse_effort_hours(eff["pessimistic"])
-                except (ValueError, TypeError):
-                    errors.append({"id": item["id"], "error": "Invalid effort values"})
-                    continue
-                if not (opt <= lik <= pes):
-                    errors.append({"id": item["id"], "error": "Invalid effort values"})
+                opt, lik, pes, err = _validate_effort(eff)
+                if err:
+                    errors.append({"id": item["id"], "error": err})
                     continue
                 item_variant_id = item.get("variant_id")
                 if item_variant_id is not None:
-                    try:
-                        item_variant_id = uuid.UUID(item_variant_id)
-                    except (ValueError, AttributeError):
+                    item_variant_id, err = parse_uuid_or_400(item_variant_id, "variant_id")
+                    if err:
                         errors.append({"id": item["id"], "error": "Invalid variant_id"})
                         continue
-                try:
-                    from ..models.time_estimate import TimeEstimate
-                    for finding in (record.findings or []):
-                        if item_variant_id is not None:
-                            existing = TimeEstimate.get_by_finding_and_variant(finding.id, item_variant_id)
-                        else:
-                            existing = finding.time_estimate
-                        if existing is not None:
-                            existing.update(optimistic=opt, likely=lik, pessimistic=pes)
-                        else:
-                            TimeEstimate.create(
-                                finding_id=finding.id, variant_id=item_variant_id,
-                                optimistic=opt, likely=lik, pessimistic=pes
-                            )
-                        break
-                except Exception as e:
-                    verbose(f"[PATCH /api/vulnerabilities/batch {item['id']!r} effort] {e}")
+                _apply_effort(record, item_variant_id, opt, lik, pes,
+                              log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}")
 
             if "cvss" in item:
-                new_cvss = item["cvss"]
-                required_keys = {"base_score", "vector_string", "version"}
-                if not required_keys.issubset(new_cvss.keys()):
-                    errors.append({"id": item["id"], "error": "Invalid CVSS data"})
+                cvss_err = _validate_and_apply_cvss(
+                    item["cvss"], record.id,
+                    log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}")
+                if cvss_err:
+                    errors.append({"id": item["id"], "error": cvss_err})
                     continue
-                cvss_obj = CVSS.from_dict(new_cvss)
-                try:
-                    Metrics.from_cvss(cvss_obj, record.id)
-                except Exception as e:
-                    verbose(f"[PATCH /api/vulnerabilities/batch {item['id']!r} cvss] {e}")
 
             results.append(record.to_dict())
 

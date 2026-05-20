@@ -14,6 +14,7 @@ from ..helpers.verbose import verbose
 from ..extensions import db, batch_session
 from ..models.vulnerability import Vulnerability as DBVuln
 from ..models.variant import Variant as DBVariant
+from ._scan_helpers import parse_uuid_or_400
 from ..helpers.assessment_io import (
     build_openvex_archive,
     is_openvex_doc,
@@ -32,6 +33,29 @@ def _resolve_package(pkg_string_id: str) -> "Package":
     _supplier = _parts[1] if len(_parts) > 1 else ""
     name, version = _base.rsplit("@", 1) if "@" in _base else (_base, "")
     return Package.find_or_create(name, version, supplier=_supplier)
+
+
+def _create_assessment_record(assessment, finding_id, variant_id, timestamp=None):
+    """Create a single DBAssessment row from a validated DTO.
+
+    Shared between ``add_assessment`` (single) and ``add_assessments_batch``.
+    """
+    kwargs = dict(
+        status=assessment.status,
+        simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
+        finding_id=finding_id,
+        variant_id=variant_id,
+        origin="custom",
+        status_notes=assessment.status_notes,
+        justification=assessment.justification,
+        impact_statement=assessment.impact_statement,
+        workaround=getattr(assessment, "workaround", None),
+        responses=list(assessment.responses) if assessment.responses else [],
+        commit=True,
+    )
+    if timestamp is not None:
+        kwargs["timestamp"] = timestamp
+    return DBAssessment.create(**kwargs)
 
 
 def init_app(app):
@@ -64,19 +88,15 @@ def init_app(app):
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         if variant_id:
-            import uuid
-            try:
-                variant_uuid = uuid.UUID(variant_id)
-            except ValueError:
-                return {"error": "Invalid variant_id"}, 400
+            variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
             assessments = [a.to_dict() for a in DBAssessment.get_by_variant(variant_uuid)]
         elif project_id:
-            import uuid
             from ..models.variant import Variant as DBVariant
-            try:
-                project_uuid = uuid.UUID(project_id)
-            except ValueError:
-                return {"error": "Invalid project_id"}, 400
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
             variants = DBVariant.get_by_project(project_uuid)
             variant_ids = [v.id for v in variants]
             if variant_ids:
@@ -99,22 +119,19 @@ def init_app(app):
         vulnerability's ``texts`` dict so the front-end can display tooltips
         without extra requests.
         """
-        import uuid as _uuid
         from ..models.variant import Variant as DBVariant
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         vid = None
         if variant_id:
-            try:
-                vid = _uuid.UUID(variant_id)
-            except ValueError:
-                return {"error": "Invalid variant_id"}, 400
+            vid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
             assessments = [a.to_dict() for a in DBAssessment.get_handmade([vid])]
         elif project_id:
-            try:
-                pid = _uuid.UUID(project_id)
-            except ValueError:
-                return {"error": "Invalid project_id"}, 400
+            pid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
             variant_ids = [variant.id for variant in DBVariant.get_by_project(pid)]
             assessments = [a.to_dict() for a in DBAssessment.get_handmade(variant_ids)]
         else:
@@ -384,11 +401,9 @@ def init_app(app):
         variant_id_raw = payload_data.get('variant_id') or None
         variant_id = None
         if variant_id_raw:
-            try:
-                import uuid as _uuid
-                variant_id = _uuid.UUID(variant_id_raw)
-            except (ValueError, AttributeError):
-                return {"error": "Invalid variant_id"}, 400
+            variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
+            if err:
+                return err
 
         # Persist to DB — one Assessment record per package
         # Use a single timestamp so grouped rows share the exact same value.
@@ -408,20 +423,8 @@ def init_app(app):
                     # Always create a new record — never merge with an existing one.
                     # from_vuln_assessment does a find-or-update which would overwrite
                     # previous user assessments on the same (finding, variant).
-                    db_a = DBAssessment.create(
-                        status=assessment.status,
-                        simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
-                        finding_id=finding.id,
-                        variant_id=variant_id,
-                        origin="custom",
-                        status_notes=assessment.status_notes,
-                        justification=assessment.justification,
-                        impact_statement=assessment.impact_statement,
-                        workaround=getattr(assessment, "workaround", None),
-                        responses=list(assessment.responses) if assessment.responses else [],
-                        timestamp=shared_timestamp,
-                        commit=True,
-                    )
+                    db_a = _create_assessment_record(
+                        assessment, finding.id, variant_id, timestamp=shared_timestamp)
                     created.append(db_a.to_dict())
         except Exception as e:
             return {"error": f"DB error: {e}"}, 500
@@ -463,10 +466,8 @@ def init_app(app):
                 variant_id_raw = item.get('variant_id') or None
                 variant_id = None
                 if variant_id_raw:
-                    try:
-                        import uuid as _uuid
-                        variant_id = _uuid.UUID(variant_id_raw)
-                    except (ValueError, AttributeError):
+                    variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
+                    if err:
                         errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
                         continue
                 pkg_list = assessment.packages or []
@@ -489,19 +490,8 @@ def init_app(app):
                             finding = Finding.get_or_create(db_pkg.id, vuln_id)
                             finding_cache[f_key] = finding
                         # Always create a new record — never overwrite an existing assessment
-                        db_a = DBAssessment.create(
-                            status=assessment.status,
-                            simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
-                            finding_id=finding.id,
-                            variant_id=variant_id,
-                            origin="custom",
-                            status_notes=assessment.status_notes,
-                            justification=assessment.justification,
-                            impact_statement=assessment.impact_statement,
-                            workaround=getattr(assessment, "workaround", None),
-                            responses=list(assessment.responses) if assessment.responses else [],
-                            commit=True,
-                        )
+                        db_a = _create_assessment_record(
+                            assessment, finding.id, variant_id)
                         results.append(db_a.to_dict())
                     except Exception as e:
                         errors.append({"vuln_id": vuln_id, "error": str(e)})
