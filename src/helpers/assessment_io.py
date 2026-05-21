@@ -328,12 +328,21 @@ def import_statements(
     return created, errors, skipped
 
 
-def build_variant_by_name_map() -> dict:
-    """Return a ``{name: Variant, sanitised_name: Variant}`` lookup for all variants."""
+def build_variant_by_name_map(project_id: "_uuid.UUID | None" = None) -> dict:
+    """Return a ``{name: Variant, sanitised_name: Variant}`` lookup.
+
+    Parameters
+    ----------
+    project_id:
+        When provided, only variants belonging to this project are included.
+        When *None*, all variants across all projects are returned (legacy
+        behaviour kept for the webapp route).
+    """
     from ..models.variant import Variant as DBVariant
 
+    variants = DBVariant.get_by_project(project_id) if project_id else DBVariant.get_all()
     variant_by_name: dict = {}
-    for v in DBVariant.get_all():
+    for v in variants:
         sanitised = sanitize_variant_name(v.name)
         variant_by_name[sanitised] = v
         variant_by_name[v.name] = v

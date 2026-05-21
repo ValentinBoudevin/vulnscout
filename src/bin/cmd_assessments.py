@@ -121,13 +121,13 @@ def import_custom_assessments_command(file_path: str, project: str, variant: str
         click.echo(f"Error: file not found: {file_path}", err=True)
         raise SystemExit(1)
 
-    resolve_project(project)  # validate project exists
+    project_obj = resolve_project(project)
 
     variant_obj: DBVariant | None = None
     if variant:
         _, variant_obj = resolve_project_variant(project, variant, create=False)
 
-    variant_by_name = build_variant_by_name_map()
+    variant_by_name = build_variant_by_name_map(project_obj.id)
     basename = os.path.basename(file_path)
     total_created: list[dict]
     total_errors: list[dict]
