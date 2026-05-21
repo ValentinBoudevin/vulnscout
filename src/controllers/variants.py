@@ -5,6 +5,7 @@ import uuid
 from typing import Optional
 
 from ..models.variant import Variant
+from ._base import ensure_uuid, resolve_entity, validate_non_empty
 
 
 class VariantController:
@@ -40,9 +41,7 @@ class VariantController:
     @staticmethod
     def get(variant_id: uuid.UUID | str) -> Optional[Variant]:
         """Return the variant matching *variant_id*, or ``None`` if not found."""
-        if isinstance(variant_id, str):
-            variant_id = uuid.UUID(variant_id)
-        return Variant.get_by_id(variant_id)
+        return Variant.get_by_id(ensure_uuid(variant_id))
 
     @staticmethod
     def get_all() -> list[Variant]:
@@ -52,9 +51,7 @@ class VariantController:
     @staticmethod
     def get_by_project(project_id: uuid.UUID | str) -> list[Variant]:
         """Return all variants belonging to *project_id*, ordered by name."""
-        if isinstance(project_id, str):
-            project_id = uuid.UUID(project_id)
-        return Variant.get_by_project(project_id)
+        return Variant.get_by_project(ensure_uuid(project_id))
 
     # ------------------------------------------------------------------
     # Mutations
@@ -67,12 +64,8 @@ class VariantController:
 
         :raises ValueError: if *name* is empty or blank.
         """
-        name = name.strip()
-        if not name:
-            raise ValueError("Variant name must not be empty.")
-        if isinstance(project_id, str):
-            project_id = uuid.UUID(project_id)
-        return Variant.create(name, project_id)
+        name = validate_non_empty(name, "Variant name")
+        return Variant.create(name, ensure_uuid(project_id))
 
     @staticmethod
     def get_or_create(name: str, project_id: uuid.UUID | str) -> Variant:
@@ -82,12 +75,8 @@ class VariantController:
 
         :raises ValueError: if *name* is empty or blank.
         """
-        name = name.strip()
-        if not name:
-            raise ValueError("Variant name must not be empty.")
-        if isinstance(project_id, str):
-            project_id = uuid.UUID(project_id)
-        return Variant.get_or_create(name, project_id)
+        name = validate_non_empty(name, "Variant name")
+        return Variant.get_or_create(name, ensure_uuid(project_id))
 
     @staticmethod
     def update(variant: Variant | uuid.UUID | str, name: str) -> Variant:
@@ -97,17 +86,8 @@ class VariantController:
 
         :raises ValueError: if *name* is empty or blank, or variant is not found.
         """
-        name = name.strip()
-        if not name:
-            raise ValueError("Variant name must not be empty.")
-        resolved: Variant
-        if isinstance(variant, Variant):
-            resolved = variant
-        else:
-            found = VariantController.get(variant)
-            if found is None:
-                raise ValueError("Variant not found.")
-            resolved = found
+        name = validate_non_empty(name, "Variant name")
+        resolved = resolve_entity(variant, VariantController.get, "Variant")
         return resolved.update(name)
 
     @staticmethod
@@ -118,12 +98,5 @@ class VariantController:
 
         :raises ValueError: if the variant is not found.
         """
-        resolved: Variant
-        if isinstance(variant, Variant):
-            resolved = variant
-        else:
-            found = VariantController.get(variant)
-            if found is None:
-                raise ValueError("Variant not found.")
-            resolved = found
+        resolved = resolve_entity(variant, VariantController.get, "Variant")
         resolved.delete()

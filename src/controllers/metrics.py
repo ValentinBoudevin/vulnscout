@@ -5,6 +5,7 @@ import uuid
 from typing import Optional
 
 from ..models.metrics import Metrics
+from ._base import ensure_uuid, resolve_entity, validate_non_empty
 
 
 class MetricsController:
@@ -43,9 +44,7 @@ class MetricsController:
     @staticmethod
     def get(metrics_id: uuid.UUID | str) -> Optional[Metrics]:
         """Return the metrics record matching *metrics_id*, or ``None`` if not found."""
-        if isinstance(metrics_id, str):
-            metrics_id = uuid.UUID(metrics_id)
-        return Metrics.get_by_id(metrics_id)
+        return Metrics.get_by_id(ensure_uuid(metrics_id))
 
     @staticmethod
     def get_by_vulnerability(vulnerability_id: str) -> list[Metrics]:
@@ -68,9 +67,7 @@ class MetricsController:
 
         :raises ValueError: if *vulnerability_id* is empty or blank.
         """
-        vulnerability_id = vulnerability_id.strip()
-        if not vulnerability_id:
-            raise ValueError("Vulnerability id must not be empty.")
+        vulnerability_id = validate_non_empty(vulnerability_id, "Vulnerability id")
         return Metrics.create(
             vulnerability_id=vulnerability_id,
             version=version,
@@ -91,13 +88,7 @@ class MetricsController:
 
         :raises ValueError: if the record is not found.
         """
-        if isinstance(metrics, Metrics):
-            resolved = metrics
-        else:
-            found = MetricsController.get(metrics)
-            if found is None:
-                raise ValueError("Metrics record not found.")
-            resolved = found
+        resolved = resolve_entity(metrics, MetricsController.get, "Metrics record")
         return resolved.update(version=version, score=score, vector=vector, author=author)
 
     @staticmethod
@@ -106,11 +97,5 @@ class MetricsController:
 
         :raises ValueError: if the record is not found.
         """
-        if isinstance(metrics, Metrics):
-            resolved = metrics
-        else:
-            found = MetricsController.get(metrics)
-            if found is None:
-                raise ValueError("Metrics record not found.")
-            resolved = found
+        resolved = resolve_entity(metrics, MetricsController.get, "Metrics record")
         resolved.delete()

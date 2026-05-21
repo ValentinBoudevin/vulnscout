@@ -5,6 +5,7 @@ import uuid
 from typing import Optional
 
 from ..models.project import Project
+from ._base import ensure_uuid, resolve_entity, validate_non_empty
 
 
 class ProjectController:
@@ -39,9 +40,7 @@ class ProjectController:
     @staticmethod
     def get(project_id: uuid.UUID | str) -> Optional[Project]:
         """Return the project matching *project_id*, or ``None`` if not found."""
-        if isinstance(project_id, str):
-            project_id = uuid.UUID(project_id)
-        return Project.get_by_id(project_id)
+        return Project.get_by_id(ensure_uuid(project_id))
 
     @staticmethod
     def get_by_name(name: str) -> Project | None:
@@ -51,9 +50,7 @@ class ProjectController:
 
         :raises ValueError: if *name* is empty or blank.
         """
-        name = name.strip()
-        if not name:
-            raise ValueError("Project name must not be empty.")
+        name = validate_non_empty(name, "Project name")
         return Project.get_by_name(name)
 
     @staticmethod
@@ -72,9 +69,7 @@ class ProjectController:
 
         :raises ValueError: if *name* is empty or blank.
         """
-        name = name.strip()
-        if not name:
-            raise ValueError("Project name must not be empty.")
+        name = validate_non_empty(name, "Project name")
         return Project.create(name)
 
     @staticmethod
@@ -85,9 +80,7 @@ class ProjectController:
 
         :raises ValueError: if *name* is empty or blank.
         """
-        name = name.strip()
-        if not name:
-            raise ValueError("Project name must not be empty.")
+        name = validate_non_empty(name, "Project name")
         return Project.get_or_create(name)
 
     @staticmethod
@@ -98,17 +91,8 @@ class ProjectController:
 
         :raises ValueError: if *name* is empty or blank, or project is not found.
         """
-        name = name.strip()
-        if not name:
-            raise ValueError("Project name must not be empty.")
-        resolved: Project
-        if isinstance(project, Project):
-            resolved = project
-        else:
-            found = ProjectController.get(project)
-            if found is None:
-                raise ValueError("Project not found.")
-            resolved = found
+        name = validate_non_empty(name, "Project name")
+        resolved = resolve_entity(project, ProjectController.get, "Project")
         return resolved.update(name)
 
     @staticmethod
@@ -119,12 +103,5 @@ class ProjectController:
 
         :raises ValueError: if the project is not found.
         """
-        resolved: Project
-        if isinstance(project, Project):
-            resolved = project
-        else:
-            found = ProjectController.get(project)
-            if found is None:
-                raise ValueError("Project not found.")
-            resolved = found
+        resolved = resolve_entity(project, ProjectController.get, "Project")
         resolved.delete()

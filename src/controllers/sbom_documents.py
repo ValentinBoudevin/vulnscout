@@ -5,6 +5,7 @@ import uuid
 from typing import Optional
 
 from ..models.sbom_document import SBOMDocument
+from ._base import ensure_uuid, resolve_entity, validate_non_empty
 
 
 class SBOMDocumentController:
@@ -42,9 +43,7 @@ class SBOMDocumentController:
     @staticmethod
     def get(document_id: uuid.UUID | str) -> Optional[SBOMDocument]:
         """Return the SBOM document matching *document_id*, or ``None`` if not found."""
-        if isinstance(document_id, str):
-            document_id = uuid.UUID(document_id)
-        return SBOMDocument.get_by_id(document_id)
+        return SBOMDocument.get_by_id(ensure_uuid(document_id))
 
     @staticmethod
     def get_all() -> list[SBOMDocument]:
@@ -54,27 +53,28 @@ class SBOMDocumentController:
     @staticmethod
     def get_by_scan(scan_id: uuid.UUID | str) -> list[SBOMDocument]:
         """Return all SBOM documents belonging to *scan_id*, ordered by path."""
-        if isinstance(scan_id, str):
-            scan_id = uuid.UUID(scan_id)
-        return SBOMDocument.get_by_scan(scan_id)
+        return SBOMDocument.get_by_scan(ensure_uuid(scan_id))
 
     @staticmethod
     def get_by_variant(variant_id: uuid.UUID | str) -> list[SBOMDocument]:
         """Return all SBOM documents belonging to *variant_id* (across all its scans), ordered by path."""
-        if isinstance(variant_id, str):
-            variant_id = uuid.UUID(variant_id)
-        return SBOMDocument.get_by_variant(variant_id)
+        return SBOMDocument.get_by_variant(ensure_uuid(variant_id))
 
     @staticmethod
     def get_by_project(project_id: uuid.UUID | str) -> list[SBOMDocument]:
         """Return all SBOM documents belonging to *project_id* (across all variants and scans), ordered by path."""
-        if isinstance(project_id, str):
-            project_id = uuid.UUID(project_id)
-        return SBOMDocument.get_by_project(project_id)
+        return SBOMDocument.get_by_project(ensure_uuid(project_id))
 
     # ------------------------------------------------------------------
     # Mutations
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_fields(path: str, source_name: str) -> tuple[str, str]:
+        """Strip and validate *path* and *source_name*."""
+        path = validate_non_empty(path, "SBOM document path")
+        source_name = validate_non_empty(source_name, "SBOM document source_name")
+        return path, source_name
 
     @staticmethod
     def create(path: str, source_name: str, scan_id: uuid.UUID | str, format: Optional[str] = None) -> SBOMDocument:
@@ -84,15 +84,8 @@ class SBOMDocumentController:
         :param format: Optional format hint: 'spdx', 'cdx', 'openvex', or 'yocto_cve_check'.
         :raises ValueError: if *path* or *source_name* is empty or blank.
         """
-        path = path.strip()
-        source_name = source_name.strip()
-        if not path:
-            raise ValueError("SBOM document path must not be empty.")
-        if not source_name:
-            raise ValueError("SBOM document source_name must not be empty.")
-        if isinstance(scan_id, str):
-            scan_id = uuid.UUID(scan_id)
-        return SBOMDocument.create(path, source_name, scan_id, format=format)
+        path, source_name = SBOMDocumentController._validate_fields(path, source_name)
+        return SBOMDocument.create(path, source_name, ensure_uuid(scan_id), format=format)
 
     @staticmethod
     def update(
@@ -108,20 +101,8 @@ class SBOMDocumentController:
         :raises ValueError: if *path* or *source_name* is empty or blank,
                             or document is not found.
         """
-        path = path.strip()
-        source_name = source_name.strip()
-        if not path:
-            raise ValueError("SBOM document path must not be empty.")
-        if not source_name:
-            raise ValueError("SBOM document source_name must not be empty.")
-        resolved: SBOMDocument
-        if isinstance(document, SBOMDocument):
-            resolved = document
-        else:
-            found = SBOMDocumentController.get(document)
-            if found is None:
-                raise ValueError("SBOM document not found.")
-            resolved = found
+        path, source_name = SBOMDocumentController._validate_fields(path, source_name)
+        resolved = resolve_entity(document, SBOMDocumentController.get, "SBOM document")
         return resolved.update(path, source_name, format=format)
 
     @staticmethod
@@ -132,12 +113,5 @@ class SBOMDocumentController:
 
         :raises ValueError: if the document is not found.
         """
-        resolved: SBOMDocument
-        if isinstance(document, SBOMDocument):
-            resolved = document
-        else:
-            found = SBOMDocumentController.get(document)
-            if found is None:
-                raise ValueError("SBOM document not found.")
-            resolved = found
+        resolved = resolve_entity(document, SBOMDocumentController.get, "SBOM document")
         resolved.delete()

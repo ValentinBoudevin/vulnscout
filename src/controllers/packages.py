@@ -4,6 +4,7 @@
 from ..models import Package, Finding, SBOMDocument, SBOMPackage
 from ..helpers.verbose import verbose
 from ..extensions import db
+from ._base import to_dict_with_fallback
 
 
 class PackagesController:
@@ -165,13 +166,10 @@ class PackagesController:
 
     def to_dict(self) -> dict:
         """Return all packages as a ``{id: dict}`` mapping, preferring in-memory when available."""
-        if self._cache:
-            return {k: v.to_dict() for k, v in self._cache.items()}
-        try:
-            return {pkg.string_id: pkg.to_dict() for pkg in Package.get_all()}
-        except Exception as e:
-            verbose(f"[PackagesController.to_dict] {e}")
-            return {}
+        return to_dict_with_fallback(
+            self._cache, Package.get_all,
+            lambda pkg: pkg.string_id, "PackagesController",
+        )
 
     @staticmethod
     def from_dict(data: dict) -> "PackagesController":

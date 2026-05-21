@@ -15,6 +15,7 @@ from ..controllers.packages import PackagesController
 from ..controllers.epss_db import EPSS_DB
 from ..controllers.nvd_db import NVD_DB
 from ..helpers.verbose import verbose
+from ._base import to_dict_with_fallback
 from ..models.cvss import CVSS
 from ..models.metrics import Metrics as MetricsModel
 from ..extensions import db
@@ -77,6 +78,19 @@ def _should_refetch(fetched_at: Optional[datetime.datetime], delay: Optional[dat
         return False
     assert delay is not None
     return (datetime.datetime.utcnow() - fetched_at) >= delay
+
+
+def _batch_commit(done: int, total: int, label: str) -> None:
+    """Try to commit the DB session and log progress.
+
+    On failure, roll back and log via :func:`verbose`.
+    """
+    try:
+        db.session.commit()
+        print(f"=== {label}: committed {done}/{total}", flush=True)
+    except Exception as e:
+        verbose(f"[{label} commit at {done}] {e}")
+        db.session.rollback()
 
 
 def _persist_vuln_to_db(
@@ -362,7 +376,7 @@ class VulnerabilitiesController:
             msg += f" ({skipped_fresh} already up-to-date, skipped)"
         print(msg, flush=True)
 
-        tracker = EPSSProgressTracker()
+        tracker = EPSSProgressTracker
         tracker.start("epss_enrichment")
         tracker.update("epss_enrichment", 0, total, f"EPSS enrichment: 0/{total}")
 
@@ -404,12 +418,7 @@ class VulnerabilitiesController:
             tracker.update("epss_enrichment", processed, total, f"EPSS enrichment: {processed}/{total}")
             # Commit once every 500 CVEs processed.
             if processed % DB_COMMIT_EVERY < BATCH_SIZE:
-                try:
-                    db.session.commit()
-                    print(f"=== EPSS: committed {processed}/{total}", flush=True)
-                except Exception as e:
-                    verbose(f"[fetch_epss_scores commit at {processed}] {e}")
-                    db.session.rollback()
+                _batch_commit(processed, total, "EPSS")
 
         # Final commit for any remaining deferred EPSS updates.
         try:
@@ -530,7 +539,7 @@ class VulnerabilitiesController:
         if skipped_fresh:
             msg += f" ({skipped_fresh} already up-to-date, skipped)"
         print(msg, flush=True)
-        tracker = NVDProgressTracker()
+        tracker = NVDProgressTracker
         tracker.start("nvd_enrichment")
 
         # NVD lookups via API
@@ -584,12 +593,7 @@ class VulnerabilitiesController:
             done += 1
             tracker.update("nvd_enrichment", done, total, f"NVD enrichment: {done}/{total} ({vuln.id})")
             if done % DB_COMMIT_EVERY == 0:
-                try:
-                    db.session.commit()
-                    print(f"=== NVD: committed {done}/{total}", flush=True)
-                except Exception as e:
-                    verbose(f"[fetch_nvd_data commit at {done}] {e}")
-                    db.session.rollback()
+                _batch_commit(done, total, "NVD")
 
         # Fetch GHSA dates concurrently with a thread pool and a timeout
         if ghsa_vulns:
@@ -636,13 +640,10 @@ class VulnerabilitiesController:
 
     def to_dict(self) -> dict:
         """Export the list of vulnerabilities preferring in-memory data when available."""
-        if self.vulnerabilities:
-            return {k: v.to_dict() for k, v in self.vulnerabilities.items()}
-        try:
-            return {r.id: r.to_dict() for r in Vulnerability.get_all()}
-        except Exception as e:
-            verbose(f"[VulnerabilitiesController.to_dict] {e}")
-            return {}
+        return to_dict_with_fallback(
+            self.vulnerabilities, Vulnerability.get_all,
+            lambda r: r.id, "VulnerabilitiesController",
+        )
 
     @staticmethod
     def from_dict(pkgCtrl, data: dict):
