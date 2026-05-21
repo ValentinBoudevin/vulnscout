@@ -239,10 +239,11 @@ class TestEnsureUtcIso:
 
 class TestEpssProgressTrackerError:
     def test_error_sets_phase_and_message(self):
-        from src.controllers.epss_progress import EPSSProgressTracker
-        tracker = EPSSProgressTracker()
-        tracker._initialized = False  # force re-init for clean state
-        tracker.__init__()
+        from src.controllers.progress_tracker import ProgressTracker
+        tracker = ProgressTracker(
+            default_phase="epss_enrichment",
+            completed_message="EPSS enrichment completed successfully",
+        )
         tracker.error("something went wrong")
         progress = tracker.get_progress()
         assert progress["in_progress"] is False
