@@ -84,11 +84,22 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
     Also honours the GENERATE_DOCUMENTS env var (comma-separated list) when
     invoked; TEMPLATE_NAME is always generated regardless.
     """
-    controllers = build_controllers(include_all=True)
+    controllers = build_controllers()
     vulnCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
     pkgCtrl: PackagesController = controllers["packages"]
     vulnCtrl = VulnerabilitiesController.from_dict(pkgCtrl, vulnCtrl.to_dict())
     controllers["vulnerabilities"] = vulnCtrl
+
+    from ..controllers.projects import ProjectController
+    from ..controllers.variants import VariantController
+    from ..controllers.scans import ScanController
+    from ..controllers.sbom_documents import SBOMDocumentController
+    controllers.update({
+        "projects": ProjectController,
+        "variants": VariantController,
+        "scans": ScanController,
+        "sbom_documents": SBOMDocumentController,
+    })
     templ = Templates(controllers)
 
     # Reuse failed_vulns from flask process if available, otherwise evaluate now

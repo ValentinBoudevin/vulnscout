@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 import click
 
 if TYPE_CHECKING:
@@ -76,7 +76,7 @@ def resolve_project_variant(project: str, variant: str | None, *, create: bool =
     return project_obj, variant_obj
 
 
-def build_controllers(*, preload_cache: bool = False, include_all: bool = False) -> dict:
+def build_controllers(*, preload_cache: bool = False) -> dict[str, Any]:
     """Build the standard controllers dict used by most CLI commands.
 
     Parameters
@@ -84,14 +84,10 @@ def build_controllers(*, preload_cache: bool = False, include_all: bool = False)
     preload_cache:
         When *True*, call ``PackagesController._preload_cache()`` to bulk-load
         package UUIDs and findings into memory.
-    include_all:
-        When *True*, also include ``projects``, ``variants``, ``scans``, and
-        ``sbom_documents`` controllers (needed by the report command).
 
     Returns
     -------
-    dict with at least ``"packages"``, ``"vulnerabilities"``, ``"assessments"``
-    keys.
+    dict with ``"packages"``, ``"vulnerabilities"``, ``"assessments"`` keys.
     """
     from ..controllers.packages import PackagesController
     from ..controllers.vulnerabilities import VulnerabilitiesController
@@ -103,22 +99,8 @@ def build_controllers(*, preload_cache: bool = False, include_all: bool = False)
     vulnCtrl = VulnerabilitiesController(pkgCtrl)
     assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
 
-    controllers = {
+    return {
         "packages": pkgCtrl,
         "vulnerabilities": vulnCtrl,
         "assessments": assessCtrl,
     }
-
-    if include_all:
-        from ..controllers.projects import ProjectController
-        from ..controllers.variants import VariantController
-        from ..controllers.scans import ScanController
-        from ..controllers.sbom_documents import SBOMDocumentController
-        controllers.update({
-            "projects": ProjectController,
-            "variants": VariantController,
-            "scans": ScanController,
-            "sbom_documents": SBOMDocumentController,
-        })
-
-    return controllers
