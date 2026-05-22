@@ -11,7 +11,6 @@ import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook } from '@fortawesome/free-solid-svg-icons';
-import Vulnerabilities from '../handlers/vulnerabilities';
 import { downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
@@ -279,53 +278,21 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const handleExportReview = useCallback(async () => {
         try {
-            const vulns = await Vulnerabilities.list(variantId, projectId);
-
-            const exportedAssessments = assessments.map(a => ({
-                vuln_id: a.vuln_id,
-                status: a.status,
-                simplified_status: a.simplified_status,
-                justification: a.justification ?? null,
-                impact_statement: a.impact_statement ?? null,
-                status_notes: a.status_notes ?? null,
-                workaround: a.workaround ?? null,
-                packages: a.packages,
-                variant_id: a.variant_id ?? null,
-            }));
-
-            const cvssEntries: { vuln_id: string; version: string; vector_string: string; base_score: number; author: string }[] = [];
-            const timeEstimates: { vuln_id: string; optimistic: string; likely: string; pessimistic: string }[] = [];
-
-            for (const v of vulns) {
-                for (const c of v.severity.cvss) {
-                    if (c.author && c.author !== 'nvd' && c.author !== 'unknown') {
-                        cvssEntries.push({
-                            vuln_id: v.id,
-                            version: c.version,
-                            vector_string: c.vector_string,
-                            base_score: c.base_score,
-                            author: c.author,
-                        });
-                    }
-                }
-                if (v.effort.optimistic.total_seconds > 0 || v.effort.likely.total_seconds > 0 || v.effort.pessimistic.total_seconds > 0) {
-                    timeEstimates.push({
-                        vuln_id: v.id,
-                        optimistic: v.effort.optimistic.formatAsIso8601(),
-                        likely: v.effort.likely.formatAsIso8601(),
-                        pessimistic: v.effort.pessimistic.formatAsIso8601(),
-                    });
-                }
+            const params = new URLSearchParams();
+            if (variantId) params.set('variant_id', variantId);
+            else if (projectId) params.set('project_id', projectId);
+            const url = new URL(
+                import.meta.env.VITE_API_URL + "/api/assessments/review/export-custom-data" +
+                (params.toString() ? `?${params.toString()}` : ''),
+                window.location.href,
+            );
+            const res = await fetch(url.toString(), { mode: 'cors' });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                showMessage(err.error || 'Failed to export custom data.', 'error');
+                return;
             }
-
-            const data = {
-                version: 1,
-                exported_at: new Date().toISOString(),
-                assessments: exportedAssessments,
-                cvss: cvssEntries,
-                time_estimates: timeEstimates,
-            };
-
+            const data = await res.json();
             const ts = formatTimestampForFilename();
             const filename = `custom_data_${sanitizeFilename(variantId ?? projectId ?? 'all')}_${ts}.json`;
             downloadJson(data, filename);
@@ -333,7 +300,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             console.error('Export error:', err);
             showMessage('Failed to export custom data.', 'error');
         }
-    }, [assessments, variantId, projectId, showMessage]);
+    }, [variantId, projectId, showMessage]);
 
     const handleImportReview = useCallback(() => {
         fileInputRef.current?.click();
@@ -371,7 +338,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             return;
         }
 
-        // New JSON format or legacy single OpenVEX JSON
+        // JSON files: detect format and route to appropriate backend endpoint
         const reader = new FileReader();
         reader.onload = async () => {
             try {
@@ -397,7 +364,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     return;
                 }
 
-                // New custom data format
+                // New custom data format — send to backend import-custom-data endpoint
                 if (!parsed?.version || !parsed?.assessments) {
                     showMessage('Invalid file format. Expected a VulnScout custom data export.', 'error');
                     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -405,93 +372,36 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 }
 
                 setImportStatus("Importing...");
-                const summary: string[] = [];
+                const params = new URLSearchParams();
+                if (variantId) params.set('variant_id', variantId);
+                const url = new URL(
+                    import.meta.env.VITE_API_URL + "/api/assessments/review/import-custom-data" +
+                    (params.toString() ? `?${params.toString()}` : ''),
+                    window.location.href,
+                );
+                const res = await fetch(url.toString(), {
+                    method: 'POST',
+                    mode: 'cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: text,
+                });
+                const result = await res.json();
 
-                // Import assessments via existing backend endpoint
-                if (Array.isArray(parsed.assessments) && parsed.assessments.length > 0) {
-                    // Build an OpenVEX-like document to feed the existing import endpoint
-                    const statements = parsed.assessments.map((a: any) => ({
-                        status: a.status,
-                        justification: a.justification ?? '',
-                        impact_statement: a.impact_statement ?? '',
-                        status_notes: a.status_notes ?? '',
-                        action_statement: a.workaround ?? '',
-                        vulnerability: { name: a.vuln_id },
-                        products: (a.packages ?? []).map((p: string) => ({ '@id': p })),
-                    }));
-                    const openvexDoc = {
-                        '@context': 'https://openvex.dev/ns/v0.2.0',
-                        '@id': 'urn:vulnscout:import:' + Date.now(),
-                        author: 'vulnscout-import',
-                        timestamp: new Date().toISOString(),
-                        version: 1,
-                        statements,
-                    };
-                    const blob = new Blob([JSON.stringify(openvexDoc)], { type: 'application/json' });
-                    const importFile = new File([blob], 'import.json', { type: 'application/json' });
-                    const formData = new FormData();
-                    formData.append('file', importFile);
-                    const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href);
-                    const res = await fetch(url.toString(), { method: 'POST', body: formData, mode: 'cors' });
-                    const result = await res.json();
-                    const count = result.created?.length ?? 0;
-                    const skipped = result.skipped ?? 0;
-                    summary.push(`${count} assessment(s) imported${skipped ? `, ${skipped} skipped` : ''}`);
-                }
-
-                // Import CVSS and time estimates via batch PATCH
-                const batchItems: any[] = [];
-                if (Array.isArray(parsed.cvss)) {
-                    for (const c of parsed.cvss) {
-                        if (!c.vuln_id || !c.vector_string || !c.version) continue;
-                        let existing = batchItems.find((b: any) => b.id === c.vuln_id);
-                        if (!existing) {
-                            existing = { id: c.vuln_id };
-                            batchItems.push(existing);
-                        }
-                        existing.cvss = {
-                            base_score: c.base_score,
-                            vector_string: c.vector_string,
-                            version: c.version,
-                        };
+                if (result.status === 'success') {
+                    const summary: string[] = [];
+                    if (result.assessments_imported > 0) {
+                        let msg = `${result.assessments_imported} assessment(s) imported`;
+                        if (result.assessments_skipped) msg += `, ${result.assessments_skipped} skipped`;
+                        summary.push(msg);
                     }
+                    if (result.cvss_imported > 0) summary.push(`${result.cvss_imported} CVSS score(s)`);
+                    if (result.time_estimates_imported > 0) summary.push(`${result.time_estimates_imported} time estimate(s)`);
+                    if (result.errors?.length) summary.push(`${result.errors.length} error(s)`);
+                    Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
+                    showMessage(summary.length > 0 ? `Imported: ${summary.join(', ')}` : 'Import complete (no data changed)', 'success');
+                } else {
+                    showMessage(`Import error: ${result.errors?.[0]?.error || 'Unknown error'}`, 'error');
                 }
-                if (Array.isArray(parsed.time_estimates)) {
-                    for (const t of parsed.time_estimates) {
-                        if (!t.vuln_id) continue;
-                        let existing = batchItems.find((b: any) => b.id === t.vuln_id);
-                        if (!existing) {
-                            existing = { id: t.vuln_id };
-                            batchItems.push(existing);
-                        }
-                        existing.effort = {
-                            optimistic: t.optimistic,
-                            likely: t.likely,
-                            pessimistic: t.pessimistic,
-                        };
-                        if (t.variant_id) existing.variant_id = t.variant_id;
-                    }
-                }
-
-                if (batchItems.length > 0) {
-                    const batchUrl = new URL(import.meta.env.VITE_API_URL + "/api/vulnerabilities/batch", window.location.href);
-                    const batchRes = await fetch(batchUrl.toString(), {
-                        method: 'PATCH',
-                        mode: 'cors',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ vulnerabilities: batchItems }),
-                    });
-                    const batchResult = await batchRes.json();
-                    const cvssCount = parsed.cvss?.length ?? 0;
-                    const effortCount = parsed.time_estimates?.length ?? 0;
-                    if (cvssCount > 0) summary.push(`${cvssCount} CVSS score(s)`);
-                    if (effortCount > 0) summary.push(`${effortCount} time estimate(s)`);
-                    if (batchResult.error_count) summary.push(`${batchResult.error_count} error(s)`);
-                }
-
-                // Reload assessments
-                Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
-                showMessage(summary.length > 0 ? `Imported: ${summary.join(', ')}` : 'Import complete (no data changed)', 'success');
                 setImportStatus(null);
             } catch (err) {
                 console.error(err);

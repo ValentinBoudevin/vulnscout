@@ -21,6 +21,8 @@ from ..helpers.assessment_io import (
     import_statements as _import_openvex_statements,
     build_variant_by_name_map,
     import_archive_bytes,
+    build_custom_data_export,
+    import_custom_data,
 )
 
 OPENVEX_FILE = "/scan/outputs/openvex.json"
@@ -334,6 +336,95 @@ def init_app(app):
             return {"status": "success", "imported": len(created), "skipped": skipped, "errors": errors}, 200
 
         return {"error": "Unsupported file type. Please upload a .json or .tar.gz file."}, 400
+
+    @app.route('/api/assessments/review/export-custom-data')
+    def export_review_custom_data():
+        """Export handmade (review) assessments, custom CVSS scores and time
+        estimates as a single JSON file.
+
+        Query parameters:
+
+        * ``variant_id`` – restrict to a single variant.
+        * ``project_id`` – restrict to all variants in a project.
+        """
+        variant_id = request.args.get('variant_id')
+        project_id = request.args.get('project_id')
+
+        variant_ids = None
+        if variant_id:
+            vid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            variant_ids = [vid]
+        elif project_id:
+            pid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+            variants = DBVariant.get_by_project(pid)
+            variant_ids = [v.id for v in variants]
+
+        data = build_custom_data_export(variant_ids)
+
+        if not data["assessments"] and not data["cvss"] and not data["time_estimates"]:
+            return {"error": "No custom data to export"}, 404
+
+        import json as _json
+        json_bytes = _json.dumps(data, indent=2)
+        return json_bytes, 200, {
+            "Content-Type": "application/json",
+            "Content-Disposition": "attachment; filename=custom_data.json",
+        }
+
+    @app.route('/api/assessments/review/import-custom-data', methods=['POST'])
+    def import_review_custom_data():
+        """Import assessments, CVSS scores and time estimates from a custom-data
+        JSON file.
+
+        Accepts either:
+
+        * ``multipart/form-data`` with a ``file`` field containing a ``.json``
+          file.
+        * ``application/json`` body with the custom-data payload directly.
+
+        Optional query parameter ``variant_id`` to force all imported
+        assessments to a specific variant.
+        """
+        import json as _json
+
+        variant_id = None
+        raw_vid = request.args.get('variant_id')
+        if raw_vid:
+            variant_id, err = parse_uuid_or_400(raw_vid, "variant_id")
+            if err:
+                return err
+
+        # Parse the incoming data
+        data = None
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            uploaded = request.files.get('file')
+            if not uploaded or not uploaded.filename:
+                return {"error": "No file uploaded"}, 400
+            try:
+                data = _json.load(uploaded.stream)
+            except Exception:
+                return {"error": "Invalid JSON file"}, 400
+        elif request.content_type and 'application/json' in request.content_type:
+            data = request.get_json(silent=True)
+            if data is None:
+                return {"error": "Invalid JSON body"}, 400
+        else:
+            return {"error": "Expected multipart/form-data or application/json"}, 400
+
+        if not isinstance(data, dict) or "version" not in data:
+            return {"error": "Invalid custom-data format. Expected {version, assessments, ...}"}, 400
+
+        variant_by_name = build_variant_by_name_map()
+        result = import_custom_data(data, variant_by_name, variant_id)
+
+        _save_openvex()
+
+        status_code = 200 if result["status"] == "success" else 400
+        return result, status_code
 
     @app.route('/api/assessments/<assessment_id>')
     def assess_by_id(assessment_id: str):

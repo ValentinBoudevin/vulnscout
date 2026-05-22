@@ -462,3 +462,316 @@ def import_directory(
         total_skipped += s
 
     return total_created, total_errors, total_skipped, variant_files_found
+
+
+# ---------------------------------------------------------------------------
+# Custom-data export (assessments + CVSS + time estimates)
+# ---------------------------------------------------------------------------
+
+def build_custom_data_export(
+    variant_ids: list | None = None,
+) -> dict:
+    """Build a custom-data export dict containing assessments, CVSS and time
+    estimates for the given variant(s).
+
+    Parameters
+    ----------
+    variant_ids:
+        List of variant UUIDs to scope the export.  When *None* all
+        handmade assessments across all variants are exported.
+
+    Returns
+    -------
+    dict with keys ``version``, ``exported_at``, ``assessments``, ``cvss``,
+    ``time_estimates``.
+    """
+    from ..models.assessment import Assessment as DBAssessment
+    from ..models.metrics import Metrics
+    from ..models.time_estimate import TimeEstimate
+    from ..models.finding import Finding
+    from ..models.iso8601_duration import Iso8601Duration
+
+    handmade = DBAssessment.get_handmade(variant_ids)
+
+    exported_assessments = []
+    for a in handmade:
+        d = a.to_dict()
+        exported_assessments.append({
+            "vuln_id": d["vuln_id"],
+            "status": d["status"],
+            "simplified_status": d.get("simplified_status", ""),
+            "justification": d.get("justification") or None,
+            "impact_statement": d.get("impact_statement") or None,
+            "status_notes": d.get("status_notes") or None,
+            "workaround": d.get("workaround") or None,
+            "packages": d["packages"],
+            "variant_id": d.get("variant_id"),
+        })
+
+    # Collect distinct vulnerability IDs referenced by the assessments
+    vuln_ids: set[str] = set()
+    for a in handmade:
+        if a.vuln_id:
+            vuln_ids.add(a.vuln_id)
+
+    # Gather custom CVSS entries (exclude 'nvd' and 'unknown' authors)
+    cvss_entries: list[dict] = []
+    for vid in sorted(vuln_ids):
+        for m in Metrics.get_by_vulnerability(vid):
+            author = m.author or "unknown"
+            if author in ("nvd", "unknown"):
+                continue
+            cvss_entries.append({
+                "vuln_id": vid,
+                "version": m.version or "",
+                "vector_string": m.vector or "",
+                "base_score": float(m.score) if m.score is not None else 0.0,
+                "author": author,
+            })
+
+    # Gather non-zero time estimates
+    time_estimates: list[dict] = []
+    seen_findings: set = set()
+    for vid in sorted(vuln_ids):
+        findings = Finding.get_by_vulnerability(vid)
+        for f in findings:
+            if f.id in seen_findings:
+                continue
+            seen_findings.add(f.id)
+            te_list = TimeEstimate.get_by_finding(f.id)
+            for te in te_list:
+                opt = te.optimistic or 0
+                lik = te.likely or 0
+                pes = te.pessimistic or 0
+                if opt == 0 and lik == 0 and pes == 0:
+                    continue
+
+                def _hours_to_iso(h: int) -> str:
+                    try:
+                        return str(Iso8601Duration(f"PT{h}H"))
+                    except (ValueError, TypeError):
+                        return f"PT{h}H"
+
+                time_estimates.append({
+                    "vuln_id": vid,
+                    "optimistic": _hours_to_iso(opt),
+                    "likely": _hours_to_iso(lik),
+                    "pessimistic": _hours_to_iso(pes),
+                })
+
+    return {
+        "version": 1,
+        "exported_at": _dt.now(_tz.utc).isoformat(),
+        "assessments": exported_assessments,
+        "cvss": cvss_entries,
+        "time_estimates": time_estimates,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Custom-data import (assessments + CVSS + time estimates)
+# ---------------------------------------------------------------------------
+
+def import_custom_data(
+    data: dict,
+    variant_by_name: dict,
+    variant_id: "_uuid.UUID | None" = None,
+) -> dict:
+    """Import a custom-data JSON document containing assessments, CVSS and
+    time estimates.
+
+    Parameters
+    ----------
+    data:
+        Parsed JSON matching the custom-data export format
+        (``{version, assessments, cvss, time_estimates}``).
+    variant_by_name:
+        Mapping ``{name: Variant, sanitised_name: Variant}`` for variant
+        resolution.
+    variant_id:
+        When provided, all assessments are attached to this variant.
+        When *None*, each assessment's ``variant_id`` field is used.
+
+    Returns
+    -------
+    dict with ``status``, ``assessments_imported``, ``assessments_skipped``,
+    ``cvss_imported``, ``time_estimates_imported``, ``errors``.
+    """
+    from ..extensions import db
+    from ..models.assessment import Assessment as DBAssessment, STATUS_TO_SIMPLIFIED
+    from ..models.vulnerability import Vulnerability as DBVuln
+    from ..models.package import Package
+    from ..models.finding import Finding
+    from .vuln_helpers import (
+        _validate_effort,
+        _validate_and_apply_cvss,
+        _apply_effort,
+    )
+
+    result: dict = {
+        "status": "success",
+        "assessments_imported": 0,
+        "assessments_skipped": 0,
+        "cvss_imported": 0,
+        "time_estimates_imported": 0,
+        "errors": [],
+    }
+
+    # -- Import assessments --
+    assessments_list = data.get("assessments", [])
+    if isinstance(assessments_list, list):
+        for a in assessments_list:
+            if not isinstance(a, dict):
+                continue
+            vuln_name = a.get("vuln_id")
+            status = a.get("status")
+            if not vuln_name or not status:
+                result["errors"].append({
+                    "vuln_id": vuln_name or "?",
+                    "error": "Missing vuln_id or status",
+                })
+                continue
+            pkg_ids = a.get("packages", [])
+            if not pkg_ids:
+                result["errors"].append({
+                    "vuln_id": vuln_name,
+                    "error": "No packages found",
+                })
+                continue
+
+            # Determine which variant to attach to
+            target_variant_id = variant_id
+            if target_variant_id is None and a.get("variant_id"):
+                try:
+                    target_variant_id = _uuid.UUID(a["variant_id"])
+                except (ValueError, TypeError):
+                    v = variant_by_name.get(a["variant_id"])
+                    if v:
+                        target_variant_id = v.id
+
+            justification = a.get("justification", "")
+            impact_statement = a.get("impact_statement", "")
+            status_notes = a.get("status_notes", "")
+            workaround = a.get("workaround", "")
+
+            for pkg_string_id in pkg_ids:
+                try:
+                    if "::" in pkg_string_id:
+                        base, _supplier = pkg_string_id.split("::", 1)
+                    else:
+                        base, _supplier = pkg_string_id, ""
+                    if "@" in base:
+                        name, version = base.rsplit("@", 1)
+                    else:
+                        name, version = base, ""
+                    db_pkg = Package.find_or_create(name, version, supplier=_supplier)
+                    DBVuln.get_or_create(vuln_name)
+                    finding = Finding.get_or_create(db_pkg.id, vuln_name)
+
+                    existing = db.session.execute(
+                        db.select(DBAssessment).where(
+                            DBAssessment.finding_id == finding.id,
+                            DBAssessment.variant_id == target_variant_id,
+                            DBAssessment.status == status,
+                        )
+                    ).scalar_one_or_none()
+                    if existing is not None:
+                        result["assessments_skipped"] += 1
+                        continue
+
+                    DBAssessment.create(
+                        status=status,
+                        simplified_status=STATUS_TO_SIMPLIFIED.get(
+                            status, "Pending Assessment"
+                        ),
+                        finding_id=finding.id,
+                        variant_id=target_variant_id,
+                        origin="custom",
+                        status_notes=status_notes,
+                        justification=justification,
+                        impact_statement=impact_statement,
+                        workaround=workaround,
+                        responses=[],
+                        commit=True,
+                    )
+                    result["assessments_imported"] += 1
+                except Exception as e:
+                    result["errors"].append({
+                        "vuln_id": vuln_name,
+                        "package": pkg_string_id,
+                        "error": str(e),
+                    })
+
+    # -- Import CVSS --
+    cvss_list = data.get("cvss", [])
+    if isinstance(cvss_list, list):
+        for c in cvss_list:
+            if not isinstance(c, dict):
+                continue
+            vuln_id = c.get("vuln_id")
+            if not vuln_id:
+                continue
+            record = DBVuln.get_by_id(vuln_id)
+            if not record:
+                result["errors"].append({
+                    "vuln_id": vuln_id,
+                    "error": "Vulnerability not found (CVSS)",
+                })
+                continue
+            cvss_data = {
+                "base_score": c.get("base_score"),
+                "vector_string": c.get("vector_string"),
+                "version": c.get("version"),
+                "author": c.get("author", "custom"),
+                "exploitability_score": c.get("exploitability_score", 0.0),
+                "impact_score": c.get("impact_score", 0.0),
+            }
+            err = _validate_and_apply_cvss(cvss_data, record.id,
+                                           log_prefix="import-custom-data")
+            if err:
+                result["errors"].append({"vuln_id": vuln_id, "error": err})
+            else:
+                result["cvss_imported"] += 1
+
+    # -- Import time estimates --
+    te_list = data.get("time_estimates", [])
+    if isinstance(te_list, list):
+        for t in te_list:
+            if not isinstance(t, dict):
+                continue
+            vuln_id = t.get("vuln_id")
+            if not vuln_id:
+                continue
+            record = DBVuln.get_by_id(vuln_id)
+            if not record:
+                result["errors"].append({
+                    "vuln_id": vuln_id,
+                    "error": "Vulnerability not found (time estimate)",
+                })
+                continue
+            eff = {
+                "optimistic": t.get("optimistic"),
+                "likely": t.get("likely"),
+                "pessimistic": t.get("pessimistic"),
+            }
+            opt, lik, pes, err = _validate_effort(eff)
+            if err:
+                result["errors"].append({"vuln_id": vuln_id, "error": err})
+                continue
+
+            te_variant_id = variant_id
+            if te_variant_id is None and t.get("variant_id"):
+                try:
+                    te_variant_id = _uuid.UUID(t["variant_id"])
+                except (ValueError, TypeError):
+                    pass
+
+            _apply_effort(record, te_variant_id, opt, lik, pes,
+                          log_prefix="import-custom-data")
+            result["time_estimates_imported"] += 1
+
+    if not result["assessments_imported"] and not result["cvss_imported"] and not result["time_estimates_imported"]:
+        if result["errors"]:
+            result["status"] = "error"
+
+    return result
