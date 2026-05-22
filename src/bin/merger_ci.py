@@ -15,6 +15,7 @@
 #   cmd_scans.py       — ``flask list-projects``, ``flask list-scans``, ``flask delete-scan``
 #   cmd_vuln_scan.py   — ``flask nvd-scan`` and ``flask osv-scan``
 
+from ._common import DEFAULT_VARIANT_NAME  # noqa: F401 — intentional re-export
 from .cmd_process import (  # noqa: F401 — intentional re-exports for callers
     create_project_context,
     process_command,
@@ -23,7 +24,6 @@ from .cmd_process import (  # noqa: F401 — intentional re-exports for callers
     populate_observations,
     evaluate_condition,
     read_inputs,
-    DEFAULT_VARIANT_NAME,
     _ts_key,
 )
 from .cmd_export import export_command, report_command
