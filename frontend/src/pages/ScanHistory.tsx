@@ -20,7 +20,7 @@ import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
 import ScanProgressPanel from "../components/ScanProgressPanel";
 import { useDocUrl } from "../helpers/useDocUrl";
 import { extractSupplierName } from "../helpers/pkgId";
-import { downloadJson, sanitizeFilename, formatTimestampForFilename } from "../helpers/exportJson";
+import { downloadJson } from "../helpers/exportJson";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook, faDownload } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
@@ -32,6 +32,20 @@ type Props = {
     projectId?: string;
     onScanComplete?: () => void;
 };
+
+async function downloadFromEndpoint(path: string, fallbackFilename: string): Promise<void> {
+    const url = new URL(import.meta.env.VITE_API_URL + path, window.location.href);
+    const resp = await fetch(url.toString(), { mode: 'cors' });
+    if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.error || `Export failed (${resp.status})`);
+    }
+    const disposition = resp.headers.get('Content-Disposition');
+    const match = disposition?.match(/filename="?([^"]+)"?/);
+    const filename = match?.[1] ?? fallbackFilename;
+    const data = await resp.json();
+    downloadJson(data, filename);
+}
 
 function formatDate(iso: string): string {
     const d = new Date(iso);
@@ -1009,152 +1023,7 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
     );
 }
 
-// ---------------------------------------------------------------------------
-// Export helpers
-// ---------------------------------------------------------------------------
 
-function stripFindingIds(entry: FindingDiffEntry) {
-    return {
-        vulnerability_id: entry.vulnerability_id,
-        package_name: entry.package_name,
-        package_version: entry.package_version,
-        supplier: extractSupplierName(entry.package_supplier || '') || undefined,
-    };
-}
-
-function stripPackageIds(entry: PackageDiffEntry) {
-    return {
-        package_name: entry.package_name,
-        package_version: entry.package_version,
-        supplier: extractSupplierName(entry.package_supplier || '') || undefined,
-    };
-}
-
-function stripPackageUpgradeIds(entry: PackageUpgradeEntry) {
-    return {
-        package_name: entry.package_name,
-        old_version: entry.old_version,
-        new_version: entry.new_version,
-        supplier: extractSupplierName(entry.package_supplier || '') || undefined,
-    };
-}
-
-function stripFindingUpgradeIds(entry: FindingUpgradeEntry) {
-    return {
-        vulnerability_id: entry.vulnerability_id,
-        package_name: entry.package_name,
-        old_version: entry.old_version,
-        new_version: entry.new_version,
-        supplier: extractSupplierName(entry.package_supplier || '') || undefined,
-    };
-}
-
-function stripAssessment(entry: AssessmentDiffEntry) {
-    return {
-        vulnerability_id: entry.vulnerability_id,
-        status: entry.status,
-        simplified_status: entry.simplified_status,
-        justification: entry.justification,
-        impact_statement: entry.impact_statement,
-        status_notes: entry.status_notes,
-    };
-}
-
-function scanMeta(scan: Scan) {
-    return {
-        scan_id: scan.id,
-        timestamp: scan.timestamp,
-        scan_type: (scan.scan_type || 'sbom') === 'tool' ? 'vulnerability_scan' : 'import_sbom',
-        scan_source: scan.scan_source ?? undefined,
-        project_name: scan.project_name ?? undefined,
-        variant_id: scan.variant_id,
-        variant_name: scan.variant_name ?? undefined,
-    };
-}
-
-function buildDiffExport(scan: Scan, diff: ScanDiff) {
-    const meta = scanMeta(scan);
-    const isTool = (scan.scan_type || 'sbom') === 'tool';
-
-    if (isTool) {
-        return {
-            ...meta,
-            vulnerabilities: diff.all_vulns ?? diff.vulns_added,
-            findings: (diff.all_findings ?? diff.findings_added).map(stripFindingIds),
-            newly_detected_vulns: diff.newly_detected_vulns_list ?? [],
-            newly_detected_findings: (diff.newly_detected_findings_list ?? []).map(stripFindingIds),
-            newly_detected_assessments: (diff.newly_detected_assessments_list ?? []).map(stripAssessment),
-        };
-    }
-
-    // Import SBOM
-    const base: Record<string, unknown> = {
-        ...meta,
-        vulnerabilities: diff.all_vulns ?? [...diff.vulns_added, ...diff.vulns_unchanged],
-        findings: (diff.all_findings ?? [...diff.findings_added, ...diff.findings_unchanged]).map(stripFindingIds),
-        packages: [...diff.packages_added, ...diff.packages_unchanged].map(stripPackageIds),
-        assessments: [...(diff.assessments_added ?? []), ...(diff.assessments_unchanged ?? [])].map(stripAssessment),
-    };
-
-    if (!diff.is_first) {
-        base.diff = {
-            vulns_added: diff.vulns_added,
-            vulns_removed: diff.vulns_removed,
-            vulns_unchanged: diff.vulns_unchanged,
-            findings_added: diff.findings_added.map(stripFindingIds),
-            findings_removed: diff.findings_removed.map(stripFindingIds),
-            findings_upgraded: diff.findings_upgraded.map(stripFindingUpgradeIds),
-            findings_unchanged: diff.findings_unchanged.map(stripFindingIds),
-            packages_added: diff.packages_added.map(stripPackageIds),
-            packages_removed: diff.packages_removed.map(stripPackageIds),
-            packages_upgraded: diff.packages_upgraded.map(stripPackageUpgradeIds),
-            packages_unchanged: diff.packages_unchanged.map(stripPackageIds),
-            assessments_added: (diff.assessments_added ?? []).map(stripAssessment),
-            assessments_removed: (diff.assessments_removed ?? []).map(stripAssessment),
-            assessments_unchanged: (diff.assessments_unchanged ?? []).map(stripAssessment),
-        };
-    }
-
-    return base;
-}
-
-function buildGlobalResultExport(scan: Scan, result: GlobalResult) {
-    return {
-        ...scanMeta(scan),
-        packages: result.packages.map(p => ({
-            package_name: p.package_name,
-            package_version: p.package_version,
-            supplier: extractSupplierName(p.package_supplier || '') || undefined,
-            sources: p.sources,
-        })),
-        findings: result.findings.map(f => ({
-            vulnerability_id: f.vulnerability_id,
-            package_name: f.package_name,
-            package_version: f.package_version,
-            supplier: extractSupplierName(f.package_supplier || '') || undefined,
-            sources: f.sources,
-        })),
-        vulnerabilities: result.vulnerabilities.map(v => ({
-            vulnerability_id: v.vulnerability_id,
-            sources: v.sources,
-        })),
-        assessments: (result.assessments ?? []).map(stripAssessment),
-    };
-}
-
-function exportFilename(type: 'diff' | 'total', scan: Scan, timestamp?: string) {
-    const proj = sanitizeFilename(scan.project_name || 'project');
-    const variant = sanitizeFilename(scan.variant_name || scan.variant_id);
-    const ts = timestamp ?? formatTimestampForFilename();
-    return `scans_${type}_${proj}_${variant}_${ts}.json`;
-}
-
-function singleExportFilename(type: 'diff' | 'total', scan: Scan) {
-    const proj = sanitizeFilename(scan.project_name || 'project');
-    const variant = sanitizeFilename(scan.variant_name || scan.variant_id);
-    const ts = formatTimestampForFilename(scan.timestamp);
-    return `scan_${type}_${proj}_${variant}_${ts}.json`;
-}
 
 // ---------------------------------------------------------------------------
 // Main page
@@ -1233,9 +1102,9 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         setExportingScanId(scan.id);
         setExportMenuScanId(null);
         try {
-            const diff = await ScansHandler.getDiff(scan.id);
-            if (!diff) return;
-            downloadJson(buildDiffExport(scan, diff), singleExportFilename('diff', scan));
+            await downloadFromEndpoint(`/api/scans/${scan.id}/export-diff`, 'scan_diff.json');
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to export scan diff.');
         } finally {
             setExportingScanId(null);
         }
@@ -1245,9 +1114,9 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         setExportingScanId(scan.id);
         setExportMenuScanId(null);
         try {
-            const result = await ScansHandler.getGlobalResult(scan.id);
-            if (!result) return;
-            downloadJson(buildGlobalResultExport(scan, result), singleExportFilename('total', scan));
+            await downloadFromEndpoint(`/api/scans/${scan.id}/export-result`, 'scan_total.json');
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to export scan result.');
         } finally {
             setExportingScanId(null);
         }
@@ -1418,44 +1287,12 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         setExportAllMenuOpen(false);
         setExportingAll(true);
         try {
-            // Group scans by (project_name, variant_id)
-            const groups = new Map<string, Scan[]>();
-            for (const scan of filteredScans) {
-                const key = `${scan.project_name ?? ''}::${scan.variant_id}`;
-                const arr = groups.get(key) ?? [];
-                arr.push(scan);
-                groups.set(key, arr);
-            }
-
-            const ts = formatTimestampForFilename();
-
-            for (const groupScans of groups.values()) {
-                const representative = groupScans[0];
-
-                if (type === 'diff') {
-                    const results = await Promise.all(
-                        groupScans.map(async (scan) => {
-                            const diff = await ScansHandler.getDiff(scan.id);
-                            return diff ? buildDiffExport(scan, diff) : null;
-                        })
-                    );
-                    const data = results.filter(Boolean);
-                    if (data.length > 0) {
-                        downloadJson(data, exportFilename('diff', representative, ts));
-                    }
-                } else {
-                    const results = await Promise.all(
-                        groupScans.map(async (scan) => {
-                            const result = await ScansHandler.getGlobalResult(scan.id);
-                            return result ? buildGlobalResultExport(scan, result) : null;
-                        })
-                    );
-                    const data = results.filter(Boolean);
-                    if (data.length > 0) {
-                        downloadJson(data, exportFilename('total', representative, ts));
-                    }
-                }
-            }
+            const params = new URLSearchParams({ type });
+            if (variantId) params.set('variant_id', variantId);
+            else if (projectId) params.set('project_id', projectId);
+            await downloadFromEndpoint(`/api/scans/export?${params}`, `scans_${type}.json`);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to export scans.');
         } finally {
             setExportingAll(false);
         }
