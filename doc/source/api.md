@@ -486,6 +486,67 @@ Upload an OpenVEX `.json` or `.tar.gz` file. For `.tar.gz` archives, filenames i
 }
 ```
 
+### Custom Data Import / Export
+
+#### Export Custom Data
+
+```
+GET /api/assessments/review/export-custom-data
+```
+
+Exports all handmade (review) assessments, custom CVSS scores, and time estimates as a single JSON file.
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `variant_id` | UUID | Restrict to a single variant |
+| `project_id` | UUID | Restrict to all variants of a project |
+
+**Response:** JSON file download (`Content-Disposition: attachment; filename=custom_data.json`) containing:
+
+```json
+{
+  "version": "1.0",
+  "assessments": [...],
+  "cvss": [...],
+  "time_estimates": [...]
+}
+```
+
+Returns `404` if there is no custom data to export.
+
+#### Import Custom Data
+
+```
+POST /api/assessments/review/import-custom-data
+```
+
+Imports assessments, custom CVSS scores, and time estimates from a custom-data JSON file.
+
+Accepts either:
+
+- `multipart/form-data` with a `file` field containing a `.json` file.
+- `application/json` body with the custom-data payload directly.
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `variant_id` | UUID | *(optional)* Force all imported records to a specific variant |
+
+**Response:**
+```json
+{
+  "status": "success",
+  "assessments_imported": 12,
+  "cvss_imported": 5,
+  "time_estimates_imported": 3
+}
+```
+
+Returns `400` for invalid format or unsupported content type.
+
 ---
 
 ## Documents
@@ -654,6 +715,48 @@ GET /api/scans/<scan_id>/global-result
 Returns every active finding, vulnerability, and package at the time of the given scan, combining SBOM and tool-scan data with source attribution. Tool-scan findings are filtered to packages present in the SBOM.
 
 **Response:** JSON object with `findings`, `vulnerabilities`, and `packages` arrays, each entry enriched with an `origin` field indicating the source (SBOM document name/format or tool scan source).
+
+### Export Scan Diff
+
+```
+GET /api/scans/<scan_id>/export-diff
+```
+
+Exports a single scan's diff as a cleaned JSON download. The response strips internal fields and normalises supplier names for a portable, human-readable report.
+
+For **SBOM scans** the export includes `vulnerabilities`, `findings`, `packages`, `assessments`, and (when the scan is not the first) a `diff` object with `*_added`, `*_removed`, `*_upgraded`, and `*_unchanged` arrays.
+
+For **tool scans** the export includes `vulnerabilities`, `findings`, `newly_detected_vulns`, `newly_detected_findings`, and `newly_detected_assessments`.
+
+**Response:** JSON file download (`Content-Disposition: attachment`).
+
+### Export Scan Global Result
+
+```
+GET /api/scans/<scan_id>/export-result
+```
+
+Exports a single scan's global result (SBOM + tool data merged) as a cleaned JSON download. The response includes `packages`, `findings`, and `vulnerabilities` arrays with source attribution.
+
+**Response:** JSON file download (`Content-Disposition: attachment`).
+
+### Export All Scans
+
+```
+GET /api/scans/export
+```
+
+Exports all visible scans, optionally filtered by variant or project.
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `variant_id` | UUID | Restrict to a single variant |
+| `project_id` | UUID | Restrict to all variants of a project |
+| `type` | string | `"diff"` (default) or `"total"` — selects the diff or global-result export format |
+
+**Response:** JSON array of export objects grouped per variant, served as a file download (`Content-Disposition: attachment`). Returns `404` if no scans match the filter.
 
 ---
 

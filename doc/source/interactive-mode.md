@@ -227,6 +227,19 @@ Each tab header carries its own badge counts, and every table inside supports a 
 
 Clicking the **Scan Result** button on a scan entry opens a modal showing the complete state of the global result at that point in time — the union of SBOM packages and all tool-scan findings. The modal displays packages, findings, and vulnerabilities tabs, each with their total counts. This is useful for understanding the full picture at a given snapshot rather than just the delta.
 
+### Scan Export
+
+VulnScout lets you export scan data as JSON files for archiving, reporting, or sharing with external tools.
+
+**Per-scan export:** each scan entry has a download button that opens a small menu with two choices:
+
+- **Export Diff** — downloads a JSON file containing only what changed compared to the previous scan (added, removed, upgraded, and unchanged packages, findings, and vulnerabilities). For tool scans the export also includes newly-detected findings and assessments.
+- **Export Scan Result** — downloads a JSON file with the complete global result at that point in time, including full package, finding, and vulnerability lists with source attribution.
+
+Both files include scan metadata (timestamp, scan type, project, and variant) and strip internal identifiers so the output is portable.
+
+**Export All:** an **Export** button in the toolbar lets you download the entire visible scan history at once. A dropdown offers two modes — **Export All Diffs** and **Export All Scan Results** — which produce a single JSON array grouping all scans by variant. The export respects the current project/variant scope.
+
 ---
 
 ## Review
@@ -257,5 +270,5 @@ The toolbar mirrors the vulnerability table's search bar. Filters are available 
 
 Two buttons in the toolbar handle review portability:
 
-- **Import Review**: accepts an OpenVEX file (JSON or `.tar.gz`) and merges its assessments into the current project. This is useful for receiving triage decisions from another team or from a previous VulnScout instance.
-- **Export Review**: downloads all review assessments as an OpenVEX `.tar.gz` archive. The export captures the full set of handmade assessments so they can be shared, archived, or loaded into another VulnScout deployment.
+- **Import Review**: accepts either an OpenVEX file (JSON or `.tar.gz`) or a VulnScout custom-data JSON file and merges its contents into the current project. OpenVEX files import assessments only; custom-data files additionally restore custom CVSS scores and time estimates. This is useful for receiving triage decisions from another team or migrating data between VulnScout instances.
+- **Export Review**: downloads all handmade assessments, custom CVSS scores, and time estimates as a single JSON file. The export captures the full set of user-created data so it can be shared, archived, or loaded into another VulnScout deployment.
