@@ -12,14 +12,12 @@ from ..models import (
     Scan,
     Variant,
     Metrics,
-    CVSS,
     SBOMDocument,
     SBOMPackage,
     Iso8601Duration
 )
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..extensions import db
-from ..helpers.verbose import verbose
 from ..helpers.active_scans import (
     active_scan_ids_for_variant,
     active_scan_ids_for_project,
@@ -527,6 +525,7 @@ def init_app(app):
                     log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
                 if cvss_err:
                     return cvss_err, 400
+                db.session.expire(record, ['metrics'])
 
         return record.to_dict()
 
@@ -573,6 +572,7 @@ def init_app(app):
                 if cvss_err:
                     errors.append({"id": item["id"], "error": cvss_err})
                     continue
+                db.session.expire(record, ['metrics'])
 
             results.append(record.to_dict())
 

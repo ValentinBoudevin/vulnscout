@@ -154,19 +154,43 @@ def _build_diff_export(scan, diff: dict, variant_name=None, project_name=None) -
         return {
             **meta,
             "vulnerabilities": diff.get("all_vulns") or diff.get("vulns_added", []),
-            "findings": [_strip_finding(f) for f in (diff.get("all_findings") or diff.get("findings_added", []))],
+            "findings": [
+                _strip_finding(f)
+                for f in (diff.get("all_findings") or diff.get("findings_added", []))
+            ],
             "newly_detected_vulns": diff.get("newly_detected_vulns_list") or [],
-            "newly_detected_findings": [_strip_finding(f) for f in (diff.get("newly_detected_findings_list") or [])],
-            "newly_detected_assessments": [_strip_assessment(a) for a in (diff.get("newly_detected_assessments_list") or [])],
+            "newly_detected_findings": [
+                _strip_finding(f)
+                for f in (diff.get("newly_detected_findings_list") or [])
+            ],
+            "newly_detected_assessments": [
+                _strip_assessment(a)
+                for a in (diff.get("newly_detected_assessments_list") or [])
+            ],
         }
 
     # SBOM scan
     base: dict = {
         **meta,
         "vulnerabilities": diff.get("all_vulns") or (diff.get("vulns_added", []) + diff.get("vulns_unchanged", [])),
-        "findings": [_strip_finding(f) for f in (diff.get("all_findings") or (diff.get("findings_added", []) + diff.get("findings_unchanged", [])))],
-        "packages": [_strip_package(p) for p in (diff.get("packages_added", []) + diff.get("packages_unchanged", []))],
-        "assessments": [_strip_assessment(a) for a in (list(diff.get("assessments_added") or []) + list(diff.get("assessments_unchanged") or []))],
+        "findings": [
+            _strip_finding(f)
+            for f in (
+                diff.get("all_findings")
+                or (diff.get("findings_added", []) + diff.get("findings_unchanged", []))
+            )
+        ],
+        "packages": [
+            _strip_package(p)
+            for p in (diff.get("packages_added", []) + diff.get("packages_unchanged", []))
+        ],
+        "assessments": [
+            _strip_assessment(a)
+            for a in (
+                list(diff.get("assessments_added") or [])
+                + list(diff.get("assessments_unchanged") or [])
+            )
+        ],
     }
 
     if not diff.get("is_first", True):
@@ -377,8 +401,16 @@ def init_app(app):
             "assessments_added": diff["assessments_added"],
             "assessments_removed": diff["assessments_removed"],
             "assessments_unchanged": diff["assessments_unchanged"],
-            "newly_detected_findings": len(newly_detected_findings_list) if newly_detected_findings_list is not None else None,
-            "newly_detected_vulns": len(newly_detected_vulns_list) if newly_detected_vulns_list is not None else None,
+            "newly_detected_findings": (
+                len(newly_detected_findings_list)
+                if newly_detected_findings_list is not None
+                else None
+            ),
+            "newly_detected_vulns": (
+                len(newly_detected_vulns_list)
+                if newly_detected_vulns_list is not None
+                else None
+            ),
             "newly_detected_findings_list": newly_detected_findings_list,
             "newly_detected_vulns_list": newly_detected_vulns_list,
             "newly_detected_assessments_list": diff.get("newly_detected_assessments_list"),
@@ -447,10 +479,16 @@ def init_app(app):
                 sbom_after, tools_after, filter_tool_by_sbom_pkgs=True)
             added_fids = _global_after_f - _global_before_f
             removed_fids = _global_before_f - _global_after_f
-            findings_added = [_obs_to_dict(obs, scan_origin) for obs in scan.observations if obs.finding_id in added_fids]
+            findings_added = [
+                _obs_to_dict(obs, scan_origin)
+                for obs in scan.observations if obs.finding_id in added_fids
+            ]
             if _prev_scan:
                 _prev_origin = _origin_for_scan(_prev_scan)
-                findings_removed = [_obs_to_dict(obs, _prev_origin) for obs in _prev_scan.observations if obs.finding_id in removed_fids]
+                findings_removed = [
+                    _obs_to_dict(obs, _prev_origin)
+                    for obs in _prev_scan.observations if obs.finding_id in removed_fids
+                ]
             else:
                 findings_removed = []
             vulns_added = sorted(_global_after_v - _global_before_v)
@@ -465,8 +503,14 @@ def init_app(app):
             prev_vulns = {obs.finding.vulnerability_id for obs in _prev_scan.observations} if _prev_scan else set()
             added_fids = current_finding_ids - prev_finding_ids
             removed_fids = prev_finding_ids - current_finding_ids
-            findings_added = [_obs_to_dict(obs, scan_origin) for obs in scan.observations if obs.finding_id in added_fids]
-            findings_removed = [_obs_to_dict(obs, scan_origin) for obs in _prev_scan.observations if obs.finding_id in removed_fids] if _prev_scan else []
+            findings_added = [
+                _obs_to_dict(obs, scan_origin)
+                for obs in scan.observations if obs.finding_id in added_fids
+            ]
+            findings_removed = [
+                _obs_to_dict(obs, scan_origin)
+                for obs in _prev_scan.observations if obs.finding_id in removed_fids
+            ] if _prev_scan else []
             vulns_added = sorted(curr_vulns - prev_vulns)
             vulns_removed = sorted(prev_vulns - curr_vulns)
 
@@ -498,8 +542,10 @@ def init_app(app):
         # Classify findings for SBOM with previous
         if not is_tool_scan and prev_scan_id is not None:
             _, latest_tool = _contributing_scans_at(scan, all_variant_scans)
-            curr_sr_fids, curr_sr_vids, _ = _global_result_id_sets(scan, latest_tool, filter_tool_by_sbom_pkgs=True)
-            prev_sr_fids, prev_sr_vids, _ = _global_result_id_sets(_prev_scan, latest_tool, filter_tool_by_sbom_pkgs=True)
+            curr_sr_fids, curr_sr_vids, _ = _global_result_id_sets(
+                scan, latest_tool, filter_tool_by_sbom_pkgs=True)
+            prev_sr_fids, prev_sr_vids, _ = _global_result_id_sets(
+                _prev_scan, latest_tool, filter_tool_by_sbom_pkgs=True)
             fid_obs_map = {}
             fid_info = {}
             for obs in scan.observations:
@@ -564,7 +610,10 @@ def init_app(app):
                 unchanged_pkg_ids.discard(new_pkg.id)
             if unchanged_pkg_ids:
                 unchanged_pkg_lookup = _package_rows(unchanged_pkg_ids)
-                packages_unchanged = [_pkg_to_dict(unchanged_pkg_lookup[pid]) for pid in unchanged_pkg_ids if pid in unchanged_pkg_lookup]
+                packages_unchanged = [
+                    _pkg_to_dict(unchanged_pkg_lookup[pid])
+                    for pid in unchanged_pkg_ids if pid in unchanged_pkg_lookup
+                ]
             else:
                 packages_unchanged = []
         elif not is_tool_scan:
@@ -586,7 +635,10 @@ def init_app(app):
             _new_vids = _global_after_v - _global_before_v
             _new_fids = _global_after_f - _global_before_f
             newly_detected_vulns_list = sorted(_new_vids)
-            newly_detected_findings_list = [_obs_to_dict(obs, scan_origin) for obs in scan.observations if obs.finding_id in _new_fids]
+            newly_detected_findings_list = [
+                _obs_to_dict(obs, scan_origin)
+                for obs in scan.observations if obs.finding_id in _new_fids
+            ]
             from ..models.assessment import Assessment as _Assessment
             _before_assess_ids = _global_assessment_ids_for(sbom_before, tools_before)
             _after_assess_ids = _global_assessment_ids_for(sbom_after, tools_after)
