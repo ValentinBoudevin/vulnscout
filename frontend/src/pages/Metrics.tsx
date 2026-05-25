@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback } from "react";
         import type { Package } from "../handlers/packages";
         import type { CVSS } from "../handlers/vulnerabilities";
         import type { Vulnerability } from "../handlers/vulnerabilities";
@@ -122,6 +122,11 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
             const [modalVuln, setModalVuln] = useState<Vulnerability | undefined>(undefined);
             const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
             const [isEditing, setIsEditing] = useState<boolean>(false);
+
+            const handlePatchVuln = useCallback((vulnId: string, replace_vuln: Vulnerability) => {
+                patchVuln(vulnId, replace_vuln);
+                setModalVuln(prev => prev?.id === vulnId ? replace_vuln : prev);
+            }, [patchVuln]);
 
 const vulnColumns = useMemo(
   () => [
@@ -709,7 +714,7 @@ const packageColumns = [
             }}
             appendAssessment={appendAssessment}
             appendCVSS={appendCVSS}
-            patchVuln={patchVuln}
+            patchVuln={handlePatchVuln}
             vulnerabilities={TopVulns.map(item => item.original)}
             currentIndex={modalVulnIndex}
             onNavigate={handleModalNavigation}

@@ -698,8 +698,21 @@ def init_app(app):
 
         db.session.commit()
 
-        # Repopulate transient severity fields from the now-committed metrics so
-        # to_dict() returns correct min/max scores without a full controller preload.
+        # After commit, mapped columns are expired but transient attributes
+        # (texts, urls, severity_label) still hold pre-update values.
+        # Reload mapped columns then re-derive the transient ones so to_dict()
+        # returns fresh data for description, links, and severity label.
+        db.session.refresh(rec)
+        rec.texts = {}
+        if rec.description:
+            rec.texts["description"] = rec.description
+        if rec.yocto_description:
+            rec.texts["yocto description"] = rec.yocto_description
+        rec.urls = list(rec.links or [])
+        rec.severity_label = rec.status or "unknown"
+
+        # Repopulate transient severity scores from now-committed metrics so
+        # to_dict() returns correct min/max without a full controller preload.
         for m in (rec.metrics or []):
             if m.score is not None:
                 score = float(m.score)

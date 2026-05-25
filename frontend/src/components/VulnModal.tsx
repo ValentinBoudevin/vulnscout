@@ -224,7 +224,13 @@ type AssessmentGroup = {
             if (updated === null) {
                 setNvdRefreshError("NVD API unavailable. Please try again later.");
             } else {
-                patchVuln(vuln.id, updated);
+                const merged = {
+                    ...updated,
+                    status: vuln.status,
+                    simplified_status: vuln.simplified_status,
+                    assessments: vuln.assessments,
+                };
+                patchVuln(vuln.id, merged);
                 setNvdRefreshDone(true);
                 setTimeout(() => setNvdRefreshDone(false), 2500);
             }
@@ -233,7 +239,7 @@ type AssessmentGroup = {
         } finally {
             setNvdRefreshing(false);
         }
-    }, [vuln.id, patchVuln]);
+    }, [vuln, patchVuln]);
 
     const handleEditAssessment = (assessmentId: string, group: AssessmentGroup) => {
         setEditingAssessmentId(assessmentId);

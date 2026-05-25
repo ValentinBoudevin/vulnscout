@@ -86,6 +86,10 @@ class TestSingleCveRefreshEndpoint:
         assert any(abs(c["base_score"] - 8.1) < 0.01 for c in cvss_scores)
         # Severity min/max should be populated
         assert vuln["severity"]["max_score"] is not None
+        # Transient fields must reflect the updated DB values (not stale pre-commit state)
+        assert vuln["severity"]["severity"] == "high"
+        assert vuln["texts"].get("description") == "updated description"
+        assert any("nvd.nist.gov" in url for url in vuln["urls"])
 
     def test_single_refresh_updates_existing_cvss_score(self, client, existing_cve_id):
         """When NVD returns a different score for an existing version, the metric is updated."""

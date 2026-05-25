@@ -2164,6 +2164,43 @@ describe('NVD refresh button in VulnModal', () => {
         });
     });
 
+    test('preserves VEX status and assessments from original vuln after refresh', async () => {
+        const assessment = {
+            id: 'a1', vuln_id: 'CVE-2010-1234', variant_id: 'v1', timestamp: '2025-01-01T00:00:00Z',
+            status: 'not_affected', simplified_status: 'Not Affected',
+            justification: 'component_not_present', impact_statement: '', status_notes: '', workaround: '',
+            packages: [], origin: '', responses: [],
+        };
+        const vulnWithAssessment: Vulnerability = {
+            ...vulnerability,
+            status: 'not_affected',
+            simplified_status: 'Not Affected',
+            assessments: [assessment],
+        };
+
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] }));
+
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={vulnWithAssessment} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByTitle('Refresh from NVD'));
+
+        await waitFor(() => {
+            expect(patchVuln).toHaveBeenCalledWith(
+                vulnWithAssessment.id,
+                expect.objectContaining({
+                    status: 'not_affected',
+                    simplified_status: 'Not Affected',
+                    assessments: [assessment],
+                })
+            );
+        });
+    });
+
     test('shows "Updated" success cue after a successful refresh', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch

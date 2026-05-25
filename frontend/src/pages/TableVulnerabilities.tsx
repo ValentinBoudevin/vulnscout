@@ -459,6 +459,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setModalVulnSnapshot([...searchFilteredData]); // Capture snapshot at modal open time
     }, [searchFilteredData]);
 
+    const handlePatchVuln = useCallback((vulnId: string, replace_vuln: Vulnerability) => {
+        patchVuln(vulnId, replace_vuln);
+        setModalVuln(prev => prev?.id === vulnId ? replace_vuln : prev);
+        setModalVulnSnapshot(prev => prev.map(v => v.id === vulnId ? replace_vuln : v));
+    }, [patchVuln]);
+
     const columnDisplayNames = useMemo(() => ({
         'select-checkbox': 'Select',
         'id': 'ID',
@@ -1373,7 +1379,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             selectedVulns={selectedVulns}
             resetVulns={() => setSelectedRows({})}
             appendAssessment={appendAssessment}
-            patchVuln={patchVuln}
+            patchVuln={handlePatchVuln}
             triggerBanner={triggerBanner}
             hideBanner={closeBanner}
             variantId={variantId}
@@ -1414,7 +1420,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             }}
             appendAssessment={appendAssessment}
             appendCVSS={appendCVSS}
-            patchVuln={patchVuln}
+            patchVuln={handlePatchVuln}
             vulnerabilities={modalVulnSnapshot}
             currentIndex={modalVulnIndex}
             onNavigate={handleModalNavigation}
