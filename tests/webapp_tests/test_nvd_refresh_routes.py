@@ -78,8 +78,32 @@ class TestSingleCveRefreshEndpoint:
         assert resp.status_code == 200
         data = resp.get_json()
         assert "vulnerabilities" in data
-        assert data["vulnerabilities"][0]["id"] == existing_cve_id
-        assert "nvd_fetched_at" in data["vulnerabilities"][0]  # timestamp always stamped
+        vuln = data["vulnerabilities"][0]
+        assert vuln["id"] == existing_cve_id
+        assert "nvd_fetched_at" in vuln  # timestamp always stamped
+        # CVSS score should be reflected in the response
+        cvss_scores = vuln["severity"]["cvss"]
+        assert any(abs(c["base_score"] - 8.1) < 0.01 for c in cvss_scores)
+        # Severity min/max should be populated
+        assert vuln["severity"]["max_score"] is not None
+
+    def test_single_refresh_updates_existing_cvss_score(self, client, existing_cve_id):
+        """When NVD returns a different score for an existing version, the metric is updated."""
+        mock_details = {
+            "base_score": 9.8,
+            "cvss_version": "3.1",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        }
+        with patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
+            MockNVD.return_value.api_get_cve.return_value = (200, {
+                "vulnerabilities": [{"cve": {"id": existing_cve_id}}]
+            })
+            MockNVD.extract_cve_details.return_value = mock_details
+            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
+        assert resp.status_code == 200
+        vuln = resp.get_json()["vulnerabilities"][0]
+        cvss_scores = vuln["severity"]["cvss"]
+        assert any(abs(c["base_score"] - 9.8) < 0.01 for c in cvss_scores)
 
     def test_single_refresh_404_unknown_cve(self, client):
         resp = client.post("/api/vulnerabilities/CVE-9999-FAKE/nvd-refresh")

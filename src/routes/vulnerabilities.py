@@ -671,6 +671,41 @@ def init_app(app):
         details = NVD_DB.extract_cve_details(cve)
         now = datetime.datetime.now(datetime.timezone.utc)
         apply_nvd_update(rec, details, now)
+
+        # Update CVSS metric record if NVD returned score data
+        base_score = details.get("base_score")
+        cvss_version = details.get("cvss_version")
+        cvss_vector = details.get("cvss_vector")
+        if base_score is not None and cvss_version is not None:
+            existing = db.session.execute(
+                db.select(Metrics).where(
+                    Metrics.vulnerability_id == rec.id,
+                    Metrics.version == cvss_version,
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                if float(existing.score or 0) != float(base_score) or existing.vector != cvss_vector:
+                    existing.score = base_score
+                    existing.vector = cvss_vector or existing.vector
+            else:
+                db.session.add(Metrics(
+                    vulnerability_id=rec.id,
+                    version=cvss_version,
+                    score=base_score,
+                    vector=cvss_vector or "",
+                    author="nvd",
+                ))
+
         db.session.commit()
+
+        # Repopulate transient severity fields from the now-committed metrics so
+        # to_dict() returns correct min/max scores without a full controller preload.
+        for m in (rec.metrics or []):
+            if m.score is not None:
+                score = float(m.score)
+                if rec.severity_min_score is None or score < rec.severity_min_score:
+                    rec.severity_min_score = score
+                if rec.severity_max_score is None or score > rec.severity_max_score:
+                    rec.severity_max_score = score
 
         return jsonify({"vulnerabilities": [rec.to_dict()]}), 200
