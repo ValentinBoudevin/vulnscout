@@ -31,6 +31,28 @@ type Assessment = {
 
 export type { Assessment };
 
+type ReviewTimeEstimate = {
+    vuln_id: string;
+    optimistic: number;
+    likely: number;
+    pessimistic: number;
+    optimistic_iso: string;
+    likely_iso: string;
+    pessimistic_iso: string;
+    vuln_texts?: Record<string, string>;
+};
+
+type ReviewCustomCvss = {
+    vuln_id: string;
+    version: string;
+    vector_string: string;
+    base_score: number;
+    author: string;
+    vuln_texts?: Record<string, string>;
+};
+
+export type { ReviewTimeEstimate, ReviewCustomCvss };
+
 const asStringArray = (data: any): string[] => {
     if (!Array.isArray(data)) return [];
     return data.filter((item: any) => typeof item === "string");
@@ -125,6 +147,32 @@ class Assessments {
         const response = await fetch(url.toString(), { mode: "cors" });
         const data = await response.json();
         return data.flatMap(asAssessment);
+    }
+
+    /**
+     * Fetch vulnerabilities with non-zero time estimates for the review tab.
+     */
+    static async listReviewTimeEstimates(variantId?: string, projectId?: string): Promise<ReviewTimeEstimate[]> {
+        const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/time-estimates", window.location.href);
+        if (variantId) url.searchParams.set('variant_id', variantId);
+        else if (projectId) url.searchParams.set('project_id', projectId);
+        const response = await fetch(url.toString(), { mode: "cors" });
+        const data = await response.json();
+        if (!Array.isArray(data)) return [];
+        return data;
+    }
+
+    /**
+     * Fetch vulnerabilities with custom CVSS scores for the review tab.
+     */
+    static async listReviewCustomCvss(variantId?: string, projectId?: string): Promise<ReviewCustomCvss[]> {
+        const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/custom-cvss", window.location.href);
+        if (variantId) url.searchParams.set('variant_id', variantId);
+        else if (projectId) url.searchParams.set('project_id', projectId);
+        const response = await fetch(url.toString(), { mode: "cors" });
+        const data = await response.json();
+        if (!Array.isArray(data)) return [];
+        return data;
     }
 }
 

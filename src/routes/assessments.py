@@ -21,6 +21,8 @@ from ..helpers.assessment_io import (
     import_statements as _import_openvex_statements,
     build_variant_by_name_map,
     import_archive_bytes,
+    build_custom_data_export,
+    import_custom_data,
 )
 
 OPENVEX_FILE = "/scan/outputs/openvex.json"
@@ -334,6 +336,215 @@ def init_app(app):
             return {"status": "success", "imported": len(created), "skipped": skipped, "errors": errors}, 200
 
         return {"error": "Unsupported file type. Please upload a .json or .tar.gz file."}, 400
+
+    @app.route('/api/assessments/review/time-estimates')
+    def review_time_estimates():
+        """Return vulnerabilities that have non-zero time estimates.
+
+        Each entry contains the vulnerability ID and its three-point estimate
+        (optimistic / likely / pessimistic) as ISO 8601 durations plus the
+        raw hour values.
+        """
+        from ..models.time_estimate import TimeEstimate
+        from ..models.iso8601_duration import Iso8601Duration
+        from ..models.variant import Variant as DBVariant
+        from sqlalchemy.orm import joinedload
+
+        variant_id = request.args.get('variant_id')
+        project_id = request.args.get('project_id')
+
+        query = (
+            db.select(TimeEstimate)
+            .options(joinedload(TimeEstimate.finding))
+            .where(
+                db.or_(
+                    TimeEstimate.optimistic > 0,
+                    TimeEstimate.likely > 0,
+                    TimeEstimate.pessimistic > 0,
+                )
+            )
+        )
+
+        variant_ids_filter: list | None = None
+        if variant_id:
+            vid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            variant_ids_filter = [vid]
+        elif project_id:
+            pid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+            variant_ids_filter = [v.id for v in DBVariant.get_by_project(pid)]
+
+        if variant_ids_filter is not None:
+            query = query.where(
+                db.or_(
+                    TimeEstimate.variant_id.in_(variant_ids_filter),
+                    TimeEstimate.variant_id.is_(None),
+                )
+            )
+
+        all_te = list(db.session.execute(query).scalars().all())
+
+        def _hours_to_iso(h: int) -> str:
+            try:
+                return str(Iso8601Duration(f"PT{h}H"))
+            except (ValueError, TypeError):
+                return f"PT{h}H"
+
+        vuln_map: dict[str, dict] = {}
+        for te in all_te:
+            if te.finding is None:
+                continue
+            vid = te.finding.vulnerability_id
+            if vid in vuln_map:
+                continue
+            opt = te.optimistic or 0
+            lik = te.likely or 0
+            pes = te.pessimistic or 0
+            vuln = DBVuln.get_by_id(vid)
+            vuln_map[vid] = {
+                "vuln_id": vid,
+                "optimistic": opt,
+                "likely": lik,
+                "pessimistic": pes,
+                "optimistic_iso": _hours_to_iso(opt),
+                "likely_iso": _hours_to_iso(lik),
+                "pessimistic_iso": _hours_to_iso(pes),
+                "vuln_texts": dict(vuln.texts or {}) if vuln else {},
+            }
+
+        return sorted(vuln_map.values(), key=lambda x: x["vuln_id"])
+
+    @app.route('/api/assessments/review/custom-cvss')
+    def review_custom_cvss():
+        """Return vulnerabilities that have custom CVSS scores (author is not
+        ``nvd`` or ``unknown``).
+        """
+        from ..models.metrics import Metrics
+
+        all_metrics = list(db.session.execute(
+            db.select(Metrics).where(
+                Metrics.author.notin_(["nvd", "unknown"]),
+                Metrics.author.isnot(None),
+            )
+        ).scalars().all())
+
+        result: list[dict] = []
+        for m in sorted(all_metrics, key=lambda m: m.vulnerability_id):
+            vuln = DBVuln.get_by_id(m.vulnerability_id)
+            result.append({
+                "vuln_id": m.vulnerability_id,
+                "version": m.version or "",
+                "vector_string": m.vector or "",
+                "base_score": float(m.score) if m.score is not None else 0.0,
+                "author": m.author,
+                "vuln_texts": dict(vuln.texts or {}) if vuln else {},
+            })
+
+        return result
+
+    @app.route('/api/assessments/review/export-custom-data')
+    def export_review_custom_data():
+        """Export handmade (review) assessments, custom CVSS scores and time
+        estimates as a single JSON file.
+
+        Query parameters:
+
+        * ``variant_id`` – restrict to a single variant.
+        * ``project_id`` – restrict to all variants in a project.
+        """
+        variant_id = request.args.get('variant_id')
+        project_id = request.args.get('project_id')
+
+        from ..models.project import Project as DBProject
+
+        variant_ids = None
+        project_name = None
+        if variant_id:
+            vid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            variant_ids = [vid]
+            variant = DBVariant.get_by_id(vid)
+            if variant and variant.project:
+                project_name = variant.project.name
+        elif project_id:
+            pid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+            project = DBProject.get_by_id(pid)
+            if project:
+                project_name = project.name
+            variants = DBVariant.get_by_project(pid)
+            variant_ids = [v.id for v in variants]
+
+        data = build_custom_data_export(variant_ids)
+
+        if not data["assessments"] and not data["cvss"] and not data["time_estimates"]:
+            return {"error": "No custom data to export"}, 404
+
+        import json as _json
+        import re as _re
+        json_bytes = _json.dumps(data, indent=2)
+        safe_name = _re.sub(r'[^\w\-.]', '_', project_name) if project_name else None
+        fname = f"custom_data_{safe_name}.json" if safe_name else "custom_data.json"
+        return json_bytes, 200, {
+            "Content-Type": "application/json",
+            "Content-Disposition": f'attachment; filename="{fname}"',
+        }
+
+    @app.route('/api/assessments/review/import-custom-data', methods=['POST'])
+    def import_review_custom_data():
+        """Import assessments, CVSS scores and time estimates from a custom-data
+        JSON file.
+
+        Accepts either:
+
+        * ``multipart/form-data`` with a ``file`` field containing a ``.json``
+          file.
+        * ``application/json`` body with the custom-data payload directly.
+
+        Optional query parameter ``variant_id`` to force all imported
+        assessments to a specific variant.
+        """
+        import json as _json
+
+        variant_id = None
+        raw_vid = request.args.get('variant_id')
+        if raw_vid:
+            variant_id, err = parse_uuid_or_400(raw_vid, "variant_id")
+            if err:
+                return err
+
+        # Parse the incoming data
+        data = None
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            uploaded = request.files.get('file')
+            if not uploaded or not uploaded.filename:
+                return {"error": "No file uploaded"}, 400
+            try:
+                data = _json.load(uploaded.stream)
+            except Exception:
+                return {"error": "Invalid JSON file"}, 400
+        elif request.content_type and 'application/json' in request.content_type:
+            data = request.get_json(silent=True)
+            if data is None:
+                return {"error": "Invalid JSON body"}, 400
+        else:
+            return {"error": "Expected multipart/form-data or application/json"}, 400
+
+        if not isinstance(data, dict) or "version" not in data:
+            return {"error": "Invalid custom-data format. Expected {version, assessments, ...}"}, 400
+
+        variant_by_name = build_variant_by_name_map()
+        result = import_custom_data(data, variant_by_name, variant_id)
+
+        _save_openvex()
+
+        status_code = 200 if result["status"] == "success" else 400
+        return result, status_code
 
     @app.route('/api/assessments/<assessment_id>')
     def assess_by_id(assessment_id: str):
