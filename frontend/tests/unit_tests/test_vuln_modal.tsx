@@ -2118,7 +2118,7 @@ describe('NVD refresh button in VulnModal', () => {
 
     const updatedVulnPayload = {
         id: 'CVE-2010-1234',
-        found_by: ['nvd'],
+        found_by: [],
         datasource: 'nvd',
         namespace: 'nvd:cve',
         aliases: [],
@@ -2164,7 +2164,7 @@ describe('NVD refresh button in VulnModal', () => {
         });
     });
 
-    test('preserves VEX status and assessments from original vuln after refresh', async () => {
+    test('preserves VEX status, assessments, packages_current, variants and found_by from original vuln after refresh', async () => {
         const assessment = {
             id: 'a1', vuln_id: 'CVE-2010-1234', variant_id: 'v1', timestamp: '2025-01-01T00:00:00Z',
             status: 'not_affected', simplified_status: 'Not Affected',
@@ -2173,9 +2173,12 @@ describe('NVD refresh button in VulnModal', () => {
         };
         const vulnWithAssessment: Vulnerability = {
             ...vulnerability,
+            found_by: ['grype', 'osv'],
             status: 'not_affected',
             simplified_status: 'Not Affected',
             assessments: [assessment],
+            packages_current: ['libfoo@1.2.3'],
+            variants: ['variant-a'],
         };
 
         fetchMock.resetMocks();
@@ -2193,9 +2196,12 @@ describe('NVD refresh button in VulnModal', () => {
             expect(patchVuln).toHaveBeenCalledWith(
                 vulnWithAssessment.id,
                 expect.objectContaining({
+                    found_by: ['grype', 'osv'],
                     status: 'not_affected',
                     simplified_status: 'Not Affected',
                     assessments: [assessment],
+                    packages_current: ['libfoo@1.2.3'],
+                    variants: ['variant-a'],
                 })
             );
         });

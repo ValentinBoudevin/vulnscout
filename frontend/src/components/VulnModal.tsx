@@ -224,12 +224,22 @@ type AssessmentGroup = {
             if (updated === null) {
                 setNvdRefreshError("NVD API unavailable. Please try again later.");
             } else {
-                const merged = {
-                    ...updated,
-                    status: vuln.status,
-                    simplified_status: vuln.simplified_status,
-                    assessments: vuln.assessments,
-                };
+                // Strip out fields that asVulnerability() fills with defaults but the
+                // NVD refresh API doesn't actually provide (to_dict() omits them, or
+                // returns empty because the route doesn't run the full post-processing
+                // pipeline the main list endpoint does).
+                // Then overlay the genuine NVD updates on top of the original vuln
+                // so every non-refreshed column keeps its current value.
+                const {
+                    status: _s,
+                    simplified_status: _ss,
+                    assessments: _a,
+                    packages_current: _pc,
+                    variants: _v,
+                    found_by: _fb,
+                    ...nvdUpdates
+                } = updated;
+                const merged = { ...vuln, ...nvdUpdates };
                 patchVuln(vuln.id, merged);
                 setNvdRefreshDone(true);
                 setTimeout(() => setNvdRefreshDone(false), 2500);
