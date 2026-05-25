@@ -524,6 +524,100 @@ def test_export_import_round_trip(client):
     assert result["status"] == "success"
 
 
+# ── GET /api/assessments/review/time-estimates ───────────────────────────
+
+def test_review_time_estimates_empty(client):
+    """No time estimates → empty list."""
+    resp = client.get("/api/assessments/review/time-estimates")
+    assert resp.status_code == 200
+    assert json.loads(resp.data) == []
+
+
+def test_review_time_estimates_basic(client):
+    """After adding a time estimate it appears in the listing."""
+    _create_handmade_assessment(client)
+    client.patch("/api/vulnerabilities/batch", json={
+        "vulnerabilities": [{
+            "id": "CVE-2020-35492",
+            "effort": {"optimistic": "PT2H", "likely": "PT4H", "pessimistic": "PT8H"},
+        }]
+    })
+    resp = client.get("/api/assessments/review/time-estimates")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert len(data) >= 1
+    entry = data[0]
+    assert entry["vuln_id"] == "CVE-2020-35492"
+    assert entry["optimistic"] == 2
+    assert entry["likely"] == 4
+    assert entry["pessimistic"] == 8
+    assert "optimistic_iso" in entry
+    assert "vuln_texts" in entry
+
+
+def test_review_time_estimates_by_variant(client):
+    _create_handmade_assessment(client)
+    client.patch("/api/vulnerabilities/batch", json={
+        "vulnerabilities": [{
+            "id": "CVE-2020-35492",
+            "effort": {"optimistic": "PT1H", "likely": "PT2H", "pessimistic": "PT3H"},
+        }]
+    })
+    resp = client.get(f"/api/assessments/review/time-estimates?variant_id={VARIANT_UUID}")
+    assert resp.status_code == 200
+    assert isinstance(json.loads(resp.data), list)
+
+
+def test_review_time_estimates_by_project(client):
+    _create_handmade_assessment(client)
+    client.patch("/api/vulnerabilities/batch", json={
+        "vulnerabilities": [{
+            "id": "CVE-2020-35492",
+            "effort": {"optimistic": "PT1H", "likely": "PT2H", "pessimistic": "PT3H"},
+        }]
+    })
+    resp = client.get(f"/api/assessments/review/time-estimates?project_id={PROJECT_UUID}")
+    assert resp.status_code == 200
+    assert isinstance(json.loads(resp.data), list)
+
+
+# ── GET /api/assessments/review/custom-cvss ──────────────────────────────
+
+def test_review_custom_cvss_empty(client):
+    """No custom CVSS entries → empty list."""
+    resp = client.get("/api/assessments/review/custom-cvss")
+    assert resp.status_code == 200
+    assert json.loads(resp.data) == []
+
+
+def test_review_custom_cvss_basic(client):
+    """Custom CVSS entries (non-nvd author) appear in the listing."""
+    _create_handmade_assessment(client)
+    client.patch("/api/vulnerabilities/batch", json={
+        "vulnerabilities": [{
+            "id": "CVE-2020-35492",
+            "cvss": {
+                "base_score": 8.0,
+                "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+                "version": "3.1",
+                "author": "custom-tool",
+                "exploitability_score": 0.0,
+                "impact_score": 0.0,
+            },
+        }]
+    })
+    resp = client.get("/api/assessments/review/custom-cvss")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert len(data) >= 1
+    entry = data[0]
+    assert entry["vuln_id"] == "CVE-2020-35492"
+    assert "version" in entry
+    assert "vector_string" in entry
+    assert "author" in entry
+    assert "vuln_texts" in entry
+
+
 # ── GET /api/assessments/review/export-custom-data ───────────────────────
 
 def test_export_custom_data_empty(client):
@@ -628,6 +722,26 @@ def test_export_custom_data_with_time_estimate(client):
     assert "optimistic" in te
     assert "likely" in te
     assert "pessimistic" in te
+
+
+def test_export_custom_data_filename_by_variant(client):
+    """Export by variant_id includes the project name in the filename."""
+    _create_handmade_assessment(client)
+    resp = client.get(f"/api/assessments/review/export-custom-data?variant_id={VARIANT_UUID}")
+    assert resp.status_code == 200
+    disposition = resp.headers.get("Content-Disposition", "")
+    assert "custom_data_" in disposition
+    assert disposition.endswith('.json"')
+
+
+def test_export_custom_data_filename_by_project(client):
+    """Export by project_id includes the project name in the filename."""
+    _create_handmade_assessment(client)
+    resp = client.get(f"/api/assessments/review/export-custom-data?project_id={PROJECT_UUID}")
+    assert resp.status_code == 200
+    disposition = resp.headers.get("Content-Disposition", "")
+    assert "custom_data_" in disposition
+    assert disposition.endswith('.json"')
 
 
 # ── POST /api/assessments/review/import-custom-data ──────────────────────

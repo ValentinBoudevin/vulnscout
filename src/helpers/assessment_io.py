@@ -485,10 +485,10 @@ def build_custom_data_export(
     dict with keys ``version``, ``exported_at``, ``assessments``, ``cvss``,
     ``time_estimates``.
     """
+    from ..extensions import db
     from ..models.assessment import Assessment as DBAssessment
     from ..models.metrics import Metrics
     from ..models.time_estimate import TimeEstimate
-    from ..models.finding import Finding
     from ..models.iso8601_duration import Iso8601Duration
 
     handmade = DBAssessment.get_handmade(variant_ids)
@@ -508,56 +508,61 @@ def build_custom_data_export(
             "variant_id": d.get("variant_id"),
         })
 
-    # Collect distinct vulnerability IDs referenced by the assessments
-    vuln_ids: set[str] = set()
-    for a in handmade:
-        if a.vuln_id:
-            vuln_ids.add(a.vuln_id)
-
-    # Gather custom CVSS entries (exclude 'nvd' and 'unknown' authors)
+    # Gather ALL custom CVSS entries (exclude 'nvd' and 'unknown' authors),
+    # not just those linked to handmade assessments.
     cvss_entries: list[dict] = []
-    for vid in sorted(vuln_ids):
-        for m in Metrics.get_by_vulnerability(vid):
-            author = m.author or "unknown"
-            if author in ("nvd", "unknown"):
-                continue
-            cvss_entries.append({
-                "vuln_id": vid,
-                "version": m.version or "",
-                "vector_string": m.vector or "",
-                "base_score": float(m.score) if m.score is not None else 0.0,
-                "author": author,
-            })
+    all_metrics = list(db.session.execute(
+        db.select(Metrics).where(
+            Metrics.author.notin_(["nvd", "unknown"]),
+            Metrics.author.isnot(None),
+        )
+    ).scalars().all())
+    for m in sorted(all_metrics, key=lambda m: m.vulnerability_id):
+        cvss_entries.append({
+            "vuln_id": m.vulnerability_id,
+            "version": m.version or "",
+            "vector_string": m.vector or "",
+            "base_score": float(m.score) if m.score is not None else 0.0,
+            "author": m.author,
+        })
 
-    # Gather non-zero time estimates
+    # Gather ALL non-zero time estimates, not just those linked to
+    # handmade assessments.
     time_estimates: list[dict] = []
-    seen_findings: set = set()
-    for vid in sorted(vuln_ids):
-        findings = Finding.get_by_vulnerability(vid)
-        for f in findings:
-            if f.id in seen_findings:
-                continue
-            seen_findings.add(f.id)
-            te_list = TimeEstimate.get_by_finding(f.id)
-            for te in te_list:
-                opt = te.optimistic or 0
-                lik = te.likely or 0
-                pes = te.pessimistic or 0
-                if opt == 0 and lik == 0 and pes == 0:
-                    continue
+    all_te = list(db.session.execute(
+        db.select(TimeEstimate).where(
+            db.or_(
+                TimeEstimate.optimistic > 0,
+                TimeEstimate.likely > 0,
+                TimeEstimate.pessimistic > 0,
+            )
+        )
+    ).scalars().all())
 
-                def _hours_to_iso(h: int) -> str:
-                    try:
-                        return str(Iso8601Duration(f"PT{h}H"))
-                    except (ValueError, TypeError):
-                        return f"PT{h}H"
+    def _hours_to_iso(h: int) -> str:
+        try:
+            return str(Iso8601Duration(f"PT{h}H"))
+        except (ValueError, TypeError):
+            return f"PT{h}H"
 
-                time_estimates.append({
-                    "vuln_id": vid,
-                    "optimistic": _hours_to_iso(opt),
-                    "likely": _hours_to_iso(lik),
-                    "pessimistic": _hours_to_iso(pes),
-                })
+    seen_vulns_te: set[str] = set()
+    for te in all_te:
+        if te.finding is None:
+            continue
+        vid = te.finding.vulnerability_id
+        if vid in seen_vulns_te:
+            continue
+        seen_vulns_te.add(vid)
+        opt = te.optimistic or 0
+        lik = te.likely or 0
+        pes = te.pessimistic or 0
+        time_estimates.append({
+            "vuln_id": vid,
+            "optimistic": _hours_to_iso(opt),
+            "likely": _hours_to_iso(lik),
+            "pessimistic": _hours_to_iso(pes),
+        })
+    time_estimates.sort(key=lambda t: t["vuln_id"])
 
     return {
         "version": 1,
