@@ -10,6 +10,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.15.0] - 2026-05-26
+
+### Added
+- NVD refresh: add single-CVE backend refresh flow that can be triggered from Vulnerability modal.
+- Vulnerabilities: add NVD timestamp fields, including `nvd_data_updated_at`, and surface related modal updates.
+- Add capabilities to import/export custom user data and export scan history.
+
+### Changed
+- API: add `max_retries` parameter to `api_get_cve`.
+- App init: simplify transient attribute initialization in `init_app`.
+- NVD refresh behavior: update CVSS score and severity fields during NVD refresh.
+- Refactoring Flask commands, Views, Template, Controllers and Routes
+- Export/import CLI improvements: scope custom assessment imports per project+variant, support directory input of OpenVEX JSON files, export individual files by default, and add/refactor `--compress`.
+- Grype and templates internals: extract package identifier helper and standardize conversion/sorting/filtering utility paths.
+- PURL/CPE handling: normalize PURL epoch qualifier (including rpm), and prioritize BOM-sourced CPEs while handling `cpe23Type`.
+- Typing and model cleanup
+
+### Documentation
+- Add docs for import/export API and interactive mode; add Alembic migration development doc; update docs alongside test coverage adjustments.
+
+---
+
 ## [0.14.0] - 2026-05-11
 
 ### Added
