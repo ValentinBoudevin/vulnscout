@@ -23,6 +23,7 @@ from ..helpers.datetime_utils import ensure_utc_iso
 from ..extensions import db
 from ..controllers.nvd_db import NVD_DB
 from ..controllers.nvd_apply import apply_nvd_update
+from ..controllers.epss_db import EPSS_DB
 from ..helpers.active_scans import (
     active_scan_ids_for_variant,
     active_scan_ids_for_project,
@@ -650,6 +651,41 @@ def init_app(app):
 
         # Repopulate transient severity scores from now-committed metrics so
         # to_dict() returns correct min/max without a full controller preload.
+        for m in (rec.metrics or []):
+            if m.score is not None:
+                score = float(m.score)
+                if rec.severity_min_score is None or score < rec.severity_min_score:
+                    rec.severity_min_score = score
+                if rec.severity_max_score is None or score > rec.severity_max_score:
+                    rec.severity_max_score = score
+
+        return jsonify({"vulnerabilities": [rec.to_dict()]}), 200
+
+    @app.route('/api/vulnerabilities/<cve_id>/epss-refresh', methods=['POST'])
+    def refresh_single_cve_epss(cve_id):
+        cve_id_upper = cve_id.upper()
+        rec = db.session.get(Vulnerability, cve_id_upper)
+        if rec is None:
+            return jsonify({"error": "CVE not found"}), 404
+
+        epss_data = EPSS_DB().api_get_epss(cve_id_upper)
+        if epss_data is None:
+            return jsonify({"error": "EPSS API returned no data for this CVE"}), 503
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        rec.update_record(
+            epss_score=epss_data["score"],
+            epss_fetched_at=now,
+            commit=False,
+        )
+        db.session.commit()
+
+        db.session.refresh(rec)
+        rec._init_transient()
+        # Set percentile in transient epss dict (not stored in DB)
+        rec.epss["percentile"] = epss_data.get("percentile")
+
+        # Repopulate transient severity scores from committed metrics
         for m in (rec.metrics or []):
             if m.score is not None:
                 score = float(m.score)
