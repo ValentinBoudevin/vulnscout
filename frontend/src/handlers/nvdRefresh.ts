@@ -5,13 +5,6 @@
 import { asVulnerability } from "./vulnerabilities";
 import type { Vulnerability } from "./vulnerabilities";
 
-export type RefreshStatus = {
-    status: string;
-    progress?: number;
-    total?: number;
-    error?: string;
-};
-
 class NvdRefreshHandler {
     static async triggerSingleRefresh(cveId: string): Promise<Vulnerability | null> {
         const url = `${import.meta.env.VITE_API_URL}/api/vulnerabilities/${encodeURIComponent(cveId)}/nvd-refresh`;
