@@ -2090,7 +2090,7 @@ describe('Vulnerability Modal', () => {
     });
 });
 
-describe('NVD refresh button in VulnModal', () => {
+describe('NVD & EPSS refresh button in VulnModal', () => {
     const vulnerability: Vulnerability = {
         id: 'CVE-2010-1234',
         aliases: [],
@@ -2139,25 +2139,26 @@ describe('NVD refresh button in VulnModal', () => {
 
     test('refresh button renders in header when not readOnly', () => {
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-        expect(screen.getByTitle('Refresh from NVD')).toBeInTheDocument();
+        expect(screen.getByTitle('Refresh from NVD & EPSS')).toBeInTheDocument();
     });
 
     test('refresh button is not rendered in readOnly mode', () => {
         render(<VulnModal vuln={vulnerability} readOnly={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-        expect(screen.queryByTitle('Refresh from NVD')).not.toBeInTheDocument();
+        expect(screen.queryByTitle('Refresh from NVD & EPSS')).not.toBeInTheDocument();
     });
 
     test('calls patchVuln with updated vulnerability on successful refresh', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] }));
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
         const patchVuln = jest.fn();
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD'));
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
 
         await waitFor(() => {
             expect(patchVuln).toHaveBeenCalledWith(vulnerability.id, expect.objectContaining({ id: vulnerability.id }));
@@ -2184,13 +2185,14 @@ describe('NVD refresh button in VulnModal', () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] }));
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
         const patchVuln = jest.fn();
         render(<VulnModal vuln={vulnWithAssessment} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD'));
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
 
         await waitFor(() => {
             expect(patchVuln).toHaveBeenCalledWith(
@@ -2211,31 +2213,33 @@ describe('NVD refresh button in VulnModal', () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] }));
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD'));
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
 
         await waitFor(() => {
             expect(screen.getByText('Updated')).toBeInTheDocument();
         });
     });
 
-    test('shows error message when NVD refresh API is unavailable', async () => {
+    test('shows error message when NVD and EPSS refresh APIs are unavailable', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 });
+        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // nvd-refresh
+        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // epss-refresh
 
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD'));
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
 
         await waitFor(() => {
-            expect(screen.getByText(/NVD API unavailable/i)).toBeInTheDocument();
+            expect(screen.getByText(/NVD API unavailable.*EPSS API unavailable/i)).toBeInTheDocument();
         });
     });
 
