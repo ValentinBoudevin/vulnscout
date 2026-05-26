@@ -600,7 +600,7 @@ def init_app(app):
 
         try:
             nvd = NVD_DB(nvd_api_key=os.getenv("NVD_API_KEY"))
-            status_code, data = nvd.api_get_cve(cve_id_upper)
+            status_code, data = nvd.api_get_cve(cve_id_upper, max_retries=0)
         except Exception as e:
             return jsonify({"error": f"NVD API unavailable: {e}"}), 503
 
