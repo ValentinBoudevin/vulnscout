@@ -242,7 +242,6 @@ type AssessmentGroup = {
                 const merged = { ...vuln, ...nvdUpdates };
                 patchVuln(vuln.id, merged);
                 setNvdRefreshDone(true);
-                setTimeout(() => setNvdRefreshDone(false), 2500);
             }
         } catch {
             setNvdRefreshError("NVD API unavailable. Please try again later.");
