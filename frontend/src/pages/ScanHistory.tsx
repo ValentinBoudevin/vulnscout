@@ -20,8 +20,9 @@ import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
 import ScanProgressPanel from "../components/ScanProgressPanel";
 import { useDocUrl } from "../helpers/useDocUrl";
 import { extractSupplierName } from "../helpers/pkgId";
+import { downloadJson } from "../helpers/exportJson";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook } from "@fortawesome/free-solid-svg-icons";
+import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook, faDownload } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
 import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
@@ -31,6 +32,20 @@ type Props = {
     projectId?: string;
     onScanComplete?: () => void;
 };
+
+async function downloadFromEndpoint(path: string, fallbackFilename: string): Promise<void> {
+    const url = new URL(import.meta.env.VITE_API_URL + path, window.location.href);
+    const resp = await fetch(url.toString(), { mode: 'cors' });
+    if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.error || `Export failed (${resp.status})`);
+    }
+    const disposition = resp.headers.get('Content-Disposition');
+    const match = disposition?.match(/filename="?([^"]+)"?/);
+    const filename = match?.[1] ?? fallbackFilename;
+    const data = await resp.json();
+    downloadJson(data, filename);
+}
 
 function formatDate(iso: string): string {
     const d = new Date(iso);
@@ -1008,6 +1023,8 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
     );
 }
 
+
+
 // ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
@@ -1027,6 +1044,14 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const [showGrype, setShowGrype] = useState(true);
     const [showOsv, setShowOsv] = useState(true);
     const [showNvd, setShowNvd] = useState(true);
+
+    // Export state
+    const [exportMenuScanId, setExportMenuScanId] = useState<string | null>(null);
+    const [exportingScanId, setExportingScanId] = useState<string | null>(null);
+    const [exportAllMenuOpen, setExportAllMenuOpen] = useState(false);
+    const [exportingAll, setExportingAll] = useState(false);
+    const exportMenuRef = useRef<HTMLDivElement>(null);
+    const exportAllMenuRef = useRef<HTMLDivElement>(null);
 
     // Scan menu state
     const [scanMenuOpen, setScanMenuOpen] = useState(false);
@@ -1069,6 +1094,31 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
             setDeletingId(null);
             refreshScans();
             onScanComplete?.();
+        }
+    }
+
+    // -- Per-scan export --
+    async function handleExportScanDiff(scan: Scan) {
+        setExportingScanId(scan.id);
+        setExportMenuScanId(null);
+        try {
+            await downloadFromEndpoint(`/api/scans/${scan.id}/export-diff`, 'scan_diff.json');
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to export scan diff.');
+        } finally {
+            setExportingScanId(null);
+        }
+    }
+
+    async function handleExportScanResult(scan: Scan) {
+        setExportingScanId(scan.id);
+        setExportMenuScanId(null);
+        try {
+            await downloadFromEndpoint(`/api/scans/${scan.id}/export-result`, 'scan_total.json');
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to export scan result.');
+        } finally {
+            setExportingScanId(null);
         }
     }
 
@@ -1130,6 +1180,31 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
             return () => document.removeEventListener('mousedown', handleClickOutside);
         }
     }, [scanMenuOpen]);
+
+    // Close export menus on outside click
+    useEffect(() => {
+        function handleClickOutside(e: MouseEvent) {
+            if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+                setExportMenuScanId(null);
+            }
+        }
+        if (exportMenuScanId) {
+            document.addEventListener('mousedown', handleClickOutside);
+            return () => document.removeEventListener('mousedown', handleClickOutside);
+        }
+    }, [exportMenuScanId]);
+
+    useEffect(() => {
+        function handleClickOutside(e: MouseEvent) {
+            if (exportAllMenuRef.current && !exportAllMenuRef.current.contains(e.target as Node)) {
+                setExportAllMenuOpen(false);
+            }
+        }
+        if (exportAllMenuOpen) {
+            document.addEventListener('mousedown', handleClickOutside);
+            return () => document.removeEventListener('mousedown', handleClickOutside);
+        }
+    }, [exportAllMenuOpen]);
 
     function toggleVariant(vid: string) {
         setSelectedVariantIds(prev => {
@@ -1207,6 +1282,22 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         return true;
     });
 
+    // -- Export All (grouped by project/variant) --
+    async function handleExportAll(type: 'diff' | 'total') {
+        setExportAllMenuOpen(false);
+        setExportingAll(true);
+        try {
+            const params = new URLSearchParams({ type });
+            if (variantId) params.set('variant_id', variantId);
+            else if (projectId) params.set('project_id', projectId);
+            await downloadFromEndpoint(`/api/scans/export?${params}`, `scans_${type}.json`);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to export scans.');
+        } finally {
+            setExportingAll(false);
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Linear timeline — source-to-color mapping for tool scan squares
     // -----------------------------------------------------------------------
@@ -1276,7 +1367,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                 NVD
             </button>
 
-            {/* Right side: doc link + scan menu */}
+            {/* Right side: doc link + export + scan menu */}
             <div className="ml-auto flex items-center gap-3">
                 <a
                     href={docUrl}
@@ -1288,6 +1379,44 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                 >
                     <FontAwesomeIcon icon={faBook} />
                 </a>
+
+                {/* Export All dropdown */}
+                {filteredScans.length > 0 && (
+                    <div className="relative" ref={exportAllMenuRef}>
+                        <button
+                            onClick={() => setExportAllMenuOpen(o => !o)}
+                            disabled={exportingAll}
+                            className={[
+                                "inline-flex items-center gap-2 px-3 py-1.5 rounded text-sm font-semibold transition-colors",
+                                exportingAll
+                                    ? "bg-sky-800/50 text-sky-300 cursor-wait"
+                                    : "bg-sky-900 hover:bg-sky-950 text-white",
+                            ].join(' ')}
+                            title="Export scan history"
+                        >
+                            <FontAwesomeIcon icon={faDownload} />
+                            {exportingAll ? 'Exporting…' : 'Export'}
+                        </button>
+
+                        {exportAllMenuOpen && (
+                            <div className="absolute right-0 top-full mt-1 z-50 w-52 rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-2">
+                                <button
+                                    onClick={() => handleExportAll('diff')}
+                                    className="w-full text-left px-3 py-2 text-sm text-neutral-200 hover:bg-sky-900/40 rounded transition-colors"
+                                >
+                                    Export All Diffs
+                                </button>
+                                <button
+                                    onClick={() => handleExportAll('total')}
+                                    className="w-full text-left px-3 py-2 text-sm text-neutral-200 hover:bg-sky-900/40 rounded transition-colors"
+                                >
+                                    Export All Scan Results
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 {/* Run Scans dropdown */}
                 {canTriggerScan && (
                     <div className="relative" ref={scanMenuRef}>
@@ -1453,6 +1582,14 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
     return (
         <>
+            {(exportingAll || exportingScanId) && (
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+                    <div className="flex flex-col items-center gap-3 text-white">
+                        <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-sm font-semibold">Exporting…</span>
+                    </div>
+                </div>
+            )}
             {openDiffId && (
                 <DiffModal scanId={openDiffId} scanType={openDiffType} onClose={() => setOpenDiffId(null)} />
             )}
@@ -1519,13 +1656,47 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                             <div className="flex-1 min-w-0 py-2 pl-3">
                             <div className="group/card relative p-4 bg-white dark:bg-neutral-700 rounded-lg shadow-sm border border-gray-100 dark:border-neutral-600">
                                 {/* Delete button — top-right corner */}
-                                <button
-                                    onClick={() => setDeletingId(scan.id)}
-                                    title="Delete scan"
-                                    className="absolute top-2 right-2 z-10 opacity-0 group-hover/card:opacity-100 text-neutral-400 hover:text-red-400 transition-all p-1"
-                                >
-                                    <FontAwesomeIcon icon={faTrash} className="text-sm" />
-                                </button>
+                                <div className="absolute top-2 right-2 z-10 flex items-center gap-1 opacity-0 group-hover/card:opacity-100 transition-all">
+                                    {/* Export button */}
+                                    <div className="relative" ref={exportMenuScanId === scan.id ? exportMenuRef : undefined}>
+                                        <button
+                                            onClick={() => setExportMenuScanId(exportMenuScanId === scan.id ? null : scan.id)}
+                                            disabled={exportingScanId === scan.id}
+                                            title="Export scan"
+                                            className={[
+                                                "p-1 transition-colors",
+                                                exportingScanId === scan.id
+                                                    ? "text-cyan-400 cursor-wait"
+                                                    : "text-neutral-400 hover:text-cyan-400",
+                                            ].join(' ')}
+                                        >
+                                            <FontAwesomeIcon icon={faDownload} className="text-sm" />
+                                        </button>
+                                        {exportMenuScanId === scan.id && (
+                                            <div className="absolute right-0 top-full mt-1 z-50 w-48 rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-1.5">
+                                                <button
+                                                    onClick={() => handleExportScanDiff(scan)}
+                                                    className="w-full text-left px-3 py-1.5 text-xs text-neutral-200 hover:bg-sky-900/40 rounded transition-colors"
+                                                >
+                                                    Export Diff
+                                                </button>
+                                                <button
+                                                    onClick={() => handleExportScanResult(scan)}
+                                                    className="w-full text-left px-3 py-1.5 text-xs text-neutral-200 hover:bg-sky-900/40 rounded transition-colors"
+                                                >
+                                                    Export Scan Result
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <button
+                                        onClick={() => setDeletingId(scan.id)}
+                                        title="Delete scan"
+                                        className="text-neutral-400 hover:text-red-400 transition-colors p-1"
+                                    >
+                                        <FontAwesomeIcon icon={faTrash} className="text-sm" />
+                                    </button>
+                                </div>
                                 {/* Row 1: timestamp + scan type badge */}
                                 <div className="flex items-center gap-2 mb-1">
                                     <time className="text-sm font-semibold text-gray-500 dark:text-neutral-400">
