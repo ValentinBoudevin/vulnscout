@@ -1,7 +1,7 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { render, screen, waitForElementToBeRemoved } from '@testing-library/react';
+import { render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
@@ -2087,5 +2087,169 @@ describe('Vulnerability Modal', () => {
         // Both packages should appear since packages_current is empty (fallback)
         await screen.findByText('pkg-x@1.0.0 (unknown supplier)');
         expect(screen.getByText('pkg-y@2.0.0 (unknown supplier)')).toBeInTheDocument();
+    });
+});
+
+describe('NVD refresh button in VulnModal', () => {
+    const vulnerability: Vulnerability = {
+        id: 'CVE-2010-1234',
+        aliases: [],
+        related_vulnerabilities: [],
+        namespace: 'nvd:cve',
+        found_by: ['hardcoded'],
+        datasource: 'test',
+        packages: ['pkg@1.0.0'],
+        packages_current: [],
+        urls: [],
+        texts: [{ title: 'description', content: 'Original description' }],
+        severity: { severity: 'medium', min_score: 5, max_score: 5, cvss: [] },
+        epss: { score: 0.1, percentile: 0.5 },
+        effort: {
+            optimistic: new Iso8601Duration(undefined),
+            likely: new Iso8601Duration(undefined),
+            pessimistic: new Iso8601Duration(undefined)
+        },
+        fix: { state: 'unknown' },
+        status: 'under_investigation',
+        simplified_status: 'Pending Assessment',
+        assessments: [],
+        variants: [],
+    };
+
+    const updatedVulnPayload = {
+        id: 'CVE-2010-1234',
+        found_by: [],
+        datasource: 'nvd',
+        namespace: 'nvd:cve',
+        aliases: [],
+        related_vulnerabilities: [],
+        urls: [],
+        texts: [{ title: 'description', content: 'Refreshed NVD description' }],
+        fix: { state: 'unknown' },
+        severity: { severity: 'high', min_score: 8.1, max_score: 8.1, cvss: [] },
+        epss: { score: 0.5, percentile: 0.8 },
+        effort: {},
+        packages: ['pkg@1.0.0'],
+        packages_current: [],
+        assessments: [],
+        variants: [],
+        status: 'under_investigation',
+        simplified_status: 'Pending Assessment',
+    };
+
+    test('refresh button renders in header when not readOnly', () => {
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        expect(screen.getByTitle('Refresh from NVD')).toBeInTheDocument();
+    });
+
+    test('refresh button is not rendered in readOnly mode', () => {
+        render(<VulnModal vuln={vulnerability} readOnly={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        expect(screen.queryByTitle('Refresh from NVD')).not.toBeInTheDocument();
+    });
+
+    test('calls patchVuln with updated vulnerability on successful refresh', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] }));
+
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByTitle('Refresh from NVD'));
+
+        await waitFor(() => {
+            expect(patchVuln).toHaveBeenCalledWith(vulnerability.id, expect.objectContaining({ id: vulnerability.id }));
+        });
+    });
+
+    test('preserves VEX status, assessments, packages_current, variants and found_by from original vuln after refresh', async () => {
+        const assessment = {
+            id: 'a1', vuln_id: 'CVE-2010-1234', variant_id: 'v1', timestamp: '2025-01-01T00:00:00Z',
+            status: 'not_affected', simplified_status: 'Not Affected',
+            justification: 'component_not_present', impact_statement: '', status_notes: '', workaround: '',
+            packages: [], origin: '', responses: [],
+        };
+        const vulnWithAssessment: Vulnerability = {
+            ...vulnerability,
+            found_by: ['grype', 'osv'],
+            status: 'not_affected',
+            simplified_status: 'Not Affected',
+            assessments: [assessment],
+            packages_current: ['libfoo@1.2.3'],
+            variants: ['variant-a'],
+        };
+
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] }));
+
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={vulnWithAssessment} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByTitle('Refresh from NVD'));
+
+        await waitFor(() => {
+            expect(patchVuln).toHaveBeenCalledWith(
+                vulnWithAssessment.id,
+                expect.objectContaining({
+                    found_by: ['grype', 'osv'],
+                    status: 'not_affected',
+                    simplified_status: 'Not Affected',
+                    assessments: [assessment],
+                    packages_current: ['libfoo@1.2.3'],
+                    variants: ['variant-a'],
+                })
+            );
+        });
+    });
+
+    test('shows "Updated" success cue after a successful refresh', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] }));
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByTitle('Refresh from NVD'));
+
+        await waitFor(() => {
+            expect(screen.getByText('Updated')).toBeInTheDocument();
+        });
+    });
+
+    test('shows error message when NVD refresh API is unavailable', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 });
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByTitle('Refresh from NVD'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/NVD API unavailable/i)).toBeInTheDocument();
+        });
+    });
+
+    test('clears success cue and error when navigating to a different vulnerability', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponse(JSON.stringify([])); // all fetches return empty
+
+        const vuln2: Vulnerability = { ...vulnerability, id: 'CVE-2020-9999' };
+        const { rerender } = render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // Simulate navigating to a different vuln (prop changes)
+        rerender(<VulnModal vuln={vuln2} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(screen.queryByText('Updated')).not.toBeInTheDocument();
+        expect(screen.queryByText(/NVD API unavailable/i)).not.toBeInTheDocument();
     });
 });

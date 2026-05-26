@@ -1,7 +1,10 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from flask import request
+import datetime
+import os
+
+from flask import jsonify, request
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload, aliased
 from ..models import (
@@ -18,6 +21,8 @@ from ..models import (
 )
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..extensions import db
+from ..controllers.nvd_db import NVD_DB
+from ..controllers.nvd_apply import apply_nvd_update
 from ..helpers.active_scans import (
     active_scan_ids_for_variant,
     active_scan_ids_for_project,
@@ -585,3 +590,68 @@ def init_app(app):
             response["errors"] = errors
             response["error_count"] = len(errors)
         return response, 200 if results else 400
+
+    @app.route('/api/vulnerabilities/<cve_id>/nvd-refresh', methods=['POST'])
+    def refresh_single_cve(cve_id):
+        cve_id_upper = cve_id.upper()
+        rec = db.session.get(Vulnerability, cve_id_upper)
+        if rec is None:
+            return jsonify({"error": "CVE not found"}), 404
+
+        try:
+            nvd = NVD_DB(nvd_api_key=os.getenv("NVD_API_KEY"))
+            status_code, data = nvd.api_get_cve(cve_id_upper, max_retries=0)
+        except Exception as e:
+            return jsonify({"error": f"NVD API unavailable: {e}"}), 503
+
+        if status_code != 200 or not data.get("vulnerabilities"):
+            return jsonify({"error": "NVD API returned no data for this CVE"}), 503
+
+        cve = data["vulnerabilities"][0]["cve"]
+        details = NVD_DB.extract_cve_details(cve)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        apply_nvd_update(rec, details, now)
+
+        # Update CVSS metric record if NVD returned score data
+        base_score = details.get("base_score")
+        cvss_version = details.get("cvss_version")
+        cvss_vector = details.get("cvss_vector")
+        if base_score is not None and cvss_version is not None:
+            existing = db.session.execute(
+                db.select(Metrics).where(
+                    Metrics.vulnerability_id == rec.id,
+                    Metrics.version == cvss_version,
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                if float(existing.score or 0) != float(base_score) or existing.vector != cvss_vector:
+                    existing.score = base_score
+                    existing.vector = cvss_vector or existing.vector
+            else:
+                db.session.add(Metrics(
+                    vulnerability_id=rec.id,
+                    version=cvss_version,
+                    score=base_score,
+                    vector=cvss_vector or "",
+                    author="nvd",
+                ))
+
+        db.session.commit()
+
+        # After commit, mapped columns are expired but transient attributes
+        # still hold pre-update values. Reload mapped columns then re-derive
+        # all transient attrs so to_dict() returns fresh data.
+        db.session.refresh(rec)
+        rec._init_transient()
+
+        # Repopulate transient severity scores from now-committed metrics so
+        # to_dict() returns correct min/max without a full controller preload.
+        for m in (rec.metrics or []):
+            if m.score is not None:
+                score = float(m.score)
+                if rec.severity_min_score is None or score < rec.severity_min_score:
+                    rec.severity_min_score = score
+                if rec.severity_max_score is None or score > rec.severity_max_score:
+                    rec.severity_max_score = score
+
+        return jsonify({"vulnerabilities": [rec.to_dict()]}), 200

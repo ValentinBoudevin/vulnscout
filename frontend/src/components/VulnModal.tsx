@@ -13,7 +13,7 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
@@ -23,6 +23,7 @@ import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, formatPkgId, extractSupplierName } from '../helpers/pkgId';
 import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback } from "react";
+import NvdRefreshHandler from "../handlers/nvdRefresh";
 
 type Props = {
     vuln: Vulnerability;
@@ -114,6 +115,9 @@ type AssessmentGroup = {
     const [bannerMessage, setBannerMessage] = useState("");
     const [bannerType, setBannerType] = useState<"error" | "success">("error");
     const [showBanner, setShowBanner] = useState(false);
+    const [nvdRefreshing, setNvdRefreshing] = useState(false);
+    const [nvdRefreshError, setNvdRefreshError] = useState<string | null>(null);
+    const [nvdRefreshDone, setNvdRefreshDone] = useState(false);
 
     const modalRef = useRef<HTMLDivElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -148,6 +152,12 @@ type AssessmentGroup = {
         if (modalRef.current) {
             modalRef.current.scrollTop = 0;
         }
+    }, [vuln.id]);
+
+    useEffect(() => {
+        setNvdRefreshing(false);
+        setNvdRefreshError(null);
+        setNvdRefreshDone(false);
     }, [vuln.id]);
 
     const showMessage = (message: string, type: "error" | "success") => {
@@ -204,6 +214,41 @@ type AssessmentGroup = {
     const navigationInfo = vulnerabilities && currentIndex !== undefined
         ? `Vulnerability ${currentIndex + 1} of ${vulnerabilities.length}`
         : null;
+
+    const handleNvdRefresh = useCallback(async () => {
+        setNvdRefreshing(true);
+        setNvdRefreshError(null);
+        setNvdRefreshDone(false);
+        try {
+            const updated = await NvdRefreshHandler.triggerSingleRefresh(vuln.id);
+            if (updated === null) {
+                setNvdRefreshError("NVD API unavailable. Please try again later.");
+            } else {
+                // Strip out fields that asVulnerability() fills with defaults but the
+                // NVD refresh API doesn't actually provide (to_dict() omits them, or
+                // returns empty because the route doesn't run the full post-processing
+                // pipeline the main list endpoint does).
+                // Then overlay the genuine NVD updates on top of the original vuln
+                // so every non-refreshed column keeps its current value.
+                const {
+                    status: _s,
+                    simplified_status: _ss,
+                    assessments: _a,
+                    packages_current: _pc,
+                    variants: _v,
+                    found_by: _fb,
+                    ...nvdUpdates
+                } = updated;
+                const merged = { ...vuln, ...nvdUpdates };
+                patchVuln(vuln.id, merged);
+                setNvdRefreshDone(true);
+            }
+        } catch {
+            setNvdRefreshError("NVD API unavailable. Please try again later.");
+        } finally {
+            setNvdRefreshing(false);
+        }
+    }, [vuln, patchVuln]);
 
     const handleEditAssessment = (assessmentId: string, group: AssessmentGroup) => {
         setEditingAssessmentId(assessmentId);
@@ -757,6 +802,31 @@ type AssessmentGroup = {
                                 )}
                             </div>
 
+                            {!readOnly && (
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={handleNvdRefresh}
+                                        disabled={nvdRefreshing}
+                                        title="Refresh from NVD"
+                                        type="button"
+                                        className={`px-3 py-2 text-sm font-medium focus:outline-none rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                                            nvdRefreshDone
+                                                ? 'text-green-400 border-green-600 hover:bg-green-900 bg-transparent'
+                                                : 'border-gray-600 hover:bg-gray-600 hover:text-white bg-transparent text-gray-300'
+                                        }`}
+                                    >
+                                        <FontAwesomeIcon
+                                            icon={nvdRefreshDone ? faCheck : faRotate}
+                                            className={nvdRefreshing ? "animate-spin" : ""}
+                                        />
+                                        {nvdRefreshDone && <span className="ml-2 text-xs">Updated</span>}
+                                    </button>
+                                    {nvdRefreshError && (
+                                        <span className="text-xs text-red-400">{nvdRefreshError}</span>
+                                    )}
+                                </div>
+                            )}
+
                             {!readOnly && <button
                                 onClick={() => setIsEditing(!isEditing)}
                                 type="button"
@@ -1077,7 +1147,7 @@ type AssessmentGroup = {
                                 )}
                             </div>
                         ) : (
-                            <div></div>
+                            <div />
                         )}
                         <button
                             onClick={handleClose}
