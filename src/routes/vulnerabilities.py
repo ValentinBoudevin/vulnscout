@@ -23,7 +23,6 @@ from ..helpers.datetime_utils import ensure_utc_iso
 from ..extensions import db
 from ..controllers.nvd_db import NVD_DB
 from ..controllers.nvd_apply import apply_nvd_update
-from ..helpers.verbose import verbose
 from ..helpers.active_scans import (
     active_scan_ids_for_variant,
     active_scan_ids_for_project,
