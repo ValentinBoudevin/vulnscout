@@ -5,6 +5,7 @@ import uuid
 from typing import Optional
 
 from ..models.time_estimate import TimeEstimate
+from ._base import ensure_uuid, resolve_entity
 
 
 class TimeEstimateController:
@@ -43,9 +44,7 @@ class TimeEstimateController:
     @staticmethod
     def get(estimate_id: uuid.UUID | str) -> Optional[TimeEstimate]:
         """Return the time estimate matching *estimate_id*, or ``None`` if not found."""
-        if isinstance(estimate_id, str):
-            estimate_id = uuid.UUID(estimate_id)
-        return TimeEstimate.get_by_id(estimate_id)
+        return TimeEstimate.get_by_id(ensure_uuid(estimate_id))
 
     @staticmethod
     def get_by_finding(finding_id: uuid.UUID | str) -> list[TimeEstimate]:
@@ -97,13 +96,7 @@ class TimeEstimateController:
 
         :raises ValueError: if the estimate is not found, or ordering constraints are violated.
         """
-        if isinstance(estimate, TimeEstimate):
-            resolved = estimate
-        else:
-            found = TimeEstimateController.get(estimate)
-            if found is None:
-                raise ValueError("TimeEstimate not found.")
-            resolved = found
+        resolved = resolve_entity(estimate, TimeEstimateController.get, "TimeEstimate")
 
         new_opt = optimistic if optimistic is not None else resolved.optimistic
         new_lik = likely if likely is not None else resolved.likely
@@ -121,11 +114,5 @@ class TimeEstimateController:
 
         :raises ValueError: if the estimate is not found.
         """
-        if isinstance(estimate, TimeEstimate):
-            resolved = estimate
-        else:
-            found = TimeEstimateController.get(estimate)
-            if found is None:
-                raise ValueError("TimeEstimate not found.")
-            resolved = found
+        resolved = resolve_entity(estimate, TimeEstimateController.get, "TimeEstimate")
         resolved.delete()

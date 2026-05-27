@@ -3,6 +3,7 @@
 
 from flask import request
 from datetime import datetime
+import re
 from ..models.assessment import Assessment as DBAssessment, STATUS_TO_SIMPLIFIED
 from ..models.package import Package
 from ..models.finding import Finding
@@ -14,15 +15,40 @@ from ..helpers.verbose import verbose
 from ..extensions import db, batch_session
 from ..models.vulnerability import Vulnerability as DBVuln
 from ..models.variant import Variant as DBVariant
+from ._scan_helpers import parse_uuid_or_400
 from ..helpers.assessment_io import (
     build_openvex_archive,
     is_openvex_doc,
     import_statements as _import_openvex_statements,
     build_variant_by_name_map,
     import_archive_bytes,
+    build_custom_data_export,
+    import_custom_data,
 )
 
 OPENVEX_FILE = "/scan/outputs/openvex.json"
+
+_SCANNER_AUTHORS = {
+    "nvd",
+    "unknown",
+    "nvd@nist.gov",
+    "security-advisories@github.com",
+    "cve@mitre.org",
+    "secalert@redhat.com",
+    "cna@cloudflare.com",
+}
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _is_scanner_author(author: str | None) -> bool:
+    if not author:
+        return True
+    a = author.strip().lower()
+    if a in _SCANNER_AUTHORS:
+        return True
+    if _UUID_RE.match(a):
+        return True
+    return False
 
 
 def _resolve_package(pkg_string_id: str) -> "Package":
@@ -32,6 +58,29 @@ def _resolve_package(pkg_string_id: str) -> "Package":
     _supplier = _parts[1] if len(_parts) > 1 else ""
     name, version = _base.rsplit("@", 1) if "@" in _base else (_base, "")
     return Package.find_or_create(name, version, supplier=_supplier)
+
+
+def _create_assessment_record(assessment, finding_id, variant_id, timestamp=None):
+    """Create a single DBAssessment row from a validated DTO.
+
+    Shared between ``add_assessment`` (single) and ``add_assessments_batch``.
+    """
+    kwargs = dict(
+        status=assessment.status,
+        simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
+        finding_id=finding_id,
+        variant_id=variant_id,
+        origin="custom",
+        status_notes=assessment.status_notes,
+        justification=assessment.justification,
+        impact_statement=assessment.impact_statement,
+        workaround=getattr(assessment, "workaround", None),
+        responses=list(assessment.responses) if assessment.responses else [],
+        commit=True,
+    )
+    if timestamp is not None:
+        kwargs["timestamp"] = timestamp
+    return DBAssessment.create(**kwargs)
 
 
 def init_app(app):
@@ -64,19 +113,15 @@ def init_app(app):
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         if variant_id:
-            import uuid
-            try:
-                variant_uuid = uuid.UUID(variant_id)
-            except ValueError:
-                return {"error": "Invalid variant_id"}, 400
+            variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
             assessments = [a.to_dict() for a in DBAssessment.get_by_variant(variant_uuid)]
         elif project_id:
-            import uuid
             from ..models.variant import Variant as DBVariant
-            try:
-                project_uuid = uuid.UUID(project_id)
-            except ValueError:
-                return {"error": "Invalid project_id"}, 400
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
             variants = DBVariant.get_by_project(project_uuid)
             variant_ids = [v.id for v in variants]
             if variant_ids:
@@ -99,22 +144,19 @@ def init_app(app):
         vulnerability's ``texts`` dict so the front-end can display tooltips
         without extra requests.
         """
-        import uuid as _uuid
         from ..models.variant import Variant as DBVariant
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         vid = None
         if variant_id:
-            try:
-                vid = _uuid.UUID(variant_id)
-            except ValueError:
-                return {"error": "Invalid variant_id"}, 400
+            vid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
             assessments = [a.to_dict() for a in DBAssessment.get_handmade([vid])]
         elif project_id:
-            try:
-                pid = _uuid.UUID(project_id)
-            except ValueError:
-                return {"error": "Invalid project_id"}, 400
+            pid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
             variant_ids = [variant.id for variant in DBVariant.get_by_project(pid)]
             assessments = [a.to_dict() for a in DBAssessment.get_handmade(variant_ids)]
         else:
@@ -301,7 +343,7 @@ def init_app(app):
                 }, 400
 
             try:
-                data = json.load(uploaded)
+                data = json.load(uploaded.stream)
             except Exception:
                 return {"error": "Invalid JSON file"}, 400
 
@@ -317,6 +359,252 @@ def init_app(app):
             return {"status": "success", "imported": len(created), "skipped": skipped, "errors": errors}, 200
 
         return {"error": "Unsupported file type. Please upload a .json or .tar.gz file."}, 400
+
+    @app.route('/api/assessments/review/time-estimates')
+    def review_time_estimates():
+        """Return vulnerabilities that have non-zero time estimates.
+
+        Each entry contains the vulnerability ID and its three-point estimate
+        (optimistic / likely / pessimistic) as ISO 8601 durations plus the
+        raw hour values.
+        """
+        from ..models.time_estimate import TimeEstimate
+        from ..models.iso8601_duration import Iso8601Duration
+        from ..models.variant import Variant as DBVariant
+        from sqlalchemy.orm import joinedload
+
+        variant_id = request.args.get('variant_id')
+        project_id = request.args.get('project_id')
+
+        query = (
+            db.select(TimeEstimate)
+            .options(joinedload(TimeEstimate.finding))
+            .where(
+                db.or_(
+                    TimeEstimate.optimistic > 0,
+                    TimeEstimate.likely > 0,
+                    TimeEstimate.pessimistic > 0,
+                )
+            )
+        )
+
+        variant_ids_filter: list | None = None
+        if variant_id:
+            vid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            variant_ids_filter = [vid]
+        elif project_id:
+            pid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+            variant_ids_filter = [v.id for v in DBVariant.get_by_project(pid)]
+
+        if variant_ids_filter is not None:
+            query = query.where(
+                db.or_(
+                    TimeEstimate.variant_id.in_(variant_ids_filter),
+                    TimeEstimate.variant_id.is_(None),
+                )
+            )
+
+        all_te = list(db.session.execute(query).scalars().all())
+
+        def _hours_to_iso(h: int) -> str:
+            try:
+                return str(Iso8601Duration(f"PT{h}H"))
+            except (ValueError, TypeError):
+                return f"PT{h}H"
+
+        vuln_map: dict[str, dict] = {}
+        for te in all_te:
+            if te.finding is None:
+                continue
+            vid = te.finding.vulnerability_id
+            if vid in vuln_map:
+                continue
+            opt = te.optimistic or 0
+            lik = te.likely or 0
+            pes = te.pessimistic or 0
+            vuln = DBVuln.get_by_id(vid)
+            vuln_map[vid] = {
+                "vuln_id": vid,
+                "optimistic": opt,
+                "likely": lik,
+                "pessimistic": pes,
+                "optimistic_iso": _hours_to_iso(opt),
+                "likely_iso": _hours_to_iso(lik),
+                "pessimistic_iso": _hours_to_iso(pes),
+                "vuln_texts": dict(vuln.texts or {}) if vuln else {},
+            }
+
+        return sorted(vuln_map.values(), key=lambda x: x["vuln_id"])
+
+    @app.route('/api/assessments/review/custom-cvss')
+    def review_custom_cvss():
+        """Return vulnerabilities that have custom CVSS scores.
+
+        A custom CVSS score is identified by ``origin == 'custom'``.
+        """
+        from ..models.metrics import Metrics
+        from ..models.observation import Observation
+        from ..models.scan import Scan
+
+        variant_id = request.args.get('variant_id')
+        project_id = request.args.get('project_id')
+
+        query = db.select(Metrics).where(Metrics.origin == "custom")
+
+        vuln_ids_filter = None
+        if variant_id:
+            vid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            vuln_ids_filter = db.select(Finding.vulnerability_id).join(
+                Observation, Finding.id == Observation.finding_id
+            ).join(
+                Scan, Observation.scan_id == Scan.id
+            ).where(
+                Scan.variant_id == vid
+            ).distinct()
+        elif project_id:
+            pid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+            variant_ids = [v.id for v in DBVariant.get_by_project(pid)]
+            if variant_ids:
+                vuln_ids_filter = db.select(Finding.vulnerability_id).join(
+                    Observation, Finding.id == Observation.finding_id
+                ).join(
+                    Scan, Observation.scan_id == Scan.id
+                ).where(
+                    Scan.variant_id.in_(variant_ids)
+                ).distinct()
+            else:
+                vuln_ids_filter = db.select(Finding.vulnerability_id).where(db.false())
+
+        if vuln_ids_filter is not None:
+            query = query.where(Metrics.vulnerability_id.in_(vuln_ids_filter))
+
+        all_metrics = list(db.session.execute(query).scalars().all())
+
+        result: list[dict] = []
+        for m in sorted(all_metrics, key=lambda m: m.vulnerability_id):
+            if _is_scanner_author(m.author):
+                continue
+            vuln = DBVuln.get_by_id(m.vulnerability_id)
+            result.append({
+                "vuln_id": m.vulnerability_id,
+                "version": m.version or "",
+                "vector_string": m.vector or "",
+                "base_score": float(m.score) if m.score is not None else 0.0,
+                "author": m.author,
+                "origin": m.origin or "scanner",
+                "vuln_texts": dict(vuln.texts or {}) if vuln else {},
+            })
+
+        return result
+
+    @app.route('/api/assessments/review/export-custom-data')
+    def export_review_custom_data():
+        """Export handmade (review) assessments, custom CVSS scores and time
+        estimates as a single JSON file.
+
+        Query parameters:
+
+        * ``variant_id`` – restrict to a single variant.
+        * ``project_id`` – restrict to all variants in a project.
+        """
+        variant_id = request.args.get('variant_id')
+        project_id = request.args.get('project_id')
+
+        from ..models.project import Project as DBProject
+
+        variant_ids = None
+        project_name = None
+        if variant_id:
+            vid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            variant_ids = [vid]
+            variant = DBVariant.get_by_id(vid)
+            if variant and variant.project:
+                project_name = variant.project.name
+        elif project_id:
+            pid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+            project = DBProject.get_by_id(pid)
+            if project:
+                project_name = project.name
+            variants = DBVariant.get_by_project(pid)
+            variant_ids = [v.id for v in variants]
+
+        data = build_custom_data_export(variant_ids)
+
+        if not data["assessments"] and not data["cvss"] and not data["time_estimates"]:
+            return {"error": "No custom data to export"}, 404
+
+        import json as _json
+        import re as _re
+        json_bytes = _json.dumps(data, indent=2)
+        safe_name = _re.sub(r'[^\w\-.]', '_', project_name) if project_name else None
+        fname = f"custom_data_{safe_name}.json" if safe_name else "custom_data.json"
+        return json_bytes, 200, {
+            "Content-Type": "application/json",
+            "Content-Disposition": f'attachment; filename="{fname}"',
+        }
+
+    @app.route('/api/assessments/review/import-custom-data', methods=['POST'])
+    def import_review_custom_data():
+        """Import assessments, CVSS scores and time estimates from a custom-data
+        JSON file.
+
+        Accepts either:
+
+        * ``multipart/form-data`` with a ``file`` field containing a ``.json``
+          file.
+        * ``application/json`` body with the custom-data payload directly.
+
+        Optional query parameter ``variant_id`` to force all imported
+        assessments to a specific variant.
+        """
+        import json as _json
+
+        variant_id = None
+        raw_vid = request.args.get('variant_id')
+        if raw_vid:
+            variant_id, err = parse_uuid_or_400(raw_vid, "variant_id")
+            if err:
+                return err
+
+        # Parse the incoming data
+        data = None
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            uploaded = request.files.get('file')
+            if not uploaded or not uploaded.filename:
+                return {"error": "No file uploaded"}, 400
+            try:
+                data = _json.load(uploaded.stream)
+            except Exception:
+                return {"error": "Invalid JSON file"}, 400
+        elif request.content_type and 'application/json' in request.content_type:
+            data = request.get_json(silent=True)
+            if data is None:
+                return {"error": "Invalid JSON body"}, 400
+        else:
+            return {"error": "Expected multipart/form-data or application/json"}, 400
+
+        if not isinstance(data, dict) or "version" not in data:
+            return {"error": "Invalid custom-data format. Expected {version, assessments, ...}"}, 400
+
+        variant_by_name = build_variant_by_name_map()
+        result = import_custom_data(data, variant_by_name, variant_id)
+
+        _save_openvex()
+
+        status_code = 200 if result["status"] == "success" else 400
+        return result, status_code
 
     @app.route('/api/assessments/<assessment_id>')
     def assess_by_id(assessment_id: str):
@@ -378,16 +666,15 @@ def init_app(app):
         assessment, status = payload_to_assessment(payload_data)
         if status != 200:
             return assessment, status
+        assert isinstance(assessment, DBAssessment)
 
         # Resolve variant_id once — same for all packages in this request
         variant_id_raw = payload_data.get('variant_id') or None
         variant_id = None
         if variant_id_raw:
-            try:
-                import uuid as _uuid
-                variant_id = _uuid.UUID(variant_id_raw)
-            except (ValueError, AttributeError):
-                return {"error": "Invalid variant_id"}, 400
+            variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
+            if err:
+                return err
 
         # Persist to DB — one Assessment record per package
         # Use a single timestamp so grouped rows share the exact same value.
@@ -407,20 +694,8 @@ def init_app(app):
                     # Always create a new record — never merge with an existing one.
                     # from_vuln_assessment does a find-or-update which would overwrite
                     # previous user assessments on the same (finding, variant).
-                    db_a = DBAssessment.create(
-                        status=assessment.status,
-                        simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
-                        finding_id=finding.id,
-                        variant_id=variant_id,
-                        origin="custom",
-                        status_notes=assessment.status_notes,
-                        justification=assessment.justification,
-                        impact_statement=assessment.impact_statement,
-                        workaround=getattr(assessment, "workaround", None),
-                        responses=list(assessment.responses) if assessment.responses else [],
-                        timestamp=shared_timestamp,
-                        commit=True,
-                    )
+                    db_a = _create_assessment_record(
+                        assessment, finding.id, variant_id, timestamp=shared_timestamp)
                     created.append(db_a.to_dict())
         except Exception as e:
             return {"error": f"DB error: {e}"}, 500
@@ -452,18 +727,18 @@ def init_app(app):
 
                 assessment, status = payload_to_assessment(item)
                 if status != 200:
+                    assert isinstance(assessment, dict)
                     errors.append({"vuln_id": item.get("vuln_id"), "error": assessment.get("error", "Unknown error")})
                     continue
+                assert isinstance(assessment, DBAssessment)
 
                 vuln_id = assessment.vuln_id
                 # Parse optional variant_id from the raw item
                 variant_id_raw = item.get('variant_id') or None
                 variant_id = None
                 if variant_id_raw:
-                    try:
-                        import uuid as _uuid
-                        variant_id = _uuid.UUID(variant_id_raw)
-                    except (ValueError, AttributeError):
+                    variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
+                    if err:
                         errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
                         continue
                 pkg_list = assessment.packages or []
@@ -486,19 +761,8 @@ def init_app(app):
                             finding = Finding.get_or_create(db_pkg.id, vuln_id)
                             finding_cache[f_key] = finding
                         # Always create a new record — never overwrite an existing assessment
-                        db_a = DBAssessment.create(
-                            status=assessment.status,
-                            simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
-                            finding_id=finding.id,
-                            variant_id=variant_id,
-                            origin="custom",
-                            status_notes=assessment.status_notes,
-                            justification=assessment.justification,
-                            impact_statement=assessment.impact_statement,
-                            workaround=getattr(assessment, "workaround", None),
-                            responses=list(assessment.responses) if assessment.responses else [],
-                            commit=True,
-                        )
+                        db_a = _create_assessment_record(
+                            assessment, finding.id, variant_id)
                         results.append(db_a.to_dict())
                     except Exception as e:
                         errors.append({"vuln_id": vuln_id, "error": str(e)})

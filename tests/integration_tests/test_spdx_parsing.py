@@ -150,3 +150,131 @@ def test_parse_invalid_tagvalue(spdx_parser, spdx_tagvalue_file):
     with pytest.raises(Exception):
         spdx_parser.load_from_file(str(spdx_tagvalue_file))
         spdx_parser.parse_and_merge()
+
+
+def test_parse_cpe23type_externalrefs(spdx_parser):
+    """BOM cpe23Type externalRefs must be stored and appear before the generic CPE."""
+    spdx_parser.load_from_dict({
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "name": "test",
+        "spdxVersion": "SPDX-2.3",
+        "creationInfo": {"created": "2022-11-03T07:10:10Z", "creators": ["Tool: test"]},
+        "dataLicense": "CC0-1.0",
+        "documentNamespace": "https://example.com/test",
+        "packages": [
+            {
+                "SPDXID": "SPDXRef-libtasn1",
+                "name": "libtasn1-6",
+                "versionInfo": "4.13-2",
+                "filesAnalyzed": False,
+                "downloadLocation": "NOASSERTION",
+                "externalRefs": [
+                    {
+                        "referenceCategory": "SECURITY",
+                        "referenceType": "cpe23Type",
+                        "referenceLocator": "cpe:2.3:a:libtasn1:libtasn1_6:4.13-2:*:*:*:*:*:*:*"
+                    },
+                    {
+                        "referenceCategory": "SECURITY",
+                        "referenceType": "cpe23Type",
+                        "referenceLocator": "cpe:2.3:a:libtasn1-6:libtasn1-6:4.13-2:*:*:*:*:*:*:*"
+                    },
+                    {
+                        "referenceCategory": "PACKAGE-MANAGER",
+                        "referenceType": "purl",
+                        "referenceLocator": "pkg:deb/ubuntu/libtasn1-6@4.13-2?arch=arm64"
+                    }
+                ]
+            }
+        ]
+    })
+    spdx_parser.parse_and_merge()
+
+    pkg = spdx_parser.packagesCtrl.get("libtasn1-6@4.13-2")
+    assert pkg is not None
+
+    # BOM CPEs must be present
+    assert "cpe:2.3:a:libtasn1:libtasn1_6:4.13-2:*:*:*:*:*:*:*" in pkg.cpe
+    assert "cpe:2.3:a:libtasn1-6:libtasn1-6:4.13-2:*:*:*:*:*:*:*" in pkg.cpe
+
+    # First CPE must be a BOM CPE (not the generic wildcard)
+    assert pkg.cpe[0] == "cpe:2.3:a:libtasn1:libtasn1_6:4.13-2:*:*:*:*:*:*:*"
+
+    # Generic fallback must still be present (as last entry)
+    generic = "cpe:2.3:a:*:libtasn1-6:4.13-2:*:*:*:*:*:*:*"
+    assert generic in pkg.cpe
+    assert pkg.cpe[-1] == generic
+
+    # PURL must also be parsed
+    assert "pkg:deb/ubuntu/libtasn1-6@4.13-2?arch=arm64" in pkg.purl
+
+
+def test_parse_no_cpe23type_still_gets_generic(spdx_parser):
+    """Packages without cpe23Type externalRefs must still receive the generic CPE fallback."""
+    spdx_parser.load_from_dict({
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "name": "test",
+        "spdxVersion": "SPDX-2.3",
+        "creationInfo": {"created": "2022-11-03T07:10:10Z", "creators": ["Tool: test"]},
+        "dataLicense": "CC0-1.0",
+        "documentNamespace": "https://example.com/test",
+        "packages": [
+            {
+                "SPDXID": "SPDXRef-binutils",
+                "name": "binutils",
+                "versionInfo": "2.38",
+                "filesAnalyzed": False,
+                "downloadLocation": "NOASSERTION"
+            }
+        ]
+    })
+    spdx_parser.parse_and_merge()
+
+    pkg = spdx_parser.packagesCtrl.get("binutils@2.38")
+    assert pkg is not None
+    assert len(pkg.cpe) == 1
+    assert pkg.cpe[0] == "cpe:2.3:a:*:binutils:2.38:*:*:*:*:*:*:*"
+
+
+def test_device_and_os_packages_get_type_a_generic_cpe(spdx_parser):
+    """DEVICE and OPERATING-SYSTEM packages without cpe23Type refs get a type-a generic CPE.
+
+    primaryPackagePurpose is not used to generate h/o CPEs — BOM cpe23Type externalRefs
+    are the authoritative source for hardware/OS CPE types. When no cpe23Type refs are
+    present, the generic fallback (type a, wildcard vendor) is used for all packages.
+    """
+    spdx_parser.load_from_dict({
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "name": "test",
+        "spdxVersion": "SPDX-2.3",
+        "creationInfo": {"created": "2022-11-03T07:10:10Z", "creators": ["Tool: test"]},
+        "dataLicense": "CC0-1.0",
+        "documentNamespace": "https://example.com/test",
+        "packages": [
+            {
+                "SPDXID": "SPDXRef-board",
+                "name": "my-board",
+                "versionInfo": "rev1",
+                "filesAnalyzed": False,
+                "downloadLocation": "NOASSERTION",
+                "primaryPackagePurpose": "DEVICE"
+            },
+            {
+                "SPDXID": "SPDXRef-kernel",
+                "name": "linux",
+                "versionInfo": "6.8.0",
+                "filesAnalyzed": False,
+                "downloadLocation": "NOASSERTION",
+                "primaryPackagePurpose": "OPERATING-SYSTEM"
+            }
+        ]
+    })
+    spdx_parser.parse_and_merge()
+
+    board = spdx_parser.packagesCtrl.get("my-board@rev1")
+    assert board is not None
+    assert board.cpe == ["cpe:2.3:a:*:my-board:rev1:*:*:*:*:*:*:*"]
+
+    kernel = spdx_parser.packagesCtrl.get("linux@6.8.0")
+    assert kernel is not None
+    assert kernel.cpe == ["cpe:2.3:a:*:linux:6.8.0:*:*:*:*:*:*:*"]

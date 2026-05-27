@@ -206,52 +206,38 @@ class Templates:
 
         return template.render(**kwargs)
 
-    def adoc_to_pdf(self, adoc: str) -> bytes:
-        random_name = ''.join(random.choices(string.ascii_lowercase, k=8))
-        with open(f"{random_name}.adoc", "w+") as f:
-            f.write(adoc)
-
-        execution = subprocess.run(["asciidoctor-pdf", f"{random_name}.adoc"], capture_output=True)
-        if execution.returncode != 0:
-            print(execution.stdout)
-            print(execution.stderr)
-            try:
-                os.remove(f"{random_name}.adoc")
-                os.remove(f"{random_name}.pdf")
-            finally:
-                raise RuntimeError("Error converting adoc to pdf: asciidoctor returned non-zero exit code")
-
-        with open(f"{random_name}.pdf", "rb") as f:
-            pdf = f.read()
-        os.remove(f"{random_name}.adoc")
-        os.remove(f"{random_name}.pdf")
-        return pdf
-
-    def adoc_to_html(self, adoc: str) -> bytes:
+    def _run_asciidoctor(self, adoc: str, command: list[str], output_ext: str) -> bytes:
+        """Run an asciidoctor command on *adoc* text and return the converted bytes."""
         random_name = ''.join(random.choices(string.ascii_lowercase, k=8))
         adoc_path = f"{random_name}.adoc"
-        html_path = f"{random_name}.html"
+        output_path = f"{random_name}.{output_ext}"
+
         with open(adoc_path, "w+") as f:
             f.write(adoc)
 
-        # Use asciidoctor to render HTML
-        execution = subprocess.run(["asciidoctor", adoc_path], capture_output=True)
+        execution = subprocess.run(command + [adoc_path], capture_output=True)
         if execution.returncode != 0:
             print(execution.stdout)
             print(execution.stderr)
             try:
                 if os.path.exists(adoc_path):
                     os.remove(adoc_path)
-                if os.path.exists(html_path):
-                    os.remove(html_path)
+                if os.path.exists(output_path):
+                    os.remove(output_path)
             finally:
-                raise RuntimeError("Error converting adoc to html: asciidoctor returned non-zero exit code")
+                raise RuntimeError(f"Error converting adoc to {output_ext}: asciidoctor returned non-zero exit code")
 
-        with open(html_path, "rb") as f:
-            html = f.read()
+        with open(output_path, "rb") as f:
+            result = f.read()
         os.remove(adoc_path)
-        os.remove(html_path)
-        return html
+        os.remove(output_path)
+        return result
+
+    def adoc_to_pdf(self, adoc: str) -> bytes:
+        return self._run_asciidoctor(adoc, ["asciidoctor-pdf"], "pdf")
+
+    def adoc_to_html(self, adoc: str) -> bytes:
+        return self._run_asciidoctor(adoc, ["asciidoctor"], "html")
 
     def list_documents(self):
         docs = []
@@ -332,6 +318,11 @@ class TemplatesExtensions:
         return []
 
     @staticmethod
+    def _to_list(value: dict | list) -> list:
+        """Normalise *value* to a plain list (dict values or list copy)."""
+        return list(value.values()) if isinstance(value, dict) else list(value)
+
+    @staticmethod
     def filter_as_list(value: dict) -> list:
         return list(value.values())
 
@@ -340,26 +331,20 @@ class TemplatesExtensions:
         return value[:limit]
 
     @staticmethod
+    def _generic_sort(value: dict | list, key_getter, reverse: bool = True) -> list[dict]:
+        """Normalise *value* to a list and sort by *key_getter*."""
+        return sorted(TemplatesExtensions._to_list(value), key=key_getter, reverse=reverse)
+
+    @staticmethod
     def sort_by_epss(value: dict[str, dict[str, Any]] | list[dict[str, Any]]) -> list[dict[str, Any]]:
-        vals: List[dict[str, Any]]
-        if isinstance(value, dict):
-            vals = list(value.values())
-        else:
-            vals = list(value)
-        return sorted(
-            vals,
-            key=lambda x: float(((x.get("epss") or {}).get("score")) or 0.0),
-            reverse=True
+        return TemplatesExtensions._generic_sort(
+            value, key_getter=lambda x: float(((x.get("epss") or {}).get("score")) or 0.0)
         )
 
     @staticmethod
     def filter_epss_score(value: dict[str, dict[str, Any]] | list[dict[str, Any]], minimum: float
                           ) -> list[dict[str, Any]]:
-        vals: List[dict[str, Any]]
-        if isinstance(value, dict):
-            vals = list(value.values())
-        else:
-            vals = list(value)
+        vals = TemplatesExtensions._to_list(value)
         result: List[dict[str, Any]] = []
         for v in vals:
             score = 0.0
@@ -374,12 +359,8 @@ class TemplatesExtensions:
 
     @staticmethod
     def sort_by_effort(value: dict[str, dict] | list[dict]) -> list[dict]:
-        if type(value) is dict:
-            value = list(value.values())
-        return sorted(
-            value,  # type: ignore
-            key=lambda x: Iso8601Duration(x["effort"]["likely"] or "P0D").total_seconds,
-            reverse=True
+        return TemplatesExtensions._generic_sort(
+            value, key_getter=lambda x: Iso8601Duration(x["effort"]["likely"] or "P0D").total_seconds
         )
 
     @staticmethod
@@ -392,9 +373,9 @@ class TemplatesExtensions:
 
     @staticmethod
     def sort_by_last_modified(value: dict[str, dict] | list[dict]) -> list[dict]:
-        if type(value) is dict:
-            value = list(value.values())
-        return sorted(value, key=lambda x: x["last_assessment"]["timestamp"] or "", reverse=True)  # type: ignore
+        return TemplatesExtensions._generic_sort(
+            value, key_getter=lambda x: x["last_assessment"]["timestamp"] or ""
+        )
 
     @staticmethod
     def _filter_by_date(
@@ -536,7 +517,7 @@ class TemplatesExtensions:
         Returns:
             List of filtered vulnerabilities
         """
-        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
+        vals = TemplatesExtensions._to_list(value)
 
         def get_date(v: dict) -> Optional[str]:
             la = v.get("last_assessment")
@@ -570,7 +551,7 @@ class TemplatesExtensions:
         Returns:
             List of filtered vulnerabilities
         """
-        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
+        vals = TemplatesExtensions._to_list(value)
 
         def get_date(v: dict) -> Optional[str]:
             return v.get("published") or None
@@ -582,15 +563,16 @@ class TemplatesExtensions:
 
     @staticmethod
     def filter_by_variant(value: dict[str, dict] | list[dict], variant_id: str) -> list[dict]:
-        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
+        vals = TemplatesExtensions._to_list(value)
         return [v for v in vals if v.get("variant_id") == variant_id or variant_id in v.get("variant_ids", [])]
 
     @staticmethod
     def filter_by_project(value: dict[str, dict] | list[dict], project_id: str) -> list[dict]:
-        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
+        vals = TemplatesExtensions._to_list(value)
         return [v for v in vals if v.get("project_id") == project_id]
 
     @staticmethod
     def sort_by_scan_date(value: dict[str, dict] | list[dict]) -> list[dict]:
-        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
-        return sorted(vals, key=lambda x: x.get("timestamp") or "", reverse=True)
+        return TemplatesExtensions._generic_sort(
+            value, key_getter=lambda x: x.get("timestamp") or ""
+        )

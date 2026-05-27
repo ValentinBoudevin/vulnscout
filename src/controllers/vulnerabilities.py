@@ -5,7 +5,9 @@ import datetime
 import time
 import os
 import json
+import typing
 import urllib.request
+import urllib.error
 from typing import Optional
 
 from ..models.vulnerability import Vulnerability
@@ -13,6 +15,7 @@ from ..controllers.packages import PackagesController
 from ..controllers.epss_db import EPSS_DB
 from ..controllers.nvd_db import NVD_DB
 from ..helpers.verbose import verbose
+from ._base import to_dict_with_fallback
 from ..models.cvss import CVSS
 from ..models.metrics import Metrics as MetricsModel
 from ..extensions import db
@@ -73,7 +76,21 @@ def _should_refetch(fetched_at: Optional[datetime.datetime], delay: Optional[dat
         return True
     if delay is _NEVER:
         return False
+    assert delay is not None
     return (datetime.datetime.utcnow() - fetched_at) >= delay
+
+
+def _batch_commit(done: int, total: int, label: str) -> None:
+    """Try to commit the DB session and log progress.
+
+    On failure, roll back and log via :func:`verbose`.
+    """
+    try:
+        db.session.commit()
+        print(f"=== {label}: committed {done}/{total}", flush=True)
+    except Exception as e:
+        verbose(f"[{label} commit at {done}] {e}")
+        db.session.rollback()
 
 
 def _persist_vuln_to_db(
@@ -135,7 +152,7 @@ class VulnerabilitiesController:
 
     def __init__(self, pkgCtrl: PackagesController):
         """Take an instance of PackagesController to resolve package dependencies as parameter."""
-        self.packagesCtrl = pkgCtrl
+        self.packagesCtrl: PackagesController = pkgCtrl
         self.vulnerabilities: dict[str, Vulnerability] = {}
         """A dictionary of vulnerabilities, indexed by their id."""
         self.alias_registered: dict[str, str] = {}
@@ -180,6 +197,7 @@ class VulnerabilitiesController:
                             float(m.score) if m.score is not None else 0.0,
                             0.0,
                             0.0,
+                            m.origin or "scanner",
                         ))
                     except Exception as e:
                         verbose(f"[VulnerabilitiesController._preload_cache register_cvss {rec.id!r}] {e}")
@@ -202,7 +220,7 @@ class VulnerabilitiesController:
             verbose(f"[VulnerabilitiesController._preload_cache] {e}")
     # ------------------------------------------------------------------
 
-    def get(self, vuln_id: str):
+    def get(self, vuln_id: str) -> Vulnerability | None:
         """Return a vulnerability by id (str) or None if not found. Also look for aliases."""
         if vuln_id in self.vulnerabilities:
             return self.vulnerabilities[vuln_id]
@@ -219,7 +237,7 @@ class VulnerabilitiesController:
             verbose(f"[VulnerabilitiesController.get {vuln_id!r}] {e}")
         return None
 
-    def add(self, vulnerability: Vulnerability) -> Optional[Vulnerability]:
+    def add(self, vulnerability: Vulnerability) -> Vulnerability:
         """
         Add a vulnerability to the list, merging it with an existing one if present.
         Return the vulnerability as is if added, or the merged vulnerability if already existing.
@@ -228,8 +246,6 @@ class VulnerabilitiesController:
         and have not gained new packages in this call — avoiding redundant
         get_by_id SELECTs and update_record commits on every re-encounter.
         """
-        if vulnerability is None:
-            return
         _caches = dict(
             pkg_id_cache=self.packagesCtrl._db_id_cache,
             finding_cache=self.packagesCtrl._finding_cache,
@@ -361,7 +377,7 @@ class VulnerabilitiesController:
             msg += f" ({skipped_fresh} already up-to-date, skipped)"
         print(msg, flush=True)
 
-        tracker = EPSSProgressTracker()
+        tracker = EPSSProgressTracker
         tracker.start("epss_enrichment")
         tracker.update("epss_enrichment", 0, total, f"EPSS enrichment: 0/{total}")
 
@@ -403,12 +419,7 @@ class VulnerabilitiesController:
             tracker.update("epss_enrichment", processed, total, f"EPSS enrichment: {processed}/{total}")
             # Commit once every 500 CVEs processed.
             if processed % DB_COMMIT_EVERY < BATCH_SIZE:
-                try:
-                    db.session.commit()
-                    print(f"=== EPSS: committed {processed}/{total}", flush=True)
-                except Exception as e:
-                    verbose(f"[fetch_epss_scores commit at {processed}] {e}")
-                    db.session.rollback()
+                _batch_commit(processed, total, "EPSS")
 
         # Final commit for any remaining deferred EPSS updates.
         try:
@@ -529,7 +540,7 @@ class VulnerabilitiesController:
         if skipped_fresh:
             msg += f" ({skipped_fresh} already up-to-date, skipped)"
         print(msg, flush=True)
-        tracker = NVDProgressTracker()
+        tracker = NVDProgressTracker
         tracker.start("nvd_enrichment")
 
         # NVD lookups via API
@@ -583,12 +594,7 @@ class VulnerabilitiesController:
             done += 1
             tracker.update("nvd_enrichment", done, total, f"NVD enrichment: {done}/{total} ({vuln.id})")
             if done % DB_COMMIT_EVERY == 0:
-                try:
-                    db.session.commit()
-                    print(f"=== NVD: committed {done}/{total}", flush=True)
-                except Exception as e:
-                    verbose(f"[fetch_nvd_data commit at {done}] {e}")
-                    db.session.rollback()
+                _batch_commit(done, total, "NVD")
 
         # Fetch GHSA dates concurrently with a thread pool and a timeout
         if ghsa_vulns:
@@ -635,13 +641,10 @@ class VulnerabilitiesController:
 
     def to_dict(self) -> dict:
         """Export the list of vulnerabilities preferring in-memory data when available."""
-        if self.vulnerabilities:
-            return {k: v.to_dict() for k, v in self.vulnerabilities.items()}
-        try:
-            return {r.id: r.to_dict() for r in Vulnerability.get_all()}
-        except Exception as e:
-            verbose(f"[VulnerabilitiesController.to_dict] {e}")
-            return {}
+        return to_dict_with_fallback(
+            self.vulnerabilities, Vulnerability.get_all,
+            lambda r: r.id, "VulnerabilitiesController",
+        )
 
     @staticmethod
     def from_dict(pkgCtrl, data: dict):
@@ -684,7 +687,7 @@ class VulnerabilitiesController:
         """Return the number of vulnerabilities in the list."""
         return len(self.vulnerabilities)
 
-    def __iter__(self):
+    def __iter__(self) -> typing.Iterator[Vulnerability]:
         """Allow iteration over the list of vulnerabilities.
 
         When the in-memory dict is populated (during scan processing) it is

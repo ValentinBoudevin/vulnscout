@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """SBOM ingestion & processing commands: ``flask merge`` and ``flask process``."""
 
+from __future__ import annotations
+
 from ..views.cyclonedx import CycloneDx
 from ..views.spdx import SPDX
 from ..views.fast_spdx import FastSPDX
@@ -10,12 +12,7 @@ from ..views.openvex import OpenVex
 from ..views.yocto_vulns import YoctoVulns
 from ..views.grype_vulns import GrypeVulns
 from ..views.templates import Templates
-from ..controllers.packages import PackagesController
-from ..controllers.vulnerabilities import VulnerabilitiesController
-from ..controllers.assessments import AssessmentsController
 from ..controllers.conditions_parser import ConditionParser
-from ..controllers.projects import ProjectController
-from ..controllers.variants import VariantController
 from ..controllers.scans import ScanController
 from ..controllers.sbom_documents import SBOMDocumentController
 from ..models.sbom_document import SBOMDocument
@@ -29,10 +26,15 @@ from ..extensions import batch_session, db as _db
 import click
 import json
 import os
+from typing import TYPE_CHECKING
 from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
+from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant, build_controllers
 
-DEFAULT_VARIANT_NAME = "default"
+if TYPE_CHECKING:
+    from ..controllers.packages import PackagesController
+    from ..controllers.vulnerabilities import VulnerabilitiesController
+    from ..controllers.assessments import AssessmentsController
 
 
 def _ts_key(ts) -> str:
@@ -108,11 +110,11 @@ def read_inputs(controllers, scan_id=None):
     if use_fastspdx:
         verbose("merger_ci: Using FastSPDX parser")
 
-    pkgCtrl = controllers["packages"]
+    pkgCtrl: PackagesController = controllers["packages"]
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
 
     for doc in docs:
-        pkgCtrl.set_sbom_document(doc.id)
+        pkgCtrl.current_sbom_document = doc
         try:
             verbose(f"merger_ci: Reading {doc.path} (format={doc.format!r})")
             with open(doc.path, "r") as f:
@@ -161,7 +163,7 @@ def read_inputs(controllers, scan_id=None):
             else:
                 print(f"Ignored: Error parsing {doc.path}: {e}")
         finally:
-            pkgCtrl.set_sbom_document(None)
+            pkgCtrl.current_sbom_document = None
 
     return {
         "cdx": cdx,
@@ -202,8 +204,7 @@ def create_project_context(
     """
     variant_name = variant or DEFAULT_VARIANT_NAME
 
-    project_obj = ProjectController.get_or_create(project)
-    variant_obj = VariantController.get_or_create(variant_name, project_obj.id)
+    project_obj, variant_obj = resolve_project_variant(project, variant, create=True)
 
     # Determine scan type: if there are any SBOM inputs (spdx, cdx, yocto_cve)
     # or openvex, it's an "sbom" scan.  Grype-only → "tool" scan.
@@ -303,18 +304,12 @@ def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None
 
 def _run_main() -> dict:
     """Core processing logic (usable both from the CLI command and directly)."""
-    pkgCtrl = PackagesController()
-    # pkgCtrl._preload_cache()  # bulk-load pkg UUIDs + findings into cache; eliminates per-vuln SELECT queries
-    vulnCtrl = VulnerabilitiesController(pkgCtrl)
-    assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
+    controllers = build_controllers()
+    vulnCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
+    assessCtrl: AssessmentsController = controllers["assessments"]
     latest_scan = ScanModel.get_latest()
     if latest_scan:
         assessCtrl.current_variant_id = latest_scan.variant_id
-    controllers = {
-        "packages": pkgCtrl,
-        "vulnerabilities": vulnCtrl,
-        "assessments": assessCtrl
-    }
 
     # Wrap all ingestion + post-treatment inside batch_session so that the
     # hundreds/thousands of individual model commit() calls are deferred to a

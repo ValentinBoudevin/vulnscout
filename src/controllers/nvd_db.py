@@ -78,13 +78,17 @@ class NVD_DB(BaseAPIClient):
             print(f"Error calling NVD API: {e}", flush=True)
             raise e
 
-    def api_get_cve(self, cve_id: str) -> Tuple[int, dict]:
+    def api_get_cve(self, cve_id: str, max_retries: int = 3) -> Tuple[int, dict]:
         """
         Call the NVD API to get a specific CVE.
+
+        *max_retries* caps the number of retry attempts (default 3).
+        Pass ``max_retries=0`` for a single non-blocking attempt suitable
+        for user-triggered, synchronous request contexts.
         """
         retry = 0
         status = 0
-        while retry <= 3:
+        while retry <= max_retries:
             time.sleep(10 * retry)
             status, data = self._call_nvd_api({"cveId": cve_id.strip()})
             if status == 200:

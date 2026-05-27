@@ -4,9 +4,47 @@
 import uuid
 import re
 import hashlib
+import typing
 import semver
 from typing import Optional
+
+from sqlalchemy import JSON
+from sqlalchemy.orm import Mapped, relationship, mapped_column
+
 from ..extensions import db, Base
+
+
+if typing.TYPE_CHECKING:
+    from ..models import SBOMPackage, Finding
+from packageurl import PackageURL
+
+
+def _normalize_purl(purl: str) -> str:
+    """Normalize PURL to a canonical form.
+
+    Handles two normalizations for ``deb`` and ``rpm`` type PURLs:
+    - URL-decodes percent-encoded characters in the version (e.g. ``2%3A`` → ``2:``)
+    - Moves ``epoch=N`` qualifier into the version field as ``N:version``
+
+    ``epoch`` is the only qualifier that requires this special treatment per the PURL spec.
+    All other standard normalizations (qualifier ordering, component encoding) are handled
+    transparently by the ``packageurl-python`` library during parse and re-serialisation.
+
+    Falls back to the original string if parsing fails.
+    """
+    try:
+        p = PackageURL.from_string(purl)
+        if p.type in ("deb", "rpm") and p.qualifiers and "epoch" in p.qualifiers and p.version is not None:
+            epoch = p.qualifiers["epoch"]
+            new_qualifiers = {k: v for k, v in p.qualifiers.items() if k != "epoch"}
+            new_version = f"{epoch}:{p.version}"
+            p = PackageURL(
+                type=p.type, namespace=p.namespace, name=p.name,
+                version=new_version, qualifiers=new_qualifiers or None, subpath=p.subpath
+            )
+        return str(p)
+    except Exception:
+        return purl
 
 
 class Package(Base):
@@ -19,21 +57,27 @@ class Package(Base):
 
     __tablename__ = "packages"
 
-    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    name = db.Column(db.String, nullable=True)
-    version = db.Column(db.String, nullable=True)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str | None]  # Nullable, really? TODO investigate
+    version: Mapped[str | None]
     # TODO: Spin-off CPE and PURL into separate tables
-    cpe = db.Column(db.JSON, nullable=True)
-    purl = db.Column(db.JSON, nullable=True)
-    licences = db.Column(db.String, nullable=True)
-    supplier = db.Column(db.String, nullable=False, default="")
+    cpe: Mapped[list | None] = mapped_column(JSON)
+    purl: Mapped[list | None] = mapped_column(JSON)
+    licences: Mapped[str | None]
+    supplier: Mapped[str] = mapped_column(default="")
 
     __table_args__ = (
         db.Index('ix_packages_name_version_supplier', 'name', 'version', 'supplier'),
     )
 
-    sbom_packages = db.relationship("SBOMPackage", back_populates="package", cascade="all, delete-orphan")
-    findings = db.relationship("Finding", back_populates="package", cascade="all, delete-orphan")
+    sbom_packages: Mapped[list["SBOMPackage"]] = relationship(
+        back_populates="package",
+        cascade="all, delete-orphan",
+    )
+    findings: Mapped[list["Finding"]] = relationship(
+        back_populates="package",
+        cascade="all, delete-orphan",
+    )
 
     # ------------------------------------------------------------------
     # Constructor with support for legacy arg calls
@@ -99,6 +143,7 @@ class Package(Base):
         """Add a PURL identifier if not already present."""
         if not purl:
             return
+        purl = _normalize_purl(purl)
         current = list(self.purl or [])
         if purl not in current:
             current.append(purl)
@@ -139,6 +184,7 @@ class Package(Base):
     # ------------------------------------------------------------------
 
     def _parse_version(self):
+        assert self.version is not None
         return semver.Version.parse(self.version, optional_minor_and_patch=True)
 
     def __eq__(self, other) -> bool:
@@ -250,8 +296,8 @@ class Package(Base):
 
     @staticmethod
     def find_or_create(
-        name: str,
-        version: str,
+        name: str | None,
+        version: str | None,
         cpe: Optional[list] = None,
         purl: Optional[list] = None,
         licences: str = "",
@@ -268,7 +314,7 @@ class Package(Base):
 
         if existing is None:
             existing = Package(
-                name=name, version=version,
+                name=name or "", version=version or "",
                 cpe=cpe or [], purl=purl or [],
                 licences=licences, supplier=supplier or "",
             )

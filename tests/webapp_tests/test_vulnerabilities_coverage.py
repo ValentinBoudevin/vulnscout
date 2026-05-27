@@ -382,8 +382,11 @@ def test_patch_vulnerabilities_batch_mixed_results(client):
 
 
 # Test PATCH vulnerabilities batch - update with CVSS
-def test_patch_vulnerabilities_batch_with_cvss(client):
+def test_patch_vulnerabilities_batch_with_cvss(client, monkeypatch):
     """Test batch update with CVSS data"""
+    from src.models import Metrics
+    monkeypatch.setattr(Metrics, "_seen", set())
+
     response = client.patch("/api/vulnerabilities/batch", json={
         'vulnerabilities': [
             {

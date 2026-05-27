@@ -27,6 +27,6 @@ def init_app(app):
                 "started_at": str        # ISO timestamp when update started
             }
         """
-        tracker = NVDProgressTracker()
+        tracker = NVDProgressTracker
         progress = tracker.get_progress()
         return jsonify(progress), 200

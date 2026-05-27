@@ -65,6 +65,25 @@ def test_api_get_cve_retry_fail(monkeypatch):
         db.api_get_cve("CVE-2020-0002")
 
 
+def test_api_get_cve_max_retries_zero_single_call(monkeypatch):
+    """max_retries=0 must make exactly one _call_nvd_api call and raise on failure."""
+    call_count = 0
+
+    def fake_call(self, params):
+        nonlocal call_count
+        call_count += 1
+        return (500, {})
+
+    monkeypatch.setattr(NVD_DB, "_call_nvd_api", fake_call)
+    monkeypatch.setattr("src.controllers.nvd_db.time.sleep", lambda *_: None)
+
+    db = NVD_DB()
+    with pytest.raises(ConnectionError):
+        db.api_get_cve("CVE-2020-0003", max_retries=0)
+
+    assert call_count == 1, "max_retries=0 should attempt exactly one call"
+
+
 def test_api_weaknesses_to_list_str():
     db = NVD_DB()
     weaks = [

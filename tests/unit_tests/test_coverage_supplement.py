@@ -217,3 +217,36 @@ class TestPersistAssessmentToDB:
 
         result = assess_ctrl.to_dict()
         assert isinstance(result, dict)
+
+
+# ===========================================================================
+# datetime_utils — ensure_utc_iso edge cases (lines 17, 19)
+# ===========================================================================
+
+class TestEnsureUtcIso:
+    def test_none_returns_none(self):
+        from src.helpers.datetime_utils import ensure_utc_iso
+        assert ensure_utc_iso(None) is None
+
+    def test_non_datetime_returns_str(self):
+        from src.helpers.datetime_utils import ensure_utc_iso
+        assert ensure_utc_iso(12345) == "12345"
+
+
+# ===========================================================================
+# EPSSProgressTracker — error() method (lines 72-76)
+# ===========================================================================
+
+class TestEpssProgressTrackerError:
+    def test_error_sets_phase_and_message(self):
+        from src.controllers.progress_tracker import ProgressTracker
+        tracker = ProgressTracker(
+            default_phase="epss_enrichment",
+            completed_message="EPSS enrichment completed successfully",
+        )
+        tracker.error("something went wrong")
+        progress = tracker.get_progress()
+        assert progress["in_progress"] is False
+        assert progress["phase"] == "error"
+        assert progress["message"] == "something went wrong"
+        assert progress["last_update"] is not None

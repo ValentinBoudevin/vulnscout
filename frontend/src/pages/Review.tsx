@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { createColumnHelper } from "@tanstack/react-table";
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
-import type { Assessment } from "../handlers/assessments";
+import type { Assessment, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
 import { asAssessment } from "../handlers/assessments";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { asVulnerability } from "../handlers/vulnerabilities";
@@ -11,18 +11,22 @@ import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook } from '@fortawesome/free-solid-svg-icons';
+import { downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
 import ConfirmationModal from '../components/ConfirmationModal';
 import MessageBanner from '../components/MessageBanner';
 import Variants from '../handlers/variant';
+import Projects from '../handlers/project';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, extractSupplierName } from '../helpers/pkgId';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
     | { type: 'update'; vulnId: string; ids: string[]; data: EditAssessmentData };
+
+type ReviewTab = 'assessments' | 'time-estimates' | 'custom-cvss';
 
 type Props = {
     variantId?: string;
@@ -44,6 +48,8 @@ type ReviewRow = Assessment & {
 };
 
 const columnHelper = createColumnHelper<ReviewRow>();
+const teColumnHelper = createColumnHelper<ReviewTimeEstimate>();
+const cvssColumnHelper = createColumnHelper<ReviewCustomCvss>();
 
 /**
  * Group assessments that share the same CVE, status, justification, notes,
@@ -103,7 +109,10 @@ function formatDate(iso: string): string {
 
 function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#review");
+    const [activeTab, setActiveTab] = useState<ReviewTab>('assessments');
     const [assessments, setAssessments] = useState<Assessment[]>([]);
+    const [timeEstimates, setTimeEstimates] = useState<ReviewTimeEstimate[]>([]);
+    const [customCvss, setCustomCvss] = useState<ReviewCustomCvss[]>([]);
     const [vulnDescriptions, setVulnDescriptions] = useState<Record<string, { title: string; content: string }[]>>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -115,6 +124,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [importStatus, setImportStatus] = useState<string | null>(null);
     const [variantNames, setVariantNames] = useState<Record<string, string>>({});
+    const [projectNames, setProjectNames] = useState<Record<string, string>>({});
     const [allVariants, setAllVariants] = useState<Variant[]>([]);
     const [editingRow, setEditingRow] = useState<ReviewRow | null>(null);
     const [editSubmitting, setEditSubmitting] = useState(false);
@@ -156,21 +166,48 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             setVariantNames(map);
             setAllVariants(vs);
         }).catch(() => {});
+        Projects.list().then(ps => {
+            const map: Record<string, string> = {};
+            for (const p of ps) map[p.id] = p.name;
+            setProjectNames(map);
+        }).catch(() => {});
     }, []);
 
     useEffect(() => {
         setLoading(true);
         setError(null);
-        Assessments.listReview(variantId, projectId)
-            .then(data => {
-                setAssessments(groupAssessments(data));
+        Promise.all([
+            Assessments.listReview(variantId, projectId),
+            Assessments.listReviewTimeEstimates(variantId, projectId),
+            Assessments.listReviewCustomCvss(variantId, projectId),
+        ])
+            .then(([reviewData, teData, cvssData]) => {
+                setAssessments(groupAssessments(reviewData));
+                setTimeEstimates(teData);
+                setCustomCvss(cvssData.filter((item) => item.origin === 'custom'));
                 setLoading(false);
                 // Build tooltip descriptions from vuln_texts included in the response
                 const descMap: Record<string, { title: string; content: string }[]> = {};
-                for (const a of data) {
+                for (const a of reviewData) {
                     if (a.vuln_id && !descMap[a.vuln_id] && a.vuln_texts) {
                         const entries = Object.entries(a.vuln_texts);
                         descMap[a.vuln_id] = entries.length > 0
+                            ? entries.map(([title, content]) => ({ title, content }))
+                            : [{ title: "description", content: "No description available" }];
+                    }
+                }
+                for (const te of teData) {
+                    if (te.vuln_id && !descMap[te.vuln_id] && te.vuln_texts) {
+                        const entries = Object.entries(te.vuln_texts);
+                        descMap[te.vuln_id] = entries.length > 0
+                            ? entries.map(([title, content]) => ({ title, content }))
+                            : [{ title: "description", content: "No description available" }];
+                    }
+                }
+                for (const c of cvssData) {
+                    if (c.vuln_id && !descMap[c.vuln_id] && c.vuln_texts) {
+                        const entries = Object.entries(c.vuln_texts);
+                        descMap[c.vuln_id] = entries.length > 0
                             ? entries.map(([title, content]) => ({ title, content }))
                             : [{ title: "description", content: "No description available" }];
                     }
@@ -179,7 +216,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             })
             .catch(err => {
                 console.error(err);
-                setError("Failed to load review assessments");
+                setError("Failed to load review data");
                 setLoading(false);
             });
     }, [variantId, projectId]);
@@ -275,24 +312,36 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setSelectedSuppliers([]);
     };
 
-    const handleExportReview = useCallback(() => {
-        const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/export", window.location.href);
-        fetch(url.toString(), { mode: 'cors' })
-            .then(res => {
-                if (!res.ok) throw new Error(`Export failed (${res.status})`);
-                return res.blob();
-            })
-            .then(blob => {
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = 'review_openvex.tar.gz';
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                URL.revokeObjectURL(a.href);
-            })
-            .catch(err => console.error('Export error:', err));
-    }, []);
+    const handleExportReview = useCallback(async () => {
+        try {
+            const params = new URLSearchParams();
+            if (variantId) params.set('variant_id', variantId);
+            else if (projectId) params.set('project_id', projectId);
+            const url = new URL(
+                import.meta.env.VITE_API_URL + "/api/assessments/review/export-custom-data" +
+                (params.toString() ? `?${params.toString()}` : ''),
+                window.location.href,
+            );
+            const res = await fetch(url.toString(), { mode: 'cors' });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                showMessage(err.error || 'Failed to export custom data.', 'error');
+                return;
+            }
+            const data = await res.json();
+            const ts = formatTimestampForFilename();
+            const pName = projectId ? projectNames[projectId]
+                : variantId ? projectNames[allVariants.find(v => v.id === variantId)?.project_id ?? ''] ?? ''
+                : '';
+            const vName = variantId ? variantNames[variantId] ?? '' : '';
+            const label = [pName, vName].filter(Boolean).join('_') || 'all';
+            const filename = `custom_data_${sanitizeFilename(label)}_${ts}.json`;
+            downloadJson(data, filename);
+        } catch (err) {
+            console.error('Export error:', err);
+            showMessage('Failed to export custom data.', 'error');
+        }
+    }, [variantId, projectId, showMessage, projectNames, variantNames, allVariants]);
 
     const handleImportReview = useCallback(() => {
         fileInputRef.current?.click();
@@ -301,33 +350,110 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const handleFileSelected = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) return;
-        const formData = new FormData();
-        formData.append('file', file);
-        const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href);
-        setImportStatus("Importing...");
-        fetch(url.toString(), { method: 'POST', body: formData, mode: 'cors' })
-            .then(res => res.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    // Reload the assessments list
-                    Assessments.listReview(variantId, projectId).then(data => setAssessments(groupAssessments(data)));
-                } else {
-                    setImportStatus(`Error: ${data.error || 'Unknown error'}`);
-                    setTimeout(() => setImportStatus(null), 4000);
+
+        // Old OpenVEX format: .tar.gz or .tgz files — use legacy import path
+        if (file.name.endsWith('.tar.gz') || file.name.endsWith('.tgz')) {
+            const formData = new FormData();
+            formData.append('file', file);
+            const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href);
+            setImportStatus("Importing...");
+            fetch(url.toString(), { method: 'POST', body: formData, mode: 'cors' })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        Assessments.listReview(variantId, projectId).then(data => setAssessments(groupAssessments(data)));
+                        showMessage('Assessments imported successfully!', 'success');
+                    } else {
+                        showMessage(`Import error: ${data.error || 'Unknown error'}`, 'error');
+                    }
+                    setImportStatus(null);
+                })
+                .catch(err => {
+                    console.error(err);
+                    showMessage('Import failed', 'error');
+                    setImportStatus(null);
+                })
+                .finally(() => {
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                });
+            return;
+        }
+
+        // JSON files: detect format and route to appropriate backend endpoint
+        const reader = new FileReader();
+        reader.onload = async () => {
+            try {
+                const text = reader.result as string;
+                const parsed = JSON.parse(text);
+
+                // Detect old OpenVEX format: has @context with "openvex"
+                if (parsed?.['@context'] && String(parsed['@context']).includes('openvex')) {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href);
+                    setImportStatus("Importing...");
+                    const res = await fetch(url.toString(), { method: 'POST', body: formData, mode: 'cors' });
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
+                        showMessage('Assessments imported successfully!', 'success');
+                    } else {
+                        showMessage(`Import error: ${data.error || 'Unknown error'}`, 'error');
+                    }
+                    setImportStatus(null);
+                    if (fileInputRef.current) fileInputRef.current.value = '';
                     return;
                 }
+
+                // New custom data format — send to backend import-custom-data endpoint
+                if (!parsed?.version || !parsed?.assessments) {
+                    showMessage('Invalid file format. Expected a VulnScout custom data export.', 'error');
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                    return;
+                }
+
+                setImportStatus("Importing...");
+                const params = new URLSearchParams();
+                if (variantId) params.set('variant_id', variantId);
+                const url = new URL(
+                    import.meta.env.VITE_API_URL + "/api/assessments/review/import-custom-data" +
+                    (params.toString() ? `?${params.toString()}` : ''),
+                    window.location.href,
+                );
+                const res = await fetch(url.toString(), {
+                    method: 'POST',
+                    mode: 'cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: text,
+                });
+                const result = await res.json();
+
+                if (result.status === 'success') {
+                    const summary: string[] = [];
+                    if (result.assessments_imported > 0) {
+                        let msg = `${result.assessments_imported} assessment(s) imported`;
+                        if (result.assessments_skipped) msg += `, ${result.assessments_skipped} skipped`;
+                        summary.push(msg);
+                    }
+                    if (result.cvss_imported > 0) summary.push(`${result.cvss_imported} CVSS score(s)`);
+                    if (result.time_estimates_imported > 0) summary.push(`${result.time_estimates_imported} time estimate(s)`);
+                    if (result.errors?.length) summary.push(`${result.errors.length} error(s)`);
+                    Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
+                    showMessage(summary.length > 0 ? `Imported: ${summary.join(', ')}` : 'Import complete (no data changed)', 'success');
+                } else {
+                    showMessage(`Import error: ${result.errors?.[0]?.error || 'Unknown error'}`, 'error');
+                }
                 setImportStatus(null);
-            })
-            .catch(err => {
+            } catch (err) {
                 console.error(err);
-                setImportStatus("Import failed");
-                setTimeout(() => setImportStatus(null), 4000);
-            })
-            .finally(() => {
-                // Reset file input so the same file can be re-selected
+                showMessage('Import failed — invalid file', 'error');
+                setImportStatus(null);
+            } finally {
                 if (fileInputRef.current) fileInputRef.current.value = '';
-            });
-    }, [variantId, projectId]);
+            }
+        };
+        reader.readAsText(file);
+    }, [variantId, projectId, showMessage]);
 
     const handleDeleteRow = useCallback(async () => {
         if (!rowToDelete) return;
@@ -588,10 +714,120 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }),
     ], [handleVulnClick, variantNames]);
 
+    const teColumns = useMemo(() => [
+        teColumnHelper.accessor("vuln_id", {
+            id: 'te_vuln_id',
+            header: () => <div className="flex items-center justify-center">Vulnerability</div>,
+            size: 160,
+            cell: info => (
+                <div
+                    className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
+                    onClick={() => handleVulnClick(info.getValue())}
+                    title="Click to view details"
+                >
+                    <span className="font-mono text-sm">{info.getValue()}</span>
+                </div>
+            ),
+        }),
+        teColumnHelper.accessor("optimistic", {
+            header: () => <div className="flex items-center justify-center">Optimistic (h)</div>,
+            size: 120,
+            cell: info => (
+                <div className="flex items-center justify-center h-full">
+                    <span className="text-sm font-mono">{info.getValue()}h</span>
+                </div>
+            ),
+        }),
+        teColumnHelper.accessor("likely", {
+            header: () => <div className="flex items-center justify-center">Likely (h)</div>,
+            size: 120,
+            cell: info => (
+                <div className="flex items-center justify-center h-full">
+                    <span className="text-sm font-mono">{info.getValue()}h</span>
+                </div>
+            ),
+        }),
+        teColumnHelper.accessor("pessimistic", {
+            header: () => <div className="flex items-center justify-center">Pessimistic (h)</div>,
+            size: 120,
+            cell: info => (
+                <div className="flex items-center justify-center h-full">
+                    <span className="text-sm font-mono">{info.getValue()}h</span>
+                </div>
+            ),
+        }),
+    ], [handleVulnClick]);
+
+    const cvssColumns = useMemo(() => [
+        cvssColumnHelper.accessor("vuln_id", {
+            id: 'cvss_vuln_id',
+            header: () => <div className="flex items-center justify-center">Vulnerability</div>,
+            size: 160,
+            cell: info => (
+                <div
+                    className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
+                    onClick={() => handleVulnClick(info.getValue())}
+                    title="Click to view details"
+                >
+                    <span className="font-mono text-sm">{info.getValue()}</span>
+                </div>
+            ),
+        }),
+        cvssColumnHelper.accessor("version", {
+            header: () => <div className="flex items-center justify-center">CVSS Version</div>,
+            size: 110,
+            cell: info => (
+                <div className="flex items-center justify-center h-full">
+                    <span className="text-sm">{info.getValue()}</span>
+                </div>
+            ),
+        }),
+        cvssColumnHelper.accessor("vector_string", {
+            header: () => <div className="flex items-center justify-center">Vector</div>,
+            size: 350,
+            cell: info => (
+                <div className="flex items-center justify-center h-full">
+                    <span className="text-xs font-mono break-all">{info.getValue()}</span>
+                </div>
+            ),
+        }),
+        cvssColumnHelper.accessor("base_score", {
+            header: () => <div className="flex items-center justify-center">Base Score</div>,
+            size: 100,
+            cell: info => {
+                const score = info.getValue();
+                let color = "text-gray-300";
+                if (score >= 9.0) color = "text-red-400";
+                else if (score >= 7.0) color = "text-orange-400";
+                else if (score >= 4.0) color = "text-yellow-400";
+                else if (score > 0) color = "text-green-400";
+                return (
+                    <div className="flex items-center justify-center h-full">
+                        <span className={`text-sm font-bold ${color}`}>{score.toFixed(1)}</span>
+                    </div>
+                );
+            },
+        }),
+        cvssColumnHelper.accessor("author", {
+            header: () => <div className="flex items-center justify-center">Author</div>,
+            size: 120,
+            cell: info => (
+                <div className="flex items-center justify-center h-full">
+                    <span className="text-sm">{info.getValue()}</span>
+                </div>
+            ),
+        }),
+    ], [handleVulnClick]);
+
     if (loading) {
         return (
-            <div className="flex items-center justify-center h-64">
-                <div className="w-8 h-8 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin"></div>
+            <div className="relative h-64">
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+                    <div className="flex flex-col items-center gap-3 text-white">
+                        <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-sm font-semibold">Loading assessments...</span>
+                    </div>
+                </div>
             </div>
         );
     }
@@ -604,7 +840,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         );
     }
 
-    if (assessments.length === 0) {
+    const hasAnyData = assessments.length > 0 || timeEstimates.length > 0 || customCvss.length > 0;
+
+    if (!hasAnyData) {
         return (
             <div>
                 {showBanner && (
@@ -616,9 +854,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     />
                 )}
                 <div className="text-center py-10 text-gray-400">
-                    <p className="text-lg">No handmade assessments found</p>
+                    <p className="text-lg">No custom data found</p>
                     <p className="text-sm mt-2">
-                        Assessments created directly in VulnScout (not imported from SBOM documents) will appear here.
+                        Assessments, time estimates or custom CVSS scores created directly in VulnScout will appear here.
                     </p>
                 </div>
             </div>
@@ -674,27 +912,31 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     )}
                 </div>
 
-                <FilterOption
-                    label="Status"
-                    options={statusList}
-                    selected={selectedStatuses}
-                    setSelected={setSelectedStatuses}
-                />
+                {activeTab === 'assessments' && (
+                    <>
+                        <FilterOption
+                            label="Status"
+                            options={statusList}
+                            selected={selectedStatuses}
+                            setSelected={setSelectedStatuses}
+                        />
 
-                <FilterOption
-                    label="Justification"
-                    options={justificationList}
-                    selected={selectedJustifications}
-                    setSelected={setSelectedJustifications}
-                />
+                        <FilterOption
+                            label="Justification"
+                            options={justificationList}
+                            selected={selectedJustifications}
+                            setSelected={setSelectedJustifications}
+                        />
 
-                {hasSupplierInfo && (
-                    <FilterOption
-                        label="Supplier"
-                        options={supplierList}
-                        selected={selectedSuppliers}
-                        setSelected={setSelectedSuppliers}
-                    />
+                        {hasSupplierInfo && (
+                            <FilterOption
+                                label="Supplier"
+                                options={supplierList}
+                                selected={selectedSuppliers}
+                                setSelected={setSelectedSuppliers}
+                            />
+                        )}
+                    </>
                 )}
 
                 <div className="ml-auto flex items-center gap-2 relative">
@@ -745,10 +987,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <button
                         onClick={handleImportReview}
                         className="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white border border-green-500 flex items-center gap-1.5"
-                        title="Import assessments from an OpenVEX file"
+                        title="Import custom data (assessments, CVSS, time estimates)"
                     >
                         <FontAwesomeIcon icon={faFileImport} />
-                        Import Review
+                        Import Custom Data
                     </button>
                     <input
                         ref={fileInputRef}
@@ -761,10 +1003,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <button
                         onClick={handleExportReview}
                         className="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white border border-green-500 flex items-center gap-1.5"
-                        title="Export review assessments as OpenVEX"
+                        title="Export custom data (assessments, CVSS, time estimates)"
                     >
                         <FontAwesomeIcon icon={faFileExport} />
-                        Export Review
+                        Export Custom Data
                     </button>
                 </div>
             </div>
@@ -791,29 +1033,118 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             )}
 
-            <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-lg font-bold text-gray-200">
-                    Review Assessments
-                </h2>
+            <div className="mb-3 flex items-center gap-1 border-b border-gray-700">
+                <button
+                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+                        activeTab === 'assessments'
+                            ? 'bg-sky-800 text-white border-b-2 border-sky-400'
+                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+                    }`}
+                    onClick={() => setActiveTab('assessments')}
+                >
+                    Assessments{assessments.length > 0 ? ` (${assessments.length})` : ''}
+                </button>
+                <button
+                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+                        activeTab === 'time-estimates'
+                            ? 'bg-sky-800 text-white border-b-2 border-sky-400'
+                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+                    }`}
+                    onClick={() => setActiveTab('time-estimates')}
+                >
+                    Time Estimates{timeEstimates.length > 0 ? ` (${timeEstimates.length})` : ''}
+                </button>
+                <button
+                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+                        activeTab === 'custom-cvss'
+                            ? 'bg-sky-800 text-white border-b-2 border-sky-400'
+                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+                    }`}
+                    onClick={() => setActiveTab('custom-cvss')}
+                >
+                    Custom CVSS{customCvss.length > 0 ? ` (${customCvss.length})` : ''}
+                </button>
             </div>
-            <TableGeneric<ReviewRow>
-                columns={columns}
-                data={filteredAssessments.map(a => ({
-                    ...a,
-                    texts: vulnDescriptions[a.vuln_id] ?? [],
-                    _allIds: (a as any)._allIds ?? [a.id],
-                    _variantIds: (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []),
-                    extractedSuppliers: [...new Set(
-                        a.packages.map(p => extractSupplierName(splitPkgId(p).supplier)).filter(s => s !== '')
-                    )],
-                }))}
-                search={search}
-                fuseKeys={["vuln_id", "packages", "simplified_status", "status_notes", "justification", "workaround", "extractedSuppliers"]}
-                estimateRowHeight={50}
-                hasPagination={true}
-                hoverField="texts"
-                hoverIdField="vuln_id"
-            />
+
+            {activeTab === 'assessments' && (
+                assessments.length === 0 ? (
+                    <div className="text-center py-10 text-gray-400">
+                        <p className="text-lg">No handmade assessments found</p>
+                        <p className="text-sm mt-2">
+                            Assessments created directly in VulnScout (not imported from SBOM documents) will appear here.
+                        </p>
+                    </div>
+                ) : (
+                    <TableGeneric<ReviewRow>
+                        columns={columns}
+                        data={filteredAssessments.map(a => ({
+                            ...a,
+                            texts: vulnDescriptions[a.vuln_id] ?? [],
+                            _allIds: (a as any)._allIds ?? [a.id],
+                            _variantIds: (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []),
+                            extractedSuppliers: [...new Set(
+                                a.packages.map(p => extractSupplierName(splitPkgId(p).supplier)).filter(s => s !== '')
+                            )],
+                        }))}
+                        search={search}
+                        fuseKeys={["vuln_id", "packages", "simplified_status", "status_notes", "justification", "workaround", "extractedSuppliers"]}
+                        estimateRowHeight={50}
+                        hasPagination={true}
+                        hoverField="texts"
+                        hoverIdField="vuln_id"
+                    />
+                )
+            )}
+
+            {activeTab === 'time-estimates' && (
+                timeEstimates.length === 0 ? (
+                    <div className="text-center py-10 text-gray-400">
+                        <p className="text-lg">No time estimates found</p>
+                        <p className="text-sm mt-2">
+                            Time estimates added to vulnerabilities will appear here.
+                        </p>
+                    </div>
+                ) : (
+                    <TableGeneric<ReviewTimeEstimate & { texts: { title: string; content: string }[] }>
+                        columns={teColumns as any}
+                        data={timeEstimates.map(te => ({
+                            ...te,
+                            texts: vulnDescriptions[te.vuln_id] ?? [],
+                        }))}
+                        search={search}
+                        fuseKeys={["vuln_id"]}
+                        estimateRowHeight={50}
+                        hasPagination={true}
+                        hoverField="texts"
+                        hoverIdField="vuln_id"
+                    />
+                )
+            )}
+
+            {activeTab === 'custom-cvss' && (
+                customCvss.length === 0 ? (
+                    <div className="text-center py-10 text-gray-400">
+                        <p className="text-lg">No custom CVSS scores found</p>
+                        <p className="text-sm mt-2">
+                            Custom CVSS scores added to vulnerabilities will appear here.
+                        </p>
+                    </div>
+                ) : (
+                    <TableGeneric<ReviewCustomCvss & { texts: { title: string; content: string }[] }>
+                        columns={cvssColumns as any}
+                        data={customCvss.map(c => ({
+                            ...c,
+                            texts: vulnDescriptions[c.vuln_id] ?? [],
+                        }))}
+                        search={search}
+                        fuseKeys={["vuln_id", "vector_string", "author"]}
+                        estimateRowHeight={50}
+                        hasPagination={true}
+                        hoverField="texts"
+                        hoverIdField="vuln_id"
+                    />
+                )
+            )}
 
             {modalVuln && (
                 <VulnModal

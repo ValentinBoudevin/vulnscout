@@ -1,40 +1,24 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from ..models.package import Package
-from ..models.vulnerability import Vulnerability
-from ..models.assessment import Assessment
-from ..models.cvss import CVSS
+from ..controllers import PackagesController, VulnerabilitiesController, AssessmentsController
+from ..models import Package, Vulnerability, Assessment, CVSS
 from ..extensions import batch_session
 from ..helpers.env_vars import get_bool_env
-from datetime import datetime, timezone
+from ..helpers.datetime_utils import normalize_timestamp_for_sort
 
 
 class YoctoVulns:
     """GrypeVulns class to handle grype vulnerabilities and parse it"""
     def __init__(self, controllers):
-        self.packagesCtrl = controllers["packages"]
-        self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
-        self.assessmentsCtrl = controllers["assessments"]
+        self.packagesCtrl: PackagesController = controllers["packages"]
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
+        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
 
     def get_last_assessment(self, assessments):
         if not assessments:
             return None
-
-        def _ts_key(a):
-            ts = a.timestamp
-            if ts is None:
-                return datetime.min.replace(tzinfo=timezone.utc)
-            if isinstance(ts, str):
-                try:
-                    ts = datetime.fromisoformat(ts)
-                except (ValueError, TypeError):
-                    return datetime.min.replace(tzinfo=timezone.utc)
-            if hasattr(ts, 'tzinfo') and ts.tzinfo is None:
-                return ts.replace(tzinfo=timezone.utc)
-            return ts
-
-        return max(assessments, key=_ts_key)
+        return max(assessments, key=lambda a: normalize_timestamp_for_sort(a.timestamp))
 
     def load_from_dict(self, data: dict):
         """Load the yoctoVulns object from a dictionary."""
@@ -52,16 +36,9 @@ class YoctoVulns:
                 self.packagesCtrl.add(package)
 
                 # Pre-warm the in-memory index with DB assessments for this
-                # package in one query. After this, gets_by_vuln_pkg hits only
-                # the in-memory _by_vuln_pkg index — no DB query per issue.
-                # Only index assessments that belong to the current variant (or
-                # have no variant) so that a different variant's records do not
-                # fool the deduplication check below.
-                _current_vid = getattr(self.assessmentsCtrl, 'current_variant_id', None)
-                for a in Assessment.get_by_package(package.string_id):
-                    if _current_vid is None or a.variant_id is None or a.variant_id == _current_vid:
-                        self.assessmentsCtrl._index_existing(a)
-                self.assessmentsCtrl._db_queried_pkgs.add(package.string_id)
+                # package so that gets_by_vuln_pkg hits only the in-memory
+                # index — no DB query per issue.
+                self.assessmentsCtrl.warm_packages([package.string_id])
 
                 for issue in pkg.get("issue", []):
                     vuln = Vulnerability(

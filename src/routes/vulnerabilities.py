@@ -1,41 +1,56 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-import uuid
+import datetime
+import os
 
-from flask import request
-from sqlalchemy import func
+from flask import jsonify, request
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload, aliased
-from ..models.vulnerability import Vulnerability
-from ..models.finding import Finding
-from ..models.observation import Observation
-from ..models.package import Package
-from ..models.scan import Scan
+from ..models import (
+    Vulnerability,
+    Finding,
+    Observation,
+    Package,
+    Scan,
+    Variant,
+    Metrics,
+    SBOMDocument,
+    SBOMPackage,
+    Iso8601Duration
+)
 from ..helpers.datetime_utils import ensure_utc_iso
-from ..models.variant import Variant
-from ..models.metrics import Metrics
-from ..models.cvss import CVSS
-from ..models.iso8601_duration import Iso8601Duration
-from ..models.sbom_document import SBOMDocument
-from ..models.sbom_package import SBOMPackage
 from ..extensions import db
-from ..helpers.verbose import verbose
+from ..controllers.nvd_db import NVD_DB
+from ..controllers.nvd_apply import apply_nvd_update
 from ..helpers.active_scans import (
     active_scan_ids_for_variant,
     active_scan_ids_for_project,
     active_package_ids_for_scans,
 )
+from ..helpers.vuln_helpers import (
+    _validate_effort,
+    _validate_and_apply_cvss,
+    _apply_effort,
+)
+from ._scan_helpers import parse_uuid_or_400
 
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
 
 
-def _parse_effort_hours(value) -> int:
-    """Parse an effort value (ISO 8601 duration string or integer hours) to whole hours."""
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        return int(Iso8601Duration(value).total_seconds // 3600)
-    raise ValueError(f"Invalid effort value: {value!r}")
+def _sbom_pkg_filter(pkg_ids):
+    """Return a SQLAlchemy filter clause restricting tool-scan findings to SBOM packages.
+
+    Assumes the query already joins ``Finding`` and ``Scan``.  When
+    *pkg_ids* is empty the function returns ``None`` (no filter needed).
+    """
+    if not pkg_ids:
+        return None
+    return db.or_(
+        Scan.scan_type.is_(None),
+        Scan.scan_type == "sbom",
+        Finding.package_id.in_(pkg_ids),
+    )
 
 
 # Formats that are exclusively vulnerability scanners (never pure package BOMs)
@@ -130,15 +145,18 @@ def _populate_found_by(
     found_by_map: dict[str, set[str]] = {}
     for vuln_id, entry in vuln_formats.items():
         doc_formats = entry["doc_formats"]
+        scan_source = entry["scan_source"]
         if doc_formats:
             # Prefer non-dedicated (spdx, cdx, openvex) over dedicated (grype, yocto)
             non_dedicated = doc_formats - _DEDICATED_SCANNER_FORMATS
             chosen = non_dedicated if non_dedicated else doc_formats
             for fmt in chosen:
+                assert isinstance(fmt, str)
                 mapped = _FORMAT_TO_FOUND_BY.get(fmt, fmt)
                 found_by_map.setdefault(vuln_id, set()).add(mapped)
-        elif entry["scan_source"] is not None:
-            mapped = _TOOL_SOURCE_TO_FOUND_BY.get(entry["scan_source"], entry["scan_source"])
+        elif scan_source is not None:
+            assert isinstance(scan_source, str)
+            mapped = _TOOL_SOURCE_TO_FOUND_BY.get(scan_source, scan_source)
             found_by_map.setdefault(vuln_id, set()).add(mapped)
 
     for record in records:
@@ -158,11 +176,12 @@ def init_app(app):
         compare_variant_id = request.args.get('compare_variant_id')
         current_scan_ids: list = []
         if variant_id and compare_variant_id:
-            try:
-                base_uuid = uuid.UUID(variant_id)
-                compare_uuid = uuid.UUID(compare_variant_id)
-            except ValueError:
-                return {"error": "Invalid variant_id or compare_variant_id"}, 400
+            base_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            compare_uuid, err = parse_uuid_or_400(compare_variant_id, "compare_variant_id")
+            if err:
+                return err
             base_latest_ids = active_scan_ids_for_variant(base_uuid)
             compare_latest_ids = active_scan_ids_for_variant(compare_uuid)
             current_scan_ids = compare_latest_ids
@@ -186,14 +205,9 @@ def init_app(app):
                     .join(Scan, Observation.scan_id == Scan.id)
                     .where(Observation.scan_id.in_(scan_ids))
                 )
-                if _pkg_ids:
-                    q = q.where(
-                        db.or_(
-                            Scan.scan_type.is_(None),
-                            Scan.scan_type == "sbom",
-                            Finding.package_id.in_(_pkg_ids),
-                        )
-                    )
+                _flt = _sbom_pkg_filter(_pkg_ids)
+                if _flt is not None:
+                    q = q.where(_flt)
                 return set(db.session.execute(q.distinct()).scalars().all())
 
             base_ids = _vuln_ids_for_scans(base_latest_ids)
@@ -205,7 +219,7 @@ def init_app(app):
                     compare_ids = _vuln_ids_for_scans(compare_latest_ids)
                     intersection_ids = list(base_ids & compare_ids)
                     records = list(db.session.execute(
-                        db.select(Vulnerability)
+                        select(Vulnerability)
                         .options(*opts)
                         .where(Vulnerability.id.in_(intersection_ids))
                         .order_by(Vulnerability.id)
@@ -216,30 +230,24 @@ def init_app(app):
                 else:
                     compare_pkg_ids = active_package_ids_for_scans(compare_latest_ids)
                     query = (
-                        db.select(Vulnerability)
+                        select(Vulnerability)
                         .options(*opts)
                         .join(Finding, Vulnerability.id == Finding.vulnerability_id)
                         .join(Observation, Finding.id == Observation.finding_id)
                         .join(Scan, Observation.scan_id == Scan.id)
                         .where(Observation.scan_id.in_(compare_latest_ids))
                     )
-                    if compare_pkg_ids:
-                        query = query.where(
-                            db.or_(
-                                Scan.scan_type.is_(None),
-                                Scan.scan_type == "sbom",
-                                Finding.package_id.in_(compare_pkg_ids),
-                            )
-                        )
+                    _flt = _sbom_pkg_filter(compare_pkg_ids)
+                    if _flt is not None:
+                        query = query.where(_flt)
                     query = query.distinct().order_by(Vulnerability.id)
                     if base_ids:
                         query = query.where(~Vulnerability.id.in_(list(base_ids)))
                     records = list(db.session.execute(query).scalars().all())
         elif variant_id:
-            try:
-                variant_uuid = uuid.UUID(variant_id)
-            except ValueError:
-                return {"error": "Invalid variant_id"}, 400
+            variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
             _scope_variant = variant_uuid
             _scope_project = None
             latest_ids = active_scan_ids_for_variant(variant_uuid)
@@ -252,7 +260,7 @@ def init_app(app):
                 # vulns from appearing in the Vulnerability tab.
                 _pkg_ids = active_package_ids_for_scans(latest_ids)
                 query = (
-                    db.select(Vulnerability)
+                    select(Vulnerability)
                     .options(
                         selectinload(Vulnerability.findings).selectinload(Finding.package),
                         selectinload(Vulnerability.findings).selectinload(Finding.time_estimate),
@@ -263,14 +271,9 @@ def init_app(app):
                     .join(Scan, Observation.scan_id == Scan.id)
                     .where(Observation.scan_id.in_(latest_ids))
                 )
-                if _pkg_ids:
-                    query = query.where(
-                        db.or_(
-                            Scan.scan_type.is_(None),
-                            Scan.scan_type == "sbom",
-                            Finding.package_id.in_(_pkg_ids),
-                        )
-                    )
+                _flt = _sbom_pkg_filter(_pkg_ids)
+                if _flt is not None:
+                    query = query.where(_flt)
                 records = list(db.session.execute(
                     query.distinct().order_by(Vulnerability.id)
                 ).scalars().all())
@@ -298,10 +301,9 @@ def init_app(app):
                     for r in records:
                         r.packages = _pkgs_by_vuln_var.get(str(r.id), [])
         elif project_id:
-            try:
-                project_uuid = uuid.UUID(project_id)
-            except ValueError:
-                return {"error": "Invalid project_id"}, 400
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
             _scope_variant = None
             _scope_project = project_uuid
             latest_ids = active_scan_ids_for_project(project_uuid)
@@ -322,18 +324,13 @@ def init_app(app):
                     .join(Scan, Observation.scan_id == Scan.id)
                     .where(Observation.scan_id.in_(latest_ids))
                 )
-                if _pkg_ids:
-                    vuln_ids_base = vuln_ids_base.where(
-                        db.or_(
-                            Scan.scan_type.is_(None),
-                            Scan.scan_type == "sbom",
-                            Finding.package_id.in_(_pkg_ids),
-                        )
-                    )
+                _flt = _sbom_pkg_filter(_pkg_ids)
+                if _flt is not None:
+                    vuln_ids_base = vuln_ids_base.where(_flt)
                 vuln_ids_subq = vuln_ids_base.distinct().scalar_subquery()
 
                 records = list(db.session.execute(
-                    db.select(Vulnerability)
+                    select(Vulnerability)
                     .where(Vulnerability.id.in_(vuln_ids_subq))
                     .order_by(Vulnerability.id)
                 ).scalars().all())
@@ -406,10 +403,10 @@ def init_app(app):
             _scope_project = None
         _populate_found_by(records, _scope_variant, _scope_project,
                            active_scan_ids=current_scan_ids or None)
-        vulns = [r.to_dict() for r in records]
+        vulns = {r.id: r.to_dict() for r in records}
+        vuln_ids = vulns.keys()
 
-        vuln_ids = [v["id"] for v in vulns]
-        if vuln_ids:
+        if vulns:
             # packages_current: packages from the specific scan(s), expanded to include all
             # same-name+version supplier variants present in the active SBOM scans.
             # This ensures that Grype-linked packages (no supplier) also surface SBOM packages.
@@ -434,10 +431,10 @@ def init_app(app):
                 for vuln_id, pkg_name, pkg_version, pkg_sup in pkg_rows:
                     sid = f"{pkg_name}@{pkg_version}::{pkg_sup}" if pkg_sup else f"{pkg_name}@{pkg_version}"
                     pkgs_current_by_vuln.setdefault(str(vuln_id), []).append(sid)
-                for v in vulns:
+                for v in vulns.values():
                     v["packages_current"] = sorted(pkgs_current_by_vuln.get(v["id"], []))
             else:
-                for v in vulns:
+                for v in vulns.values():
                     v["packages_current"] = list(v["packages"])
 
             # Enrich each vuln dict with sorted variant names, restricted to
@@ -478,8 +475,8 @@ def init_app(app):
             variant_names_by_vuln: dict = {}
             for vuln_id, variant_name in rows:
                 variant_names_by_vuln.setdefault(str(vuln_id), []).append(variant_name)
-            for v in vulns:
-                v["variants"] = sorted(variant_names_by_vuln.get(v["id"], []))
+            for vuln_id, vuln in vulns.items():
+                vuln["variants"] = sorted(variant_names_by_vuln.get(vuln_id, []))
 
             # Enrich with the date of the earliest scan where each vuln was first observed
             first_scan_rows = db.session.execute(
@@ -492,12 +489,16 @@ def init_app(app):
             first_scan_by_vuln: dict = {}
             for vuln_id, min_ts in first_scan_rows:
                 first_scan_by_vuln[str(vuln_id)] = ensure_utc_iso(min_ts)
-            for v in vulns:
-                v["first_scan_date"] = first_scan_by_vuln.get(v["id"])
+            for vuln_id, vuln in vulns.items():
+                vuln["first_scan_date"] = first_scan_by_vuln.get(vuln_id)
 
-        if request.args.get('format', 'list') == "dict":
-            return {v["id"]: v for v in vulns}
-        return vulns
+        match request.args.get('format', 'list'):
+            case "list":
+                return list(vulns.values())
+            case "dict":
+                return vulns
+            case _ as fmt:
+                raise ValueError("Unknown format", fmt)
 
     @app.route('/api/vulnerabilities/<id>', methods=['GET', 'PATCH'])
     def update_vuln(id):
@@ -511,52 +512,27 @@ def init_app(app):
                 return {"error": "Invalid request data"}, 400
 
             if "effort" in payload_data:
-                # Store effort on the first finding's time-estimate
                 eff = payload_data["effort"]
-                if not all(k in eff for k in ("optimistic", "likely", "pessimistic")):
-                    return "Invalid effort values", 400
-                try:
-                    opt = _parse_effort_hours(eff["optimistic"])
-                    lik = _parse_effort_hours(eff["likely"])
-                    pes = _parse_effort_hours(eff["pessimistic"])
-                except (ValueError, TypeError):
-                    return "Invalid effort values", 400
-                if not (opt <= lik <= pes):
-                    return "Invalid effort values", 400
+                opt, lik, pes, err = _validate_effort(eff)
+                if err:
+                    return err, 400
                 variant_id = payload_data.get("variant_id")
                 if variant_id is not None:
-                    try:
-                        variant_id = uuid.UUID(variant_id)
-                    except (ValueError, AttributeError):
-                        return {"error": "Invalid variant_id"}, 400
-                try:
-                    from ..models.time_estimate import TimeEstimate
-                    for finding in (record.findings or []):
-                        if variant_id is not None:
-                            existing = TimeEstimate.get_by_finding_and_variant(finding.id, variant_id)
-                        else:
-                            existing = finding.time_estimate
-                        if existing is not None:
-                            existing.update(optimistic=opt, likely=lik, pessimistic=pes)
-                        else:
-                            TimeEstimate.create(
-                                finding_id=finding.id, variant_id=variant_id,
-                                optimistic=opt, likely=lik, pessimistic=pes
-                            )
-                        break
-                except Exception as e:
-                    verbose(f"[PATCH /api/vulnerabilities/{record.id} effort] {e}")
+                    variant_id, err = parse_uuid_or_400(variant_id, "variant_id")
+                    if err:
+                        return err
+                _apply_effort(record, variant_id, opt, lik, pes,
+                              log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
 
             if "cvss" in payload_data:
-                new_cvss = payload_data["cvss"]
-                required_keys = {"base_score", "vector_string", "version"}
-                if not required_keys.issubset(new_cvss.keys()):
-                    return "Invalid CVSS data", 400
-                cvss_obj = CVSS.from_dict(new_cvss)
-                try:
-                    Metrics.from_cvss(cvss_obj, record.id)
-                except Exception as e:
-                    verbose(f"[PATCH /api/vulnerabilities/{record.id} cvss] {e}")
+                if isinstance(payload_data["cvss"], dict):
+                    payload_data["cvss"].setdefault("origin", "custom")
+                cvss_err = _validate_and_apply_cvss(
+                    payload_data["cvss"], record.id,
+                    log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
+                if cvss_err:
+                    return cvss_err, 400
+                db.session.expire(record, ['metrics'])
 
         return record.to_dict()
 
@@ -583,55 +559,29 @@ def init_app(app):
 
             if "effort" in item:
                 eff = item["effort"]
-                if not all(k in eff for k in ("optimistic", "likely", "pessimistic")):
-                    errors.append({"id": item["id"], "error": "Invalid effort values"})
-                    continue
-                try:
-                    opt = _parse_effort_hours(eff["optimistic"])
-                    lik = _parse_effort_hours(eff["likely"])
-                    pes = _parse_effort_hours(eff["pessimistic"])
-                except (ValueError, TypeError):
-                    errors.append({"id": item["id"], "error": "Invalid effort values"})
-                    continue
-                if not (opt <= lik <= pes):
-                    errors.append({"id": item["id"], "error": "Invalid effort values"})
+                opt, lik, pes, err = _validate_effort(eff)
+                if err:
+                    errors.append({"id": item["id"], "error": err})
                     continue
                 item_variant_id = item.get("variant_id")
                 if item_variant_id is not None:
-                    try:
-                        item_variant_id = uuid.UUID(item_variant_id)
-                    except (ValueError, AttributeError):
+                    item_variant_id, err = parse_uuid_or_400(item_variant_id, "variant_id")
+                    if err:
                         errors.append({"id": item["id"], "error": "Invalid variant_id"})
                         continue
-                try:
-                    from ..models.time_estimate import TimeEstimate
-                    for finding in (record.findings or []):
-                        if item_variant_id is not None:
-                            existing = TimeEstimate.get_by_finding_and_variant(finding.id, item_variant_id)
-                        else:
-                            existing = finding.time_estimate
-                        if existing is not None:
-                            existing.update(optimistic=opt, likely=lik, pessimistic=pes)
-                        else:
-                            TimeEstimate.create(
-                                finding_id=finding.id, variant_id=item_variant_id,
-                                optimistic=opt, likely=lik, pessimistic=pes
-                            )
-                        break
-                except Exception as e:
-                    verbose(f"[PATCH /api/vulnerabilities/batch {item['id']!r} effort] {e}")
+                _apply_effort(record, item_variant_id, opt, lik, pes,
+                              log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}")
 
             if "cvss" in item:
-                new_cvss = item["cvss"]
-                required_keys = {"base_score", "vector_string", "version"}
-                if not required_keys.issubset(new_cvss.keys()):
-                    errors.append({"id": item["id"], "error": "Invalid CVSS data"})
+                if isinstance(item["cvss"], dict):
+                    item["cvss"].setdefault("origin", "custom")
+                cvss_err = _validate_and_apply_cvss(
+                    item["cvss"], record.id,
+                    log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}")
+                if cvss_err:
+                    errors.append({"id": item["id"], "error": cvss_err})
                     continue
-                cvss_obj = CVSS.from_dict(new_cvss)
-                try:
-                    Metrics.from_cvss(cvss_obj, record.id)
-                except Exception as e:
-                    verbose(f"[PATCH /api/vulnerabilities/batch {item['id']!r} cvss] {e}")
+                db.session.expire(record, ['metrics'])
 
             results.append(record.to_dict())
 
@@ -644,3 +594,68 @@ def init_app(app):
             response["errors"] = errors
             response["error_count"] = len(errors)
         return response, 200 if results else 400
+
+    @app.route('/api/vulnerabilities/<cve_id>/nvd-refresh', methods=['POST'])
+    def refresh_single_cve(cve_id):
+        cve_id_upper = cve_id.upper()
+        rec = db.session.get(Vulnerability, cve_id_upper)
+        if rec is None:
+            return jsonify({"error": "CVE not found"}), 404
+
+        try:
+            nvd = NVD_DB(nvd_api_key=os.getenv("NVD_API_KEY"))
+            status_code, data = nvd.api_get_cve(cve_id_upper, max_retries=0)
+        except Exception as e:
+            return jsonify({"error": f"NVD API unavailable: {e}"}), 503
+
+        if status_code != 200 or not data.get("vulnerabilities"):
+            return jsonify({"error": "NVD API returned no data for this CVE"}), 503
+
+        cve = data["vulnerabilities"][0]["cve"]
+        details = NVD_DB.extract_cve_details(cve)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        apply_nvd_update(rec, details, now)
+
+        # Update CVSS metric record if NVD returned score data
+        base_score = details.get("base_score")
+        cvss_version = details.get("cvss_version")
+        cvss_vector = details.get("cvss_vector")
+        if base_score is not None and cvss_version is not None:
+            existing = db.session.execute(
+                db.select(Metrics).where(
+                    Metrics.vulnerability_id == rec.id,
+                    Metrics.version == cvss_version,
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                if float(existing.score or 0) != float(base_score) or existing.vector != cvss_vector:
+                    existing.score = base_score
+                    existing.vector = cvss_vector or existing.vector
+            else:
+                db.session.add(Metrics(
+                    vulnerability_id=rec.id,
+                    version=cvss_version,
+                    score=base_score,
+                    vector=cvss_vector or "",
+                    author="nvd",
+                ))
+
+        db.session.commit()
+
+        # After commit, mapped columns are expired but transient attributes
+        # still hold pre-update values. Reload mapped columns then re-derive
+        # all transient attrs so to_dict() returns fresh data.
+        db.session.refresh(rec)
+        rec._init_transient()
+
+        # Repopulate transient severity scores from now-committed metrics so
+        # to_dict() returns correct min/max without a full controller preload.
+        for m in (rec.metrics or []):
+            if m.score is not None:
+                score = float(m.score)
+                if rec.severity_min_score is None or score < rec.severity_min_score:
+                    rec.severity_min_score = score
+                if rec.severity_max_score is None or score > rec.severity_max_score:
+                    rec.severity_max_score = score
+
+        return jsonify({"vulnerabilities": [rec.to_dict()]}), 200

@@ -5,6 +5,7 @@ import { Cvss2, Cvss3P0, Cvss3P1, Cvss4P0 } from 'ae-cvss-calculator';
 
 type CVSS = {
     author: string;
+    origin?: string;
     severity: string;
     version: string;
     vector_string: string;
@@ -26,6 +27,8 @@ type Vulnerability = {
     variants: string[];
     urls: string[];
     published?: string;
+    nvd_fetched_at?: string;
+    nvd_data_updated_at?: string;
     first_scan_date?: string;
     texts: {
         title: string;
@@ -64,6 +67,7 @@ const asCVSS = (data: any): CVSS | [] => {
     if (typeof data?.base_score !== "number") return [];
     let score: CVSS = {
         author: "unknown",
+        origin: "scanner",
         severity: "unknown",
         version: data.version,
         vector_string: "",
@@ -73,6 +77,7 @@ const asCVSS = (data: any): CVSS | [] => {
         impact_score: 0,
     };
     if (typeof data?.author === "string") score.author = data.author
+    if (typeof data?.origin === "string") score.origin = data.origin
     if (typeof data?.severity === "string") score.severity = data.severity
     if (typeof data?.vector_string === "string") {
         score.vector_string = data.vector_string
@@ -141,6 +146,8 @@ const asVulnerability = (data: any): Vulnerability | [] => {
     if (typeof data?.effort?.pessimistic === "string") vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic)
     if (typeof data?.fix?.state === "string") vuln.fix.state = data.fix.state
     if (typeof data?.published === "string") vuln.published = data.published
+    if (typeof data?.nvd_fetched_at === "string") vuln.nvd_fetched_at = data.nvd_fetched_at
+    if (typeof data?.nvd_data_updated_at === "string") vuln.nvd_data_updated_at = data.nvd_data_updated_at
     if (typeof data?.first_scan_date === "string") vuln.first_scan_date = data.first_scan_date
     return vuln
 }
@@ -221,7 +228,7 @@ class Vulnerabilities {
         });
     }
 
-    static calculate_cvss_from_vector(vector: string): CVSS | null {
+    static calculate_cvss_from_vector(vector: string, author = "vulnscout"): CVSS | null {
         const sev = (s: number) =>
             s === 0 ? "NONE" :
             s < 4.0 ? "LOW" :
@@ -258,7 +265,8 @@ class Vulnerabilities {
             const base = Number(scores?.base ?? scores?.overall ?? 0);
 
             return {
-                author: "vulnscout",
+                author,
+                origin: "custom",
                 severity: sev(base),
                 version,
                 vector_string: scores?.vector ?? vector,

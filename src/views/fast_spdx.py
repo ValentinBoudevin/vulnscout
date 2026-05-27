@@ -36,22 +36,20 @@ class FastSPDX ():
         if name is None:
             return None
         version = _get_field(pkg, ["version", "Version", "packageVersion", "PackageVersion", "versionInfo"])
-        primary_package_purpose = _get_field(pkg, ["primaryPackagePurpose", "PrimaryPackagePurpose"])
         licences = _get_field(pkg, ["licenseDeclared", "LicenseDeclared"])
 
         package = Package(name, version or "", [], [], licences or "")
-        cpe_type = "a"
-        if primary_package_purpose == "OPERATING-SYSTEM" or primary_package_purpose == "OPERATING_SYSTEM":
-            cpe_type = "o"
-        if primary_package_purpose == "DEVICE":
-            cpe_type = "h"
-        package.add_cpe(f"cpe:2.3:{cpe_type}:*:{name}:{version or '*'}:*:*:*:*:*:*:*")
 
         for external_ref in _get_field(pkg, ["externalRefs"]) or []:
-            if _get_field(external_ref, ["referenceType"]) == "purl":
+            ref_type = _get_field(external_ref, ["referenceType"])
+            if ref_type == "purl":
                 purl = _get_field(external_ref, ["referenceLocator"])
                 assert isinstance(purl, str)
                 package.add_purl(purl)
+            elif ref_type == "cpe23Type":
+                cpe = _get_field(external_ref, ["referenceLocator"])
+                if isinstance(cpe, str):
+                    package.add_cpe(cpe)
 
         package.generate_generic_cpe()
         package.generate_generic_purl()

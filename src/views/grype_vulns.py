@@ -67,6 +67,23 @@ class GrypeVulns:
 
         return name
 
+    def _build_package(self, name: str, version: str, *sources: dict) -> Package:
+        """Create a Package, add identifiers from *sources*, and register it.
+
+        Each *source* dict may contain ``"purl"`` (str) and ``"cpes"`` (list).
+        """
+        package = Package(name, version, [], [])
+        for src in sources:
+            purl = src.get("purl")
+            if purl:
+                package.add_purl(purl)
+            for cpe in src.get("cpes", []):
+                package.add_cpe(cpe)
+        package.generate_generic_cpe()
+        package.generate_generic_purl()
+        self.packagesCtrl.add(package)
+        return package
+
     def parse_artifact_section(self, artifact: dict) -> Optional[str]:
         """Parse the `artifact` part of grype JSON output."""
         if "name" in artifact and "version" in artifact:
@@ -74,18 +91,10 @@ class GrypeVulns:
             purl_str = artifact.get("purl")
             name = self._normalize_artifact_name(raw_name, purl_str)
 
-            package = Package(name, artifact["version"], [], [])
-
-            if purl_str:
-                package.add_purl(purl_str)
-            if "cpes" in artifact:
-                for cpe in artifact["cpes"]:
-                    package.add_cpe(cpe)
-
-            package.generate_generic_cpe()
-            package.generate_generic_purl()
-
-            self.packagesCtrl.add(package)
+            package = self._build_package(
+                name, artifact["version"],
+                {"purl": purl_str, "cpes": artifact.get("cpes", [])},
+            )
             return package.string_id
         return None
 
@@ -98,25 +107,11 @@ class GrypeVulns:
             if "Package" in searchedby:
                 found_pkg = searchedby.get("Package", {})
                 if "name" in found_pkg and "version" in found_pkg:
-                    package = Package(found_pkg["name"], found_pkg["version"], [], [])
-
-                    if "purl" in searchedby:
-                        package.add_purl(searchedby["purl"])
-                    if "cpes" in searchedby:
-                        for cpe in searchedby["cpes"]:
-                            package.add_cpe(cpe)
-
                     found_match = matchd.get("found", {})
-                    if "purl" in found_match:
-                        package.add_purl(found_match["purl"])
-                    if "cpes" in found_match:
-                        for cpe in found_match["cpes"]:
-                            package.add_cpe(cpe)
-
-                    package.generate_generic_cpe()
-                    package.generate_generic_purl()
-
-                    self.packagesCtrl.add(package)
+                    package = self._build_package(
+                        found_pkg["name"], found_pkg["version"],
+                        searchedby, found_match,
+                    )
                     packages.append(package.string_id)
         return packages
 
@@ -168,14 +163,7 @@ class GrypeVulns:
                     packages.append(pkg_id)
                     if pkg_id not in seen_pkg_ids:
                         seen_pkg_ids.add(pkg_id)
-                        # Bulk-fetch all existing assessments for this package
-                        # so the in-memory index is complete before we start
-                        # checking for assessments below.
-                        _current_vid = getattr(self.assessmentsCtrl, 'current_variant_id', None)
-                        for a in Assessment.get_by_package(pkg_id):
-                            if _current_vid is None or a.variant_id is None or a.variant_id == _current_vid:
-                                self.assessmentsCtrl._index_existing(a)
-                        self.assessmentsCtrl._db_queried_pkgs.add(pkg_id)
+                        self.assessmentsCtrl.warm_packages([pkg_id])
 
             if "matchDetails" in match:
                 packages.extend(self.parse_match_details(match["matchDetails"]))

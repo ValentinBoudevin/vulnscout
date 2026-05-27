@@ -6,6 +6,7 @@ from typing import Optional
 
 from ..models.scan import Scan
 from ..helpers.datetime_utils import ensure_utc_iso
+from ._base import ensure_uuid, resolve_entity
 
 
 class ScanController:
@@ -44,9 +45,7 @@ class ScanController:
     @staticmethod
     def get(scan_id: uuid.UUID | str) -> Optional[Scan]:
         """Return the scan matching *scan_id*, or ``None`` if not found."""
-        if isinstance(scan_id, str):
-            scan_id = uuid.UUID(scan_id)
-        return Scan.get_by_id(scan_id)
+        return Scan.get_by_id(ensure_uuid(scan_id))
 
     @staticmethod
     def get_all() -> list[Scan]:
@@ -56,16 +55,12 @@ class ScanController:
     @staticmethod
     def get_by_variant(variant_id: uuid.UUID | str) -> list[Scan]:
         """Return all scans belonging to *variant_id*, ordered by timestamp."""
-        if isinstance(variant_id, str):
-            variant_id = uuid.UUID(variant_id)
-        return Scan.get_by_variant_id(variant_id)
+        return Scan.get_by_variant_id(ensure_uuid(variant_id))
 
     @staticmethod
     def get_by_project(project_id: uuid.UUID | str) -> list[Scan]:
         """Return all scans belonging to *project_id* (across all its variants), ordered by timestamp."""
-        if isinstance(project_id, str):
-            project_id = uuid.UUID(project_id)
-        return Scan.get_by_project(project_id)
+        return Scan.get_by_project(ensure_uuid(project_id))
 
     # ------------------------------------------------------------------
     # Mutations
@@ -79,10 +74,8 @@ class ScanController:
 
         :raises ValueError: if *variant_id* is not a valid UUID string.
         """
-        if isinstance(variant_id, str):
-            variant_id = uuid.UUID(variant_id)
-        return Scan.create(description, variant_id, scan_type=scan_type,
-                           scan_source=scan_source)
+        return Scan.create(description, ensure_uuid(variant_id),
+                           scan_type=scan_type, scan_source=scan_source)
 
     @staticmethod
     def update(scan: Scan | uuid.UUID | str, description: str) -> Scan:
@@ -92,12 +85,8 @@ class ScanController:
 
         :raises ValueError: if the scan is not found.
         """
-        if not isinstance(scan, Scan):
-            _fetched = ScanController.get(scan)
-            if _fetched is None:
-                raise ValueError("Scan not found.")
-            scan = _fetched
-        return scan.update(description)
+        resolved = resolve_entity(scan, ScanController.get, "Scan")
+        return resolved.update(description)
 
     @staticmethod
     def delete(scan: Scan | uuid.UUID | str) -> None:
@@ -107,9 +96,5 @@ class ScanController:
 
         :raises ValueError: if the scan is not found.
         """
-        if not isinstance(scan, Scan):
-            _fetched = ScanController.get(scan)
-            if _fetched is None:
-                raise ValueError("Scan not found.")
-            scan = _fetched
-        scan.delete()
+        resolved = resolve_entity(scan, ScanController.get, "Scan")
+        resolved.delete()

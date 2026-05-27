@@ -6,6 +6,8 @@ from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.cvss import CVSS
 from ..models.assessment import Assessment
+from ..controllers import PackagesController, VulnerabilitiesController, AssessmentsController
+from ..helpers.datetime_utils import normalize_timestamp_for_sort
 from cyclonedx.model.bom import Bom
 from cyclonedx.output.json import JsonV1Dot4, JsonV1Dot5, JsonV1Dot6
 from cyclonedx.model.component import Component
@@ -24,77 +26,62 @@ class CycloneDx:
     """
 
     def __init__(self, controllers):
-        self.packagesCtrl = controllers["packages"]
-        self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
-        self.assessmentsCtrl = controllers["assessments"]
+        self.packagesCtrl: PackagesController = controllers["packages"]
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
+        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
         self.ref_dict = {}
+
+    _SEVERITY_MAP = {
+        "low": cyclonedx.model.vulnerability.VulnerabilitySeverity.LOW,
+        "medium": cyclonedx.model.vulnerability.VulnerabilitySeverity.MEDIUM,
+        "high": cyclonedx.model.vulnerability.VulnerabilitySeverity.HIGH,
+        "critical": cyclonedx.model.vulnerability.VulnerabilitySeverity.CRITICAL,
+        "info": cyclonedx.model.vulnerability.VulnerabilitySeverity.INFO,
+    }
+
+    _VEX_STATUS_MAP = {
+        "resolved": ImpactAnalysisState.RESOLVED,
+        "resolved_with_pedigree": ImpactAnalysisState.RESOLVED_WITH_PEDIGREE,
+        "exploitable": ImpactAnalysisState.EXPLOITABLE,
+        "in_triage": ImpactAnalysisState.IN_TRIAGE,
+        "false_positive": ImpactAnalysisState.FALSE_POSITIVE,
+        "not_affected": ImpactAnalysisState.NOT_AFFECTED,
+    }
+
+    # Resolve the "perimeter" typo that exists in some cyclonedx-python-lib versions.
+    try:
+        _PERIMETER = ImpactAnalysisJustification.PROTECTED_AT_PERIMETER  # type: ignore
+    except AttributeError:
+        _PERIMETER = ImpactAnalysisJustification.PROTECTED_AT_PERIMITER
+
+    _VEX_JUSTIFICATION_MAP = {
+        "code_not_present": ImpactAnalysisJustification.CODE_NOT_PRESENT,
+        "code_not_reachable": ImpactAnalysisJustification.CODE_NOT_REACHABLE,
+        "protected_at_perimeter": _PERIMETER,
+        "protected_at_runtime": ImpactAnalysisJustification.PROTECTED_AT_RUNTIME,
+        "protected_by_compiler": ImpactAnalysisJustification.PROTECTED_BY_COMPILER,
+        "protected_by_mitigating_control": ImpactAnalysisJustification.PROTECTED_BY_MITIGATING_CONTROL,
+        "requires_configuration": ImpactAnalysisJustification.REQUIRES_CONFIGURATION,
+        "requires_dependency": ImpactAnalysisJustification.REQUIRES_DEPENDENCY,
+        "requires_environment": ImpactAnalysisJustification.REQUIRES_ENVIRONMENT,
+    }
 
     @staticmethod
     def str_to_severity(severity: str) -> cyclonedx.model.vulnerability.VulnerabilitySeverity:
-        """
-        Internal method.
-        Convert string to CycloneDx severity.
-        """
-        if severity.lower() == "low":
-            return cyclonedx.model.vulnerability.VulnerabilitySeverity.LOW
-        elif severity.lower() == "medium":
-            return cyclonedx.model.vulnerability.VulnerabilitySeverity.MEDIUM
-        elif severity.lower() == "high":
-            return cyclonedx.model.vulnerability.VulnerabilitySeverity.HIGH
-        elif severity.lower() == "critical":
-            return cyclonedx.model.vulnerability.VulnerabilitySeverity.CRITICAL
-        elif severity.lower() == "info":
-            return cyclonedx.model.vulnerability.VulnerabilitySeverity.INFO
-        return cyclonedx.model.vulnerability.VulnerabilitySeverity.UNKNOWN
+        """Convert string to CycloneDx severity."""
+        return CycloneDx._SEVERITY_MAP.get(
+            severity.lower(), cyclonedx.model.vulnerability.VulnerabilitySeverity.UNKNOWN
+        )
 
     @staticmethod
     def str_to_vex_status(state: str) -> ImpactAnalysisState:
-        """
-        Internal method.
-        Convert string to CycloneDx VEX status.
-        """
-        if state.lower() == "resolved":
-            return ImpactAnalysisState.RESOLVED
-        elif state.lower() == "resolved_with_pedigree":
-            return ImpactAnalysisState.RESOLVED_WITH_PEDIGREE
-        elif state.lower() == "exploitable":
-            return ImpactAnalysisState.EXPLOITABLE
-        elif state.lower() == "in_triage":
-            return ImpactAnalysisState.IN_TRIAGE
-        elif state.lower() == "false_positive":
-            return ImpactAnalysisState.FALSE_POSITIVE
-        elif state.lower() == "not_affected":
-            return ImpactAnalysisState.NOT_AFFECTED
-        return ImpactAnalysisState.IN_TRIAGE
+        """Convert string to CycloneDx VEX status."""
+        return CycloneDx._VEX_STATUS_MAP.get(state.lower(), ImpactAnalysisState.IN_TRIAGE)
 
     @staticmethod
     def str_to_vex_justification(justification: str) -> Optional[ImpactAnalysisJustification]:
-        """
-        Internal method.
-        Convert string to CycloneDx VEX justification.
-        """
-        if justification.lower() == "code_not_present":
-            return ImpactAnalysisJustification.CODE_NOT_PRESENT
-        elif justification.lower() == "code_not_reachable":
-            return ImpactAnalysisJustification.CODE_NOT_REACHABLE
-        elif justification.lower() == "protected_at_perimeter":
-            try:
-                return ImpactAnalysisJustification.PROTECTED_AT_PERIMETER  # type: ignore
-            except AttributeError:
-                return ImpactAnalysisJustification.PROTECTED_AT_PERIMITER
-        elif justification.lower() == "protected_at_runtime":
-            return ImpactAnalysisJustification.PROTECTED_AT_RUNTIME
-        elif justification.lower() == "protected_by_compiler":
-            return ImpactAnalysisJustification.PROTECTED_BY_COMPILER
-        elif justification.lower() == "protected_by_mitigating_control":
-            return ImpactAnalysisJustification.PROTECTED_BY_MITIGATING_CONTROL
-        elif justification.lower() == "requires_configuration":
-            return ImpactAnalysisJustification.REQUIRES_CONFIGURATION
-        elif justification.lower() == "requires_dependency":
-            return ImpactAnalysisJustification.REQUIRES_DEPENDENCY
-        elif justification.lower() == "requires_environment":
-            return ImpactAnalysisJustification.REQUIRES_ENVIRONMENT
-        return None
+        """Convert string to CycloneDx VEX justification."""
+        return CycloneDx._VEX_JUSTIFICATION_MAP.get(justification.lower())
 
     @staticmethod
     def cvss_to_rating_method(cvss: CVSS) -> cyclonedx.model.vulnerability.VulnerabilityScoreSource:
@@ -368,18 +355,6 @@ class CycloneDx:
             self.register_assessment(vuln_obj)
             self.sbom.vulnerabilities.add(vuln_obj)
 
-    @staticmethod
-    def _ts_key(ts):
-        """Normalise a timestamp (str or datetime) to an ISO string for comparison."""
-        if ts is None:
-            return ""
-        if isinstance(ts, str):
-            return ts
-        try:
-            return ts.isoformat()
-        except AttributeError:
-            return str(ts)
-
     def register_assessment(self, vuln_obj: cyclonedx.model.vulnerability.Vulnerability):
         """
         Internal method.
@@ -387,7 +362,10 @@ class CycloneDx:
         """
         last_assessment = None
         for assessment in self.assessmentsCtrl.gets_by_vuln(vuln_obj.id):
-            if last_assessment is None or self._ts_key(last_assessment.timestamp) < self._ts_key(assessment.timestamp):
+            if last_assessment is None or (
+                normalize_timestamp_for_sort(last_assessment.timestamp)
+                < normalize_timestamp_for_sort(assessment.timestamp)
+            ):
                 last_assessment = assessment
 
         if last_assessment:
