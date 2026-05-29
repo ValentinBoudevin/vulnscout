@@ -36,6 +36,8 @@ type Props = {
     baseVariantId?: string;
     /** 'difference' or 'intersection' when compare mode is active */
     compareOperation?: string;
+    /** Called when an NVD or EPSS bulk refresh completes, so the parent can reload data */
+    onRefreshComplete?: () => void;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -273,7 +275,7 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, onRefreshComplete }: Readonly<Props>) {
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
@@ -318,6 +320,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
     const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
     const moreFiltersRef = useRef<HTMLDivElement>(null);
+    const prevNvdInProgress = useRef<boolean | null>(null);
+    const prevEpssInProgress = useRef<boolean | null>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -342,6 +346,44 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         if (filterLabel === "Status") setSelectedStatuses([filterValue]);
         if (filterLabel === "Package") setSelectedPackages([filterValue]);
     }, [filterLabel, filterValue]);
+
+    // Update banner with live NVD progress; reload data when the refresh completes
+    useEffect(() => {
+        const inProgress = nvdProgress?.in_progress ?? false;
+        if (inProgress) {
+            if (nvdProgress && nvdProgress.total > 0 && nvdProgress.current > 0) {
+                setBannerMessage(`NVD refresh in progress: ${nvdProgress.current}/${nvdProgress.total}`);
+                setBannerType('success');
+                setBannerVisible(true);
+            }
+        } else if (prevNvdInProgress.current === true) {
+            onRefreshComplete?.();
+            const total = nvdProgress?.total ?? 0;
+            setBannerMessage(`NVD refresh complete${total > 0 ? ` (${total} CVEs)` : ''}`);
+            setBannerType('success');
+            setBannerVisible(true);
+        }
+        prevNvdInProgress.current = inProgress;
+    }, [nvdProgress, onRefreshComplete]);
+
+    // Update banner with live EPSS progress; reload data when the refresh completes
+    useEffect(() => {
+        const inProgress = epssProgress?.in_progress ?? false;
+        if (inProgress) {
+            if (epssProgress && epssProgress.total > 0 && epssProgress.current > 0) {
+                setBannerMessage(`EPSS refresh in progress: ${epssProgress.current}/${epssProgress.total}`);
+                setBannerType('success');
+                setBannerVisible(true);
+            }
+        } else if (prevEpssInProgress.current === true) {
+            onRefreshComplete?.();
+            const total = epssProgress?.total ?? 0;
+            setBannerMessage(`EPSS refresh complete${total > 0 ? ` (${total} CVEs)` : ''}`);
+            setBannerType('success');
+            setBannerVisible(true);
+        }
+        prevEpssInProgress.current = inProgress;
+    }, [epssProgress, onRefreshComplete]);
 
     // Fetch NVD progress on mount and periodically
     useEffect(() => {
@@ -1385,6 +1427,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             variantId={variantId}
             baseVariantId={baseVariantId}
             compareOperation={compareOperation}
+            nvdProgress={nvdProgress}
+            epssProgress={epssProgress}
         />
 
         <TableGeneric

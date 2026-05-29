@@ -1,6 +1,7 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+from .bulk_refresh import init_app as init_bulk_refresh_app
 from .packages import init_app as init_pkg_app
 from .vulnerabilities import init_app as init_vuln_app
 from .assessments import init_app as init_assess_app
@@ -28,6 +29,7 @@ def init_app(app):
     init_variant_app(app)
     init_scans_app(app)
     init_scan_triggers_app(app)
+    init_bulk_refresh_app(app)
     init_config_app(app)
     init_notifications_app(app)
     init_settings_app(app)

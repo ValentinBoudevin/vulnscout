@@ -7,6 +7,9 @@ import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import { asAssessment, Assessment } from "../handlers/assessments";
 import Iso8601Duration from '../handlers/iso8601duration';
 import Variants from '../handlers/variant';
+import { BulkNvdRefreshHandler, BulkEpssRefreshHandler } from "../handlers/bulkRefresh";
+import type { NVDProgress } from "../handlers/nvd_progress";
+import type { EPSSProgress } from "../handlers/epss_progress";
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -21,9 +24,11 @@ type Props = {
     baseVariantId?: string;
     /** 'difference' or 'intersection' when compare mode is active */
     compareOperation?: string;
+    nvdProgress?: NVDProgress | null;
+    epssProgress?: EPSSProgress | null;
 };
 
-function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, variantId, baseVariantId, compareOperation} : Readonly<Props>) {
+function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, variantId, baseVariantId, compareOperation, nvdProgress, epssProgress} : Readonly<Props>) {
 
     const [panelOpened, setPanelOpened] = useState<number>(0)
     const [isLoading, setIsLoading] = useState<boolean>(false)
@@ -337,6 +342,46 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
 
                         <button className="bg-sky-900 p-1 px-2" onClick={() => { hideBanner(); setPanelOpened(panelOpened == 1 ? 0 : 1); }}>Change status</button>
                         <button className="bg-sky-900 p-1 px-2 mr-4" onClick={() => { hideBanner(); setPanelOpened(panelOpened == 2 ? 0 : 2); }}>Change estimated time</button>
+
+                        <button
+                            className="bg-sky-900 p-1 px-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={nvdProgress?.in_progress ?? false}
+                            title="Refresh NVD data for selected CVEs"
+                            onClick={() => {
+                                hideBanner();
+                                BulkNvdRefreshHandler.trigger(selectedVulns).then(res => {
+                                    if (res) triggerBanner(`NVD refresh started for ${res.total} CVE(s)`, 'success');
+                                    else triggerBanner('Failed to start NVD refresh', 'error');
+                                }).catch(() => triggerBanner('Failed to start NVD refresh', 'error'));
+                            }}
+                        >Refresh NVD</button>
+                        <button
+                            className="bg-sky-900 p-1 px-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={epssProgress?.in_progress ?? false}
+                            title="Refresh EPSS scores for selected CVEs"
+                            onClick={() => {
+                                hideBanner();
+                                BulkEpssRefreshHandler.trigger(selectedVulns).then(res => {
+                                    if (res) triggerBanner(`EPSS refresh started for ${res.total} CVE(s)`, 'success');
+                                    else triggerBanner('Failed to start EPSS refresh', 'error');
+                                }).catch(() => triggerBanner('Failed to start EPSS refresh', 'error'));
+                            }}
+                        >Refresh EPSS</button>
+                        <button
+                            className="bg-sky-900 p-1 px-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={(nvdProgress?.in_progress ?? false) || (epssProgress?.in_progress ?? false)}
+                            title="Refresh both NVD and EPSS for selected CVEs"
+                            onClick={() => {
+                                hideBanner();
+                                Promise.all([
+                                    BulkNvdRefreshHandler.trigger(selectedVulns),
+                                    BulkEpssRefreshHandler.trigger(selectedVulns),
+                                ]).then(([nvd, epss]) => {
+                                    if (nvd || epss) triggerBanner(`Refresh started: NVD ${nvd ? nvd.total : 0} CVE(s), EPSS ${epss ? epss.total : 0} CVE(s)`, 'success');
+                                    else triggerBanner('Failed to start NVD + EPSS refresh', 'error');
+                                }).catch(() => triggerBanner('Failed to start NVD + EPSS refresh', 'error'));
+                            }}
+                        >Refresh NVD + EPSS</button>
                     </div>
                 </div>
             </div>
