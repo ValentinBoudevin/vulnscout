@@ -118,7 +118,7 @@ type AssessmentGroup = {
     const [showBanner, setShowBanner] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
     const [refreshError, setRefreshError] = useState<string | null>(null);
-    const [refreshDone, setRefreshDone] = useState(false);
+    const [refreshedList, setRefreshedList] = useState<string[]>([]);
 
     const modalRef = useRef<HTMLDivElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -158,7 +158,7 @@ type AssessmentGroup = {
     useEffect(() => {
         setRefreshing(false);
         setRefreshError(null);
-        setRefreshDone(false);
+        setRefreshedList([]);
     }, [vuln.id]);
 
     const showMessage = (message: string, type: "error" | "success") => {
@@ -219,7 +219,7 @@ type AssessmentGroup = {
     const handleRefresh = useCallback(async () => {
         setRefreshing(true);
         setRefreshError(null);
-        setRefreshDone(false);
+        setRefreshedList([]);
         try {
             const [nvdResult, epssResult] = await Promise.allSettled([
                 NvdRefreshHandler.triggerSingleRefresh(vuln.id),
@@ -237,29 +237,37 @@ type AssessmentGroup = {
             const nvdUpdated = nvdResult.status === "fulfilled" && nvdResult.value !== null;
             const epssUpdated = epssResult.status === "fulfilled" && epssResult.value !== null;
 
+            let merged = { ...vuln };
+
             if (nvdUpdated || epssUpdated) {
-                const {
-                    status: _s,
-                    simplified_status: _ss,
-                    assessments: _a,
-                    packages_current: _pc,
-                    variants: _v,
-                    found_by: _fb,
-                    ...nvdUpdates
-                } = nvdUpdated ? nvdResult.value! : ({} as typeof vuln);
-                let merged = { ...vuln, ...nvdUpdates };
+                if (nvdUpdated) {
+                    const {
+                        status: _s,
+                        simplified_status: _ss,
+                        assessments: _a,
+                        packages_current: _pc,
+                        variants: _v,
+                        found_by: _fb,
+                        ...nvdUpdates
+                    } = nvdUpdated ? nvdResult.value! : ({} as typeof vuln);
+    
+                    merged = { ...merged, ...nvdUpdates };
+                    setRefreshedList(prev => [...prev, "NVD"]);
+                }
+
                 if (epssUpdated) {
                     merged = { ...merged, epss: epssResult.value!.epss };
+                    setRefreshedList(prev => [...prev, "EPSS"]);
                 }
+
                 patchVuln(vuln.id, merged);
-                setRefreshDone(true);
             }
 
             if (errors.length > 0) {
                 setRefreshError(errors.join(". ") + ". Please try again later.");
             }
-        } catch {
-            setRefreshError("NVD API unavailable. EPSS API unavailable. Please try again later.");
+        } catch (error) {
+            setRefreshError(String(error) + " Please try again later.");
         } finally {
             setRefreshing(false);
         }
@@ -569,6 +577,9 @@ type AssessmentGroup = {
 
     const groupedAssessments = groupAssessments(vuln.assessments);
 
+    const bothRefreshed = refreshedList.includes('NVD') && refreshedList.includes('EPSS');
+    const partialRefreshed = refreshedList.length > 0 && !bothRefreshed;
+
     // Get the default status for new assessments
     // Use the most recent assessment's status, or "under_investigation" if no assessments exist
     const getDefaultStatus = () => {
@@ -825,16 +836,19 @@ type AssessmentGroup = {
                                         title="Refresh from NVD & EPSS"
                                         type="button"
                                         className={`px-3 py-2 text-sm font-medium focus:outline-none rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                                            refreshDone
+                                            bothRefreshed
                                                 ? 'text-green-400 border-green-600 hover:bg-green-900 bg-transparent'
-                                                : 'border-gray-600 hover:bg-gray-600 hover:text-white bg-transparent text-gray-300'
+                                                : partialRefreshed
+                                                    ? 'text-yellow-400 border-yellow-600 hover:bg-yellow-900 bg-transparent'
+                                                    : 'border-gray-600 hover:bg-gray-600 hover:text-white bg-transparent text-gray-300'
                                         }`}
                                     >
                                         <FontAwesomeIcon
-                                            icon={refreshDone ? faCheck : faRotate}
+                                            icon={(bothRefreshed || partialRefreshed) ? faCheck : faRotate}
                                             className={refreshing ? "animate-spin" : ""}
                                         />
-                                        {refreshDone && <span className="ml-2 text-xs">Updated</span>}
+                                        {bothRefreshed && <span className="ml-2 text-xs">Updated</span>}
+                                        {partialRefreshed && <span className="ml-2 text-xs">{refreshedList[0]} Updated</span>}
                                     </button>
                                     {refreshError && (
                                         <span className="text-xs text-red-400">{refreshError}</span>
