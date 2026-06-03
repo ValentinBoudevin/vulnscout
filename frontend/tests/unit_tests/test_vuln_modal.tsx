@@ -2243,6 +2243,46 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         });
     });
 
+    test('shows rate-limit hint with NVD_API_KEY suggestion when server returns 429 and no key', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(
+            JSON.stringify({ error: 'rate limited', error_code: 'rate_limited', api_key_configured: false }),
+            { status: 429 }
+        ); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/NVD rate-limited.*NVD API key/i)).toBeInTheDocument();
+        });
+    });
+
+    test('shows exhausted-key hint when 429 and api key is already configured', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(
+            JSON.stringify({ error: 'rate limited', error_code: 'rate_limited', api_key_configured: true }),
+            { status: 429 }
+        ); // nvd-refresh
+        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // epss-refresh
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/NVD rate-limited.*exhausted/i)).toBeInTheDocument();
+        });
+    });
+
     test('clears success cue and error when navigating to a different vulnerability', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponse(JSON.stringify([])); // all fetches return empty

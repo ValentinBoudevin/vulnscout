@@ -227,14 +227,21 @@ type AssessmentGroup = {
             ]);
 
             const errors: string[] = [];
-            if (nvdResult.status === "rejected" || nvdResult.value === null) {
-                errors.push("NVD API unavailable");
+            const nvdValue = nvdResult.status === "fulfilled" ? nvdResult.value : null;
+            const nvdUpdated = nvdValue?.kind === "success";
+            if (!nvdUpdated) {
+                if (nvdValue?.kind === "error" && nvdValue.code === "rate_limited") {
+                    errors.push(nvdValue.apiKeyConfigured
+                        ? "NVD rate-limited. Your NVD API key may be exhausted, please try again later."
+                        : "NVD rate-limited. Set NVD API key in settings to reduce throttling.");
+                } else {
+                    errors.push("NVD API unavailable");
+                }
             }
             if (epssResult.status === "rejected" || epssResult.value === null) {
                 errors.push("EPSS API unavailable");
             }
 
-            const nvdUpdated = nvdResult.status === "fulfilled" && nvdResult.value !== null;
             const epssUpdated = epssResult.status === "fulfilled" && epssResult.value !== null;
 
             let merged = { ...vuln };
@@ -249,8 +256,8 @@ type AssessmentGroup = {
                         variants: _v,
                         found_by: _fb,
                         ...nvdUpdates
-                    } = nvdUpdated ? nvdResult.value! : ({} as typeof vuln);
-    
+                    } = nvdValue.vuln;
+
                     merged = { ...merged, ...nvdUpdates };
                     setRefreshedList(prev => [...prev, "NVD"]);
                 }

@@ -603,14 +603,35 @@ def init_app(app):
         if rec is None:
             return jsonify({"error": "CVE not found"}), 404
 
+        api_key = os.getenv("NVD_API_KEY")
         try:
-            nvd = NVD_DB(nvd_api_key=os.getenv("NVD_API_KEY"))
+            nvd = NVD_DB(nvd_api_key=api_key)
             status_code, data = nvd.api_get_cve(cve_id_upper, max_retries=0)
         except Exception as e:
-            return jsonify({"error": f"NVD API unavailable: {e}"}), 503
+            return jsonify({
+                "error": f"NVD API unavailable: {e}",
+                "error_code": "unavailable",
+                "api_key_configured": bool(api_key),
+            }), 503
 
+        if status_code == 429:
+            return jsonify({
+                "error": "NVD API rate limit exceeded",
+                "error_code": "rate_limited",
+                "api_key_configured": bool(api_key),
+            }), 429
+        if status_code in (401, 403):
+            return jsonify({
+                "error": f"NVD API rejected credentials (HTTP {status_code})",
+                "error_code": "unauthorized",
+                "api_key_configured": bool(api_key),
+            }), status_code
         if status_code != 200 or not data.get("vulnerabilities"):
-            return jsonify({"error": "NVD API returned no data for this CVE"}), 503
+            return jsonify({
+                "error": "NVD API returned no data for this CVE",
+                "error_code": "unavailable",
+                "api_key_configured": bool(api_key),
+            }), 503
 
         cve = data["vulnerabilities"][0]["cve"]
         details = NVD_DB.extract_cve_details(cve)
