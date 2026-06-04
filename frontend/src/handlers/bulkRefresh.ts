@@ -45,3 +45,39 @@ export class BulkEpssRefreshHandler {
         }
     }
 }
+
+export interface CancelRefreshResponse {
+    status: string;
+}
+
+export class BulkNvdRefreshCancelHandler {
+    static async trigger(): Promise<CancelRefreshResponse | null> {
+        const url = `${import.meta.env.VITE_API_URL}/api/vulnerabilities/cancel-nvd-refresh`;
+        try {
+            const response = await fetch(url, {
+                method: "POST",
+                mode: "cors",
+            });
+            if (!response.ok) return null;
+            return response.json().catch(() => null);
+        } catch {
+            return null;
+        }
+    }
+}
+
+export class BulkEpssRefreshCancelHandler {
+    static async trigger(): Promise<CancelRefreshResponse | null> {
+        const url = `${import.meta.env.VITE_API_URL}/api/vulnerabilities/cancel-epss-refresh`;
+        try {
+            const response = await fetch(url, {
+                method: "POST",
+                mode: "cors",
+            });
+            if (!response.ok) return null;
+            return response.json().catch(() => null);
+        } catch {
+            return null;
+        }
+    }
+}

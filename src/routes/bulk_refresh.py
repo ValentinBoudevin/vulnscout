@@ -93,6 +93,11 @@ def init_app(app):
                 done = 0
                 try:
                     for cve_id in cve_ids:
+                        if NVDProgressTracker.is_cancelled():
+                            _safe_commit("bulk NVD refresh cancel")
+                            NVDProgressTracker.mark_cancelled()
+                            return
+
                         try:
                             status_code, data = nvd.api_get_cve(cve_id, max_retries=2)
                             if status_code == 200 and data.get("vulnerabilities"):
@@ -129,6 +134,17 @@ def init_app(app):
 
         threading.Thread(target=_run, name="bulk-nvd-refresh", daemon=True).start()
         return jsonify({"status": "started", "total": total}), 202
+
+    @app.route('/api/vulnerabilities/cancel-nvd-refresh', methods=['POST'])
+    def cancel_nvd_refresh():
+        """Request cancellation of an in-progress bulk NVD refresh.
+
+        Returns 200 when the cancellation was accepted (refresh was running).
+        Returns 409 when no bulk NVD refresh is currently in progress.
+        """
+        if NVDProgressTracker.cancel():
+            return jsonify({"status": "cancelling"}), 200
+        return jsonify({"error": "No bulk NVD refresh is currently in progress"}), 409
 
     @app.route('/api/vulnerabilities/bulk-epss-refresh', methods=['POST'])
     def bulk_epss_refresh():
@@ -170,6 +186,11 @@ def init_app(app):
                         for i in range(0, total, _EPSS_BATCH_SIZE)
                     ]
                     for chunk in chunks:
+                        if EPSSProgressTracker.is_cancelled():
+                            _safe_commit("bulk EPSS refresh cancel")
+                            EPSSProgressTracker.mark_cancelled()
+                            return
+
                         try:
                             results = epss.api_get_epss_batch(chunk)
                         except Exception as exc:
@@ -212,3 +233,14 @@ def init_app(app):
 
         threading.Thread(target=_run, name="bulk-epss-refresh", daemon=True).start()
         return jsonify({"status": "started", "total": total}), 202
+
+    @app.route('/api/vulnerabilities/cancel-epss-refresh', methods=['POST'])
+    def cancel_epss_refresh():
+        """Request cancellation of an in-progress bulk EPSS refresh.
+
+        Returns 200 when the cancellation was accepted (refresh was running).
+        Returns 409 when no bulk EPSS refresh is currently in progress.
+        """
+        if EPSSProgressTracker.cancel():
+            return jsonify({"status": "cancelling"}), 200
+        return jsonify({"error": "No bulk EPSS refresh is currently in progress"}), 409

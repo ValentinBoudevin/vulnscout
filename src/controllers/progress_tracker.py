@@ -17,6 +17,7 @@ class ProgressTracker:
         self._default_phase = default_phase
         self._completed_message = completed_message
         self._lock = Lock()
+        self._cancelled = False
         self._data = {
             "in_progress": False,
             "phase": "idle",
@@ -32,6 +33,7 @@ class ProgressTracker:
         phase = phase or self._default_phase
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
+            self._cancelled = False
             self._data = {
                 "in_progress": True,
                 "phase": phase,
@@ -58,6 +60,34 @@ class ProgressTracker:
             self._data["in_progress"] = False
             self._data["phase"] = "completed"
             self._data["message"] = self._completed_message
+            self._data["last_update"] = datetime.now(timezone.utc).isoformat()
+
+    def cancel(self):
+        """Request cancellation of the in-progress enrichment.
+
+        Thread-safe: the background thread must poll ``is_cancelled()`` and
+        call ``cancelled()`` itself once it has safely stopped.
+        Returns True if a cancellation was requested (refresh was in progress),
+        False if nothing was running.
+        """
+        with self._lock:
+            if not self._data["in_progress"]:
+                return False
+            self._cancelled = True
+            return True
+
+    def is_cancelled(self) -> bool:
+        """Return True if a cancellation has been requested."""
+        with self._lock:
+            return self._cancelled
+
+    def mark_cancelled(self):
+        """Called by the background thread once it has stopped gracefully."""
+        with self._lock:
+            self._cancelled = False
+            self._data["in_progress"] = False
+            self._data["phase"] = "cancelled"
+            self._data["message"] = "Bulk refresh cancelled"
             self._data["last_update"] = datetime.now(timezone.utc).isoformat()
 
     def error(self, message: str):

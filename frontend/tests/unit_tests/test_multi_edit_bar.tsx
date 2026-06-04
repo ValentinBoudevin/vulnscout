@@ -14,10 +14,16 @@ jest.mock('../../src/handlers/bulkRefresh', () => ({
     BulkEpssRefreshHandler: {
         trigger: jest.fn(),
     },
+    BulkNvdRefreshCancelHandler: {
+        trigger: jest.fn(),
+    },
+    BulkEpssRefreshCancelHandler: {
+        trigger: jest.fn(),
+    },
 }));
 
 import MultiEditBar from '../../src/components/MultiEditBar';
-import { BulkNvdRefreshHandler, BulkEpssRefreshHandler } from '../../src/handlers/bulkRefresh';
+import { BulkNvdRefreshHandler, BulkEpssRefreshHandler, BulkNvdRefreshCancelHandler, BulkEpssRefreshCancelHandler } from '../../src/handlers/bulkRefresh';
 import type { Vulnerability } from '../../src/handlers/vulnerabilities';
 
 describe('MultiEditBar', () => {
@@ -842,5 +848,103 @@ describe('MultiEditBar', () => {
         const variantIds = body.assessments.map((a: any) => a.variant_id);
         expect(variantIds).toContain('v-cmp');
         expect(variantIds).toContain('v-base');
+    });
+
+    test('shows Cancel NVD button only when nvdProgress.in_progress is true', () => {
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1'],
+            nvdProgress: { in_progress: true, phase: 'bulk_nvd_refresh', current: 1, total: 10, message: '' },
+        };
+        render(<MultiEditBar {...props} />);
+        expect(screen.getByTestId('cancel-nvd-refresh')).toBeInTheDocument();
+    });
+
+    test('does not show Cancel NVD button when nvdProgress.in_progress is false', () => {
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1'],
+            nvdProgress: { in_progress: false, phase: 'idle', current: 0, total: 0, message: '' },
+        };
+        render(<MultiEditBar {...props} />);
+        expect(screen.queryByTestId('cancel-nvd-refresh')).toBeNull();
+    });
+
+    test('shows Cancel EPSS button only when epssProgress.in_progress is true', () => {
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1'],
+            epssProgress: { in_progress: true, phase: 'bulk_epss_refresh', current: 1, total: 10, message: '' },
+        };
+        render(<MultiEditBar {...props} />);
+        expect(screen.getByTestId('cancel-epss-refresh')).toBeInTheDocument();
+    });
+
+    test('clicking Cancel NVD calls BulkNvdRefreshCancelHandler.trigger and shows banner', async () => {
+        const mockTriggerBanner = jest.fn();
+        const mockCancelTrigger = BulkNvdRefreshCancelHandler.trigger as jest.Mock;
+        mockCancelTrigger.mockResolvedValue({ status: 'cancelling' });
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1'],
+            nvdProgress: { in_progress: true, phase: 'bulk_nvd_refresh', current: 1, total: 10, message: '' },
+            triggerBanner: mockTriggerBanner,
+        };
+        render(<MultiEditBar {...props} />);
+
+        await act(async () => {
+            await userEvent.click(screen.getByTestId('cancel-nvd-refresh'));
+        });
+
+        await waitFor(() => {
+            expect(mockCancelTrigger).toHaveBeenCalled();
+            expect(mockTriggerBanner).toHaveBeenCalledWith('NVD refresh cancellation requested', 'success');
+        });
+    });
+
+    test('clicking Cancel EPSS calls BulkEpssRefreshCancelHandler.trigger and shows banner', async () => {
+        const mockTriggerBanner = jest.fn();
+        const mockCancelTrigger = BulkEpssRefreshCancelHandler.trigger as jest.Mock;
+        mockCancelTrigger.mockResolvedValue({ status: 'cancelling' });
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1'],
+            epssProgress: { in_progress: true, phase: 'bulk_epss_refresh', current: 1, total: 10, message: '' },
+            triggerBanner: mockTriggerBanner,
+        };
+        render(<MultiEditBar {...props} />);
+
+        await act(async () => {
+            await userEvent.click(screen.getByTestId('cancel-epss-refresh'));
+        });
+
+        await waitFor(() => {
+            expect(mockCancelTrigger).toHaveBeenCalled();
+            expect(mockTriggerBanner).toHaveBeenCalledWith('EPSS refresh cancellation requested', 'success');
+        });
+    });
+
+    test('Cancel NVD button becomes disabled after click (cancelling state)', async () => {
+        const mockCancelTrigger = BulkNvdRefreshCancelHandler.trigger as jest.Mock;
+        // Never resolves so we can check intermediate state
+        mockCancelTrigger.mockReturnValue(new Promise(() => {}));
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1'],
+            nvdProgress: { in_progress: true, phase: 'bulk_nvd_refresh', current: 1, total: 10, message: '' },
+            triggerBanner: jest.fn(),
+        };
+        render(<MultiEditBar {...props} />);
+
+        const button = screen.getByTestId('cancel-nvd-refresh');
+        expect(button).not.toBeDisabled();
+
+        await act(async () => { await userEvent.click(button); });
+
+        expect(button).toBeDisabled();
+        expect(button.textContent).toBe('Cancelling…');
     });
 });

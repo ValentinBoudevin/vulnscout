@@ -321,7 +321,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
     const moreFiltersRef = useRef<HTMLDivElement>(null);
     const prevNvdInProgress = useRef<boolean | null>(null);
+    const prevNvdPhase = useRef<string | null>(null);
     const prevEpssInProgress = useRef<boolean | null>(null);
+    const prevEpssPhase = useRef<string | null>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -350,39 +352,72 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     // Update banner with live NVD progress; reload data when the refresh completes
     useEffect(() => {
         const inProgress = nvdProgress?.in_progress ?? false;
+        const phase = nvdProgress?.phase;
+        const justCompleted = prevNvdPhase.current !== null && (
+            prevNvdInProgress.current === true ||
+            (prevNvdPhase.current !== 'completed' &&
+             prevNvdPhase.current !== 'cancelled' &&
+             (phase === 'completed' || phase === 'cancelled')));
         if (inProgress) {
             if (nvdProgress && nvdProgress.total > 0 && nvdProgress.current > 0) {
                 setBannerMessage(`NVD refresh in progress: ${nvdProgress.current}/${nvdProgress.total}`);
                 setBannerType('success');
                 setBannerVisible(true);
             }
-        } else if (prevNvdInProgress.current === true) {
+        } else if (justCompleted) {
             onRefreshComplete?.();
-            const total = nvdProgress?.total ?? 0;
-            setBannerMessage(`NVD refresh complete${total > 0 ? ` (${total} CVEs)` : ''}`);
-            setBannerType('success');
+            if (phase === 'cancelled') {
+                const current = nvdProgress?.current ?? 0;
+                const total = nvdProgress?.total ?? 0;
+                setBannerMessage(`NVD refresh cancelled${current > 0 ? ` (${current}/${total} CVEs)` : ''}`);
+                setBannerType('error');
+            } else {
+                const total = nvdProgress?.total ?? 0;
+                setBannerMessage(`NVD refresh complete${total > 0 ? ` (${total} CVEs)` : ''}`);
+                setBannerType('success');
+            }
             setBannerVisible(true);
         }
-        prevNvdInProgress.current = inProgress;
+        if (nvdProgress !== null) {
+            prevNvdInProgress.current = inProgress;
+            prevNvdPhase.current = phase ?? 'idle';
+        }
     }, [nvdProgress, onRefreshComplete]);
 
     // Update banner with live EPSS progress; reload data when the refresh completes
     useEffect(() => {
         const inProgress = epssProgress?.in_progress ?? false;
+        // EPSS can complete before the 5-second poll catches in_progress: true, so also detect completion via phase transition.
+        const phase = epssProgress?.phase;
+        const justCompleted = prevEpssPhase.current !== null && (
+            prevEpssInProgress.current === true ||
+            (prevEpssPhase.current !== 'completed' &&
+             prevEpssPhase.current !== 'cancelled' &&
+             (phase === 'completed' || phase === 'cancelled')));
         if (inProgress) {
             if (epssProgress && epssProgress.total > 0 && epssProgress.current > 0) {
                 setBannerMessage(`EPSS refresh in progress: ${epssProgress.current}/${epssProgress.total}`);
                 setBannerType('success');
                 setBannerVisible(true);
             }
-        } else if (prevEpssInProgress.current === true) {
+        } else if (justCompleted) {
             onRefreshComplete?.();
-            const total = epssProgress?.total ?? 0;
-            setBannerMessage(`EPSS refresh complete${total > 0 ? ` (${total} CVEs)` : ''}`);
-            setBannerType('success');
+            if (phase === 'cancelled') {
+                const current = epssProgress?.current ?? 0;
+                const total = epssProgress?.total ?? 0;
+                setBannerMessage(`EPSS refresh cancelled${current > 0 ? ` (${current}/${total} CVEs)` : ''}`);
+                setBannerType('error');
+            } else {
+                const total = epssProgress?.total ?? 0;
+                setBannerMessage(`EPSS refresh complete${total > 0 ? ` (${total} CVEs)` : ''}`);
+                setBannerType('success');
+            }
             setBannerVisible(true);
         }
-        prevEpssInProgress.current = inProgress;
+        if (epssProgress !== null) {
+            prevEpssInProgress.current = inProgress;
+            prevEpssPhase.current = phase ?? 'idle';
+        }
     }, [epssProgress, onRefreshComplete]);
 
     // Fetch NVD progress on mount and periodically

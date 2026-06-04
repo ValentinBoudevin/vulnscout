@@ -4,7 +4,7 @@ fetchMock.enableMocks();
 
 jest.setTimeout(15000);
 
-import { fireEvent, render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
@@ -2506,5 +2506,133 @@ describe('NVD timestamp columns', () => {
             const html = document.body.innerHTML;
             expect(html.indexOf('CVE-LATER')).toBeLessThan(html.indexOf('CVE-EARLIER'));
         });
+    });
+
+    test('shows NVD completion banner via phase transition (fast-complete path)', async () => {
+        jest.useFakeTimers();
+        try {
+            const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
+            NVDProgressHandler.getProgress
+                .mockResolvedValueOnce({ in_progress: false, phase: 'idle', current: 0, total: 0, message: '' })
+                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 10, total: 10, message: '' });
+
+            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            await act(async () => { await Promise.resolve(); });
+            await act(async () => { jest.advanceTimersByTime(5001); });
+            await act(async () => { await Promise.resolve(); });
+
+            await waitFor(() => {
+                expect(screen.getByText(/NVD refresh complete \(10 CVEs\)/i)).toBeInTheDocument();
+            });
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('shows NVD cancelled banner when phase transitions to cancelled', async () => {
+        jest.useFakeTimers();
+        try {
+            const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
+            NVDProgressHandler.getProgress
+                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_nvd_refresh', current: 3, total: 10, message: '' })
+                .mockResolvedValueOnce({ in_progress: false, phase: 'cancelled', current: 3, total: 10, message: '' });
+
+            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            await act(async () => { await Promise.resolve(); });
+            await act(async () => { jest.advanceTimersByTime(5001); });
+            await act(async () => { await Promise.resolve(); });
+
+            await waitFor(() => {
+                expect(screen.getByText(/NVD refresh cancelled \(3\/10 CVEs\)/i)).toBeInTheDocument();
+            });
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('shows EPSS completion banner via phase transition (fast-complete path)', async () => {
+        jest.useFakeTimers();
+        try {
+            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+            EPSSProgressHandler.getProgress
+                .mockResolvedValueOnce({ in_progress: false, phase: 'idle', current: 0, total: 0, message: '' })
+                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 50, total: 50, message: '' });
+
+            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            await act(async () => { await Promise.resolve(); });
+            await act(async () => { jest.advanceTimersByTime(5001); });
+            await act(async () => { await Promise.resolve(); });
+
+            await waitFor(() => {
+                expect(screen.getByText(/EPSS refresh complete \(50 CVEs\)/i)).toBeInTheDocument();
+            });
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('shows EPSS cancelled banner when phase transitions to cancelled', async () => {
+        jest.useFakeTimers();
+        try {
+            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+            EPSSProgressHandler.getProgress
+                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_epss_refresh', current: 5, total: 20, message: '' })
+                .mockResolvedValueOnce({ in_progress: false, phase: 'cancelled', current: 5, total: 20, message: '' });
+
+            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            await act(async () => { await Promise.resolve(); });
+            await act(async () => { jest.advanceTimersByTime(5001); });
+            await act(async () => { await Promise.resolve(); });
+
+            await waitFor(() => {
+                expect(screen.getByText(/EPSS refresh cancelled \(5\/20 CVEs\)/i)).toBeInTheDocument();
+            });
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('does not show EPSS banner on first load when phase is already completed', async () => {
+        jest.useFakeTimers();
+        try {
+            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+            // First poll returns completed — as if the server finished before the page loaded.
+            EPSSProgressHandler.getProgress.mockResolvedValue({
+                in_progress: false, phase: 'completed', current: 50, total: 50, message: ''
+            });
+
+            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            // Flush the initial fetch
+            await act(async () => { await Promise.resolve(); });
+
+            expect(screen.queryByText(/EPSS refresh complete/i)).not.toBeInTheDocument();
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('does not show NVD banner on first load when phase is already completed', async () => {
+        jest.useFakeTimers();
+        try {
+            const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
+            // First poll returns completed — as if the server finished before the page loaded.
+            NVDProgressHandler.getProgress.mockResolvedValue({
+                in_progress: false, phase: 'completed', current: 10, total: 10, message: ''
+            });
+
+            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            // Flush the initial fetch
+            await act(async () => { await Promise.resolve(); });
+
+            expect(screen.queryByText(/NVD refresh complete/i)).not.toBeInTheDocument();
+        } finally {
+            jest.useRealTimers();
+        }
     });
 });

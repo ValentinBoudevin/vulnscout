@@ -1,5 +1,5 @@
-import { BulkNvdRefreshHandler, BulkEpssRefreshHandler } from "../../src/handlers/bulkRefresh";
-import type { BulkRefreshResponse } from "../../src/handlers/bulkRefresh";
+import { BulkNvdRefreshHandler, BulkEpssRefreshHandler, BulkNvdRefreshCancelHandler, BulkEpssRefreshCancelHandler } from "../../src/handlers/bulkRefresh";
+import type { BulkRefreshResponse, CancelRefreshResponse } from "../../src/handlers/bulkRefresh";
 
 const mockFetch = jest.fn();
 global.fetch = mockFetch as typeof fetch;
@@ -112,6 +112,72 @@ describe("BulkEpssRefreshHandler.trigger", () => {
             json: async () => { throw new Error("bad json"); },
         } as unknown as Response);
         const result = await BulkEpssRefreshHandler.trigger(["CVE-2024-0001"]);
+        expect(result).toBeNull();
+    });
+});
+
+const makeOkCancelResponse = (body: CancelRefreshResponse) => ({
+    ok: true,
+    status: 200,
+    json: async () => body,
+} as Response);
+
+describe("BulkNvdRefreshCancelHandler.trigger", () => {
+    it("returns CancelRefreshResponse on 200", async () => {
+        mockFetch.mockResolvedValueOnce(makeOkCancelResponse({ status: "cancelling" }));
+        const result = await BulkNvdRefreshCancelHandler.trigger();
+        expect(result).not.toBeNull();
+        expect(result!.status).toBe("cancelling");
+    });
+
+    it("sends POST to the correct cancel endpoint", async () => {
+        mockFetch.mockResolvedValueOnce(makeOkCancelResponse({ status: "cancelling" }));
+        await BulkNvdRefreshCancelHandler.trigger();
+        expect(mockFetch).toHaveBeenCalledWith(
+            expect.stringContaining("/api/vulnerabilities/cancel-nvd-refresh"),
+            expect.objectContaining({ method: "POST" }),
+        );
+    });
+
+    it("returns null on 409 (nothing in progress)", async () => {
+        mockFetch.mockResolvedValueOnce(makeErrorResponse(409));
+        const result = await BulkNvdRefreshCancelHandler.trigger();
+        expect(result).toBeNull();
+    });
+
+    it("returns null when fetch rejects", async () => {
+        mockFetch.mockRejectedValueOnce(new Error("network error"));
+        const result = await BulkNvdRefreshCancelHandler.trigger();
+        expect(result).toBeNull();
+    });
+});
+
+describe("BulkEpssRefreshCancelHandler.trigger", () => {
+    it("returns CancelRefreshResponse on 200", async () => {
+        mockFetch.mockResolvedValueOnce(makeOkCancelResponse({ status: "cancelling" }));
+        const result = await BulkEpssRefreshCancelHandler.trigger();
+        expect(result).not.toBeNull();
+        expect(result!.status).toBe("cancelling");
+    });
+
+    it("sends POST to the correct cancel endpoint", async () => {
+        mockFetch.mockResolvedValueOnce(makeOkCancelResponse({ status: "cancelling" }));
+        await BulkEpssRefreshCancelHandler.trigger();
+        expect(mockFetch).toHaveBeenCalledWith(
+            expect.stringContaining("/api/vulnerabilities/cancel-epss-refresh"),
+            expect.objectContaining({ method: "POST" }),
+        );
+    });
+
+    it("returns null on 409 (nothing in progress)", async () => {
+        mockFetch.mockResolvedValueOnce(makeErrorResponse(409));
+        const result = await BulkEpssRefreshCancelHandler.trigger();
+        expect(result).toBeNull();
+    });
+
+    it("returns null when fetch rejects", async () => {
+        mockFetch.mockRejectedValueOnce(new Error("network error"));
+        const result = await BulkEpssRefreshCancelHandler.trigger();
         expect(result).toBeNull();
     });
 });

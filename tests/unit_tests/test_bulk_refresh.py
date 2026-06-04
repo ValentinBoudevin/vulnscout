@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 from src.routes.bulk_refresh import _nvd_sleep_interval, _safe_commit
 from src.controllers.nvd_apply import apply_cvss_update
+from src.controllers.progress_tracker import ProgressTracker
 
 
 class TestNvdSleepInterval:
@@ -122,3 +123,61 @@ class TestSafeCommit:
             mock_db.session.commit.side_effect = Exception("DB error")
             _safe_commit("test")
             mock_db.session.rollback.assert_called_once()
+
+
+class TestProgressTrackerCancel:
+
+    def _tracker(self):
+        return ProgressTracker(default_phase="test", completed_message="done")
+
+    def test_cancel_returns_false_when_idle(self):
+        tracker = self._tracker()
+        assert tracker.cancel() is False
+
+    def test_cancel_returns_true_when_in_progress(self):
+        tracker = self._tracker()
+        tracker.start()
+        assert tracker.cancel() is True
+
+    def test_is_cancelled_false_before_cancel_called(self):
+        tracker = self._tracker()
+        tracker.start()
+        assert tracker.is_cancelled() is False
+
+    def test_is_cancelled_true_after_cancel(self):
+        tracker = self._tracker()
+        tracker.start()
+        tracker.cancel()
+        assert tracker.is_cancelled() is True
+
+    def test_mark_cancelled_resets_in_progress_and_flag(self):
+        tracker = self._tracker()
+        tracker.start()
+        tracker.cancel()
+        tracker.mark_cancelled()
+        progress = tracker.get_progress()
+        assert progress["in_progress"] is False
+        assert progress["phase"] == "cancelled"
+        assert tracker.is_cancelled() is False
+
+    def test_start_resets_cancelled_flag(self):
+        tracker = self._tracker()
+        tracker.start()
+        tracker.cancel()
+        assert tracker.is_cancelled() is True
+        tracker.mark_cancelled()
+        tracker.start()
+        assert tracker.is_cancelled() is False
+
+    def test_cancel_on_already_completed_returns_false(self):
+        tracker = self._tracker()
+        tracker.start()
+        tracker.complete()
+        assert tracker.cancel() is False
+
+    def test_cancel_on_already_cancelled_returns_false(self):
+        tracker = self._tracker()
+        tracker.start()
+        tracker.cancel()
+        tracker.mark_cancelled()
+        assert tracker.cancel() is False
