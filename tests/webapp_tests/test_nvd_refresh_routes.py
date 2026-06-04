@@ -121,10 +121,49 @@ class TestSingleCveRefreshEndpoint:
         assert resp.status_code == 503
 
     def test_single_refresh_503_on_nvd_failure(self, client, existing_cve_id):
+        """503 when api_get_cve exhausts retries and returns a non-200/429/401/403 status."""
         with patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
-            MockNVD.return_value.api_get_cve.side_effect = ConnectionError("NVD unavailable")
+            MockNVD.return_value.api_get_cve.return_value = (0, {})
             resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
         assert resp.status_code == 503
+        data = resp.get_json()
+        assert data["error_code"] == "unavailable"
+        assert "api_key_configured" in data
+
+    def test_single_refresh_503_on_unexpected_exception(self, client, existing_cve_id):
+        """503 when an unexpected exception (e.g. network error) escapes api_get_cve."""
+        with patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
+            MockNVD.return_value.api_get_cve.side_effect = OSError("network unreachable")
+            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
+        assert resp.status_code == 503
+        data = resp.get_json()
+        assert data["error_code"] == "unavailable"
+        assert "api_key_configured" in data
+
+    def test_single_refresh_429_on_rate_limit(self, client, existing_cve_id):
+        """429 + rate_limited error_code when NVD throttles the request."""
+        with patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
+            MockNVD.return_value.api_get_cve.return_value = (429, {})
+            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
+        assert resp.status_code == 429
+        data = resp.get_json()
+        assert data["error_code"] == "rate_limited"
+        assert "api_key_configured" in data
+
+    def test_api_key_configured_field_reflects_env(self, client, existing_cve_id):
+        """api_key_configured is False when NVD_API_KEY is unset, True when set."""
+        import os
+        with patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
+            MockNVD.return_value.api_get_cve.return_value = (429, {})
+            os.environ.pop("NVD_API_KEY", None)
+            try:
+                resp_no_key = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
+                os.environ["NVD_API_KEY"] = "test-key-value"
+                resp_with_key = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
+            finally:
+                os.environ.pop("NVD_API_KEY", None)
+        assert resp_no_key.get_json()["api_key_configured"] is False
+        assert resp_with_key.get_json()["api_key_configured"] is True
 
     def test_single_refresh_case_insensitive_cve_id(self, client, existing_cve_id):
         """CVE ID lookup is case-insensitive."""

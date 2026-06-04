@@ -97,11 +97,7 @@ class NVD_DB(BaseAPIClient):
                 return status, data
             else:
                 retry += 1
-        raise ConnectionError(
-            f"Failed to call NVD API after 3 retries (status: {status}, cveId: {cve_id}).\n"
-            "Providing an NVD API key may help prevent this error.\n"
-            "If the issue persists after adding the API key, it may have been invalidated."
-        )
+        return status, data
 
     def api_get_cves_by_cpe(
         self,
@@ -325,9 +321,6 @@ class NVD_DB(BaseAPIClient):
                     if "references" in cve else []
                 ),
             }
-        except ConnectionError:
-            print(f"NVD API unavailable for {cve_id}, skipping enrichment.", flush=True)
-            return None
         except Exception as e:
             print(f"Error fetching NVD data for {cve_id}: {e}", flush=True)
             return None

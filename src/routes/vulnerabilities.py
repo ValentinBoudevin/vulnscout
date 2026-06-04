@@ -23,6 +23,7 @@ from ..helpers.datetime_utils import ensure_utc_iso
 from ..extensions import db
 from ..controllers.nvd_db import NVD_DB
 from ..controllers.nvd_apply import apply_nvd_update
+from ..controllers.epss_db import EPSS_DB
 from ..helpers.active_scans import (
     active_scan_ids_for_variant,
     active_scan_ids_for_project,
@@ -602,14 +603,35 @@ def init_app(app):
         if rec is None:
             return jsonify({"error": "CVE not found"}), 404
 
+        api_key = os.getenv("NVD_API_KEY")
         try:
-            nvd = NVD_DB(nvd_api_key=os.getenv("NVD_API_KEY"))
+            nvd = NVD_DB(nvd_api_key=api_key)
             status_code, data = nvd.api_get_cve(cve_id_upper, max_retries=0)
         except Exception as e:
-            return jsonify({"error": f"NVD API unavailable: {e}"}), 503
+            return jsonify({
+                "error": f"NVD API unavailable: {e}",
+                "error_code": "unavailable",
+                "api_key_configured": bool(api_key),
+            }), 503
 
+        if status_code == 429:
+            return jsonify({
+                "error": "NVD API rate limit exceeded",
+                "error_code": "rate_limited",
+                "api_key_configured": bool(api_key),
+            }), 429
+        if status_code in (401, 403):
+            return jsonify({
+                "error": f"NVD API rejected credentials (HTTP {status_code})",
+                "error_code": "unauthorized",
+                "api_key_configured": bool(api_key),
+            }), status_code
         if status_code != 200 or not data.get("vulnerabilities"):
-            return jsonify({"error": "NVD API returned no data for this CVE"}), 503
+            return jsonify({
+                "error": "NVD API returned no data for this CVE",
+                "error_code": "unavailable",
+                "api_key_configured": bool(api_key),
+            }), 503
 
         cve = data["vulnerabilities"][0]["cve"]
         details = NVD_DB.extract_cve_details(cve)
@@ -650,6 +672,41 @@ def init_app(app):
 
         # Repopulate transient severity scores from now-committed metrics so
         # to_dict() returns correct min/max without a full controller preload.
+        for m in (rec.metrics or []):
+            if m.score is not None:
+                score = float(m.score)
+                if rec.severity_min_score is None or score < rec.severity_min_score:
+                    rec.severity_min_score = score
+                if rec.severity_max_score is None or score > rec.severity_max_score:
+                    rec.severity_max_score = score
+
+        return jsonify({"vulnerabilities": [rec.to_dict()]}), 200
+
+    @app.route('/api/vulnerabilities/<cve_id>/epss-refresh', methods=['POST'])
+    def refresh_single_cve_epss(cve_id):
+        cve_id_upper = cve_id.upper()
+        rec = db.session.get(Vulnerability, cve_id_upper)
+        if rec is None:
+            return jsonify({"error": "CVE not found"}), 404
+
+        epss_data = EPSS_DB().api_get_epss(cve_id_upper)
+        if epss_data is None:
+            return jsonify({"error": "EPSS API returned no data for this CVE"}), 503
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        rec.update_record(
+            epss_score=epss_data["score"],
+            epss_fetched_at=now,
+            commit=False,
+        )
+        db.session.commit()
+
+        db.session.refresh(rec)
+        rec._init_transient()
+        # Set percentile in transient epss dict (not stored in DB)
+        rec.epss["percentile"] = epss_data.get("percentile")
+
+        # Repopulate transient severity scores from committed metrics
         for m in (rec.metrics or []):
             if m.score is not None:
                 score = float(m.score)
