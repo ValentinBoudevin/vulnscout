@@ -300,7 +300,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
-        'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated', 'Published Date'
+        'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated'
     ]);
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
@@ -737,7 +737,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     return <div className="flex items-center justify-center h-full text-center"><span className="text-xs text-gray-500 italic">fetching…</span></div>;
                 }
                 if (!published) {
-                    return <div className="flex items-center justify-center h-full text-center text-gray-400">Unknown</div>;
+                    return <div className="flex items-center justify-center h-full text-center text-gray-400">Requires a NVD refresh</div>;
                 }
                 const publishedDate = new Date(published);
                 const formattedDate = publishedDate.toLocaleDateString(undefined, {
@@ -1028,7 +1028,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setPublishedDateFrom('');
         setPublishedDateTo('');
         setSelectedRows({});
-        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated', 'Published Date']);
+        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated']);
         setShowCustomSeverityFilter(false);
         setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
         setShowCustomEpssFilter(false);

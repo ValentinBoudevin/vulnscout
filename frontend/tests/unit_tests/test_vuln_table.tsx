@@ -1770,34 +1770,34 @@ describe('Vulnerability Table', () => {
         });
     });
 
-    test('published date column can be disabled', async () => {
+    test('published date column is hidden by default but can be enabled', async () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        // Published Date column is visible by default
-        expect(screen.queryByRole('columnheader', { name: /published date/i })).toBeInTheDocument();
+        // Published Date column is hidden by default
+        expect(screen.queryByRole('columnheader', { name: /published date/i })).not.toBeInTheDocument();
 
-        // Disable Published Date column via Columns filter
+        // Enable Published Date column via Columns filter
         const buttons = await screen.getAllByRole('button', { name: /columns/i });
         await user.click(buttons[0]);
 
         const publishedDateCheckbox = await screen.getByRole('checkbox', { name: 'Published Date' });
         await user.click(publishedDateCheckbox);
 
-        // Published Date column should not be visible
+        // Published Date column should now be visible
         await waitFor(() => {
-            expect(screen.queryByRole('columnheader', { name: /published date/i })).not.toBeInTheDocument();
+            expect(screen.queryByRole('columnheader', { name: /published date/i })).toBeInTheDocument();
         });
 
-        // Check that dates are not rendered (formatted as short month)
+        // Check that dates are rendered (formatted as short month)
         await waitFor(() => {
             [/May 15, 2010/, /Jul 22, 2018/].forEach(date => {
-            expect(screen.queryByText(date)).not.toBeInTheDocument();
+            expect(screen.queryByText(date)).toBeInTheDocument();
             });
         });
     });
 
-    test('published date column shows "Unknown" for vulnerabilities without published date', async () => {
+    test('published date column shows "Requires a NVD refresh" for vulnerabilities without published date', async () => {
         const vulnsWithMissing: Vulnerability[] = [
             ...vulnerabilities,
             {
@@ -1833,11 +1833,19 @@ describe('Vulnerability Table', () => {
         ];
 
         render(<TableVulnerabilities vulnerabilities={vulnsWithMissing} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
 
-        // "Unknown" should appear for the vuln without published date
+        // Published Date column is hidden by default, so enable it first
+        const buttons = await screen.getAllByRole('button', { name: /columns/i });
+        await user.click(buttons[0]);
+
+        const publishedDateCheckbox = await screen.getByRole('checkbox', { name: 'Published Date' });
+        await user.click(publishedDateCheckbox);
+
+        // Now "Requires a NVD refresh" should appear for the vuln without published date
         await waitFor(() => {
-            const unknownElements = screen.getAllByText('Unknown');
-            expect(unknownElements.length).toBeGreaterThan(0);
+            const refreshElements = screen.getAllByText('Requires a NVD refresh');
+            expect(refreshElements.length).toBeGreaterThan(0);
         });
     });
 
