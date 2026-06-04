@@ -23,10 +23,10 @@ DEFAULT_DB_URI = "sqlite:////cache/vulnscout/vulnscout.db"
 
 
 def _launch_enrichment(app):
-    """Spawn background threads for EPSS and NVD enrichment.
+    """Spawn background thread for EPSS enrichment.
 
-    Each runs in its own thread so they execute in parallel and neither
-    blocks Flask request handlers (WAL journal mode allows concurrent reads).
+    Runs in its own thread so it doesn't block Flask request handlers
+    (WAL journal mode allows concurrent reads).
     """
     def _enrich_epss():
         with app.app_context():
@@ -44,20 +44,7 @@ def _launch_enrichment(app):
             except Exception as e:
                 print(f"[enrichment/epss] {e}", flush=True)
 
-    def _enrich_nvd():
-        with app.app_context():
-            db.session.autoflush = False
-            try:
-                from ..controllers.packages import PackagesController
-                from ..controllers.vulnerabilities import VulnerabilitiesController
-                pkgCtrl = PackagesController()
-                vulnCtrl = VulnerabilitiesController(pkgCtrl)
-                vulnCtrl.fetch_nvd_data()
-            except Exception as e:
-                print(f"[enrichment/nvd] {e}", flush=True)
-
     threading.Thread(target=_enrich_epss, name="enrichment-epss", daemon=True).start()
-    threading.Thread(target=_enrich_nvd, name="enrichment-nvd", daemon=True).start()
 
 
 def create_app():
