@@ -1,11 +1,23 @@
-import { render, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, fireEvent, waitFor, act, screen } from '@testing-library/react';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
 import React from 'react';
 import fetchMock from 'jest-fetch-mock';
+import userEvent from '@testing-library/user-event';
 fetchMock.enableMocks();
 
+jest.mock('../../src/handlers/bulkRefresh', () => ({
+    __esModule: true,
+    BulkNvdRefreshHandler: {
+        trigger: jest.fn(),
+    },
+    BulkEpssRefreshHandler: {
+        trigger: jest.fn(),
+    },
+}));
+
 import MultiEditBar from '../../src/components/MultiEditBar';
+import { BulkNvdRefreshHandler, BulkEpssRefreshHandler } from '../../src/handlers/bulkRefresh';
 import type { Vulnerability } from '../../src/handlers/vulnerabilities';
 
 describe('MultiEditBar', () => {
@@ -251,6 +263,41 @@ describe('MultiEditBar', () => {
         resetButton.click();
 
         expect(mockResetVulns).toHaveBeenCalled();
+    });
+
+    test('triggers the bulk refresh buttons and reports success', async () => {
+        const mockTriggerBanner = jest.fn();
+        const mockHideBanner = jest.fn();
+        const mockBulkNvdTrigger = BulkNvdRefreshHandler.trigger as jest.Mock;
+        const mockBulkEpssTrigger = BulkEpssRefreshHandler.trigger as jest.Mock;
+
+        mockBulkNvdTrigger.mockResolvedValue({ status: 'success', total: 2 });
+        mockBulkEpssTrigger.mockResolvedValue({ status: 'success', total: 2 });
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1', 'vuln-2'],
+            triggerBanner: mockTriggerBanner,
+            hideBanner: mockHideBanner
+        };
+
+        render(<MultiEditBar {...props} />);
+
+        await act(async () => {
+            await userEvent.click(screen.getByRole('button', { name: 'Refresh NVD' }));
+            await userEvent.click(screen.getByRole('button', { name: 'Refresh EPSS' }));
+            await userEvent.click(screen.getByRole('button', { name: 'Refresh NVD + EPSS' }));
+        });
+
+        await waitFor(() => {
+            expect(mockTriggerBanner).toHaveBeenCalledWith('NVD refresh started for 2 CVE(s)', 'success');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('EPSS refresh started for 2 CVE(s)', 'success');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Refresh started: NVD 2 CVE(s), EPSS 2 CVE(s)', 'success');
+        });
+
+        expect(mockHideBanner).toHaveBeenCalledTimes(3);
+        expect(mockBulkNvdTrigger).toHaveBeenCalledWith(['vuln-1', 'vuln-2']);
+        expect(mockBulkEpssTrigger).toHaveBeenCalledWith(['vuln-1', 'vuln-2']);
     });
 
     test('shows loading spinner when isLoading is true', () => {
