@@ -96,7 +96,6 @@ def init_app(app):
                 sleep_between = _nvd_sleep_interval()
                 nvd_api_key = os.getenv("NVD_API_KEY")
                 nvd = NVD_DB(nvd_api_key=nvd_api_key)
-                now = datetime.datetime.now(datetime.timezone.utc)
                 done = 0
                 try:
                     for cve_id in cve_ids:
@@ -106,6 +105,7 @@ def init_app(app):
                             return
 
                         try:
+                            now = datetime.datetime.now(datetime.timezone.utc)
                             status_code, data = nvd.api_get_cve(cve_id, max_retries=2)
                             if status_code == 200 and data.get("vulnerabilities"):
                                 cve = data["vulnerabilities"][0]["cve"]
