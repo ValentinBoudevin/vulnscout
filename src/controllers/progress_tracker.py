@@ -44,6 +44,34 @@ class ProgressTracker:
                 "started_at": now,
             }
 
+    def start_if_idle(self, phase: Optional[str] = None) -> bool:
+        """Atomically start only if no operation is currently in progress.
+
+        Combines the in_progress check and the state transition into a single
+        lock acquisition, eliminating the TOCTOU race that exists when callers
+        do ``get_progress()["in_progress"]`` followed by a separate ``start()``.
+
+        Returns True when the tracker was idle and has been started.
+        Returns False when an operation was already in progress (caller should
+        return HTTP 409).
+        """
+        phase = phase or self._default_phase
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            if self._data["in_progress"]:
+                return False
+            self._cancelled = False
+            self._data = {
+                "in_progress": True,
+                "phase": phase,
+                "current": 0,
+                "total": 0,
+                "message": f"Starting {phase}",
+                "last_update": now,
+                "started_at": now,
+            }
+            return True
+
     def update(self, phase: str, current: int, total: int, message: Optional[str] = None):
         """Update progress information."""
         with self._lock:

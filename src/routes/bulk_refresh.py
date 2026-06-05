@@ -77,9 +77,6 @@ def init_app(app):
         if not raw_ids or not isinstance(raw_ids, list):
             return jsonify({"error": "cve_ids must be a non-empty list"}), 400
 
-        if NVDProgressTracker.get_progress()["in_progress"]:
-            return jsonify({"error": "A bulk NVD refresh is already in progress"}), 409
-
         cve_ids = [c.strip().upper() for c in raw_ids if isinstance(c, str) and c.strip()]
         cve_ids = [c for c in cve_ids if _CVE_RE.match(c)]
         if not cve_ids:
@@ -88,7 +85,8 @@ def init_app(app):
             return jsonify({"error": f"cve_ids must contain at most {_MAX_CVE_IDS} entries"}), 400
 
         total = len(cve_ids)
-        NVDProgressTracker.start("bulk_nvd_refresh")
+        if not NVDProgressTracker.start_if_idle("bulk_nvd_refresh"):
+            return jsonify({"error": "A bulk NVD refresh is already in progress"}), 409
         NVDProgressTracker.update("bulk_nvd_refresh", 0, total, f"Starting bulk NVD refresh: 0/{total}")
 
         def _run():
@@ -168,9 +166,6 @@ def init_app(app):
         if not raw_ids or not isinstance(raw_ids, list):
             return jsonify({"error": "cve_ids must be a non-empty list"}), 400
 
-        if EPSSProgressTracker.get_progress()["in_progress"]:
-            return jsonify({"error": "A bulk EPSS refresh is already in progress"}), 409
-
         cve_ids = [c.strip().upper() for c in raw_ids if isinstance(c, str) and c.strip()]
         cve_ids = [c for c in cve_ids if _CVE_RE.match(c)]
         if not cve_ids:
@@ -179,7 +174,8 @@ def init_app(app):
             return jsonify({"error": f"cve_ids must contain at most {_MAX_CVE_IDS} entries"}), 400
 
         total = len(cve_ids)
-        EPSSProgressTracker.start("bulk_epss_refresh")
+        if not EPSSProgressTracker.start_if_idle("bulk_epss_refresh"):
+            return jsonify({"error": "A bulk EPSS refresh is already in progress"}), 409
         EPSSProgressTracker.update("bulk_epss_refresh", 0, total, f"Starting bulk EPSS refresh: 0/{total}")
 
         def _run():

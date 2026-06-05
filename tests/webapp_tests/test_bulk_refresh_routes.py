@@ -106,10 +106,10 @@ class TestBulkNvdRefreshEndpoint:
         assert resp.get_json()["total"] == 1
 
     def test_returns_409_when_already_in_progress(self, client, existing_cve_id):
-        """409 when NVDProgressTracker reports in_progress=True."""
+        """409 when start_if_idle returns False (tracker already running)."""
         with patch(
-            "src.routes.bulk_refresh.NVDProgressTracker.get_progress",
-            return_value={"in_progress": True},
+            "src.routes.bulk_refresh.NVDProgressTracker.start_if_idle",
+            return_value=False,
         ):
             resp = client.post(
                 "/api/vulnerabilities/bulk-nvd-refresh",
@@ -117,6 +117,18 @@ class TestBulkNvdRefreshEndpoint:
             )
         assert resp.status_code == 409
         assert "already in progress" in resp.get_json()["error"]
+
+    def test_409_only_after_valid_input(self, client, existing_cve_id):
+        """Invalid input returns 400, not 409, even when tracker is running."""
+        with patch(
+            "src.routes.bulk_refresh.NVDProgressTracker.start_if_idle",
+            return_value=False,
+        ):
+            resp = client.post(
+                "/api/vulnerabilities/bulk-nvd-refresh",
+                json={"cve_ids": ["not-a-cve"]},
+            )
+        assert resp.status_code == 400
 
     def test_cve_ids_normalized_to_uppercase(self, client, existing_cve_id):
         """Lowercase CVE IDs are normalized before processing."""
@@ -213,9 +225,10 @@ class TestBulkEpssRefreshEndpoint:
         assert resp.get_json()["total"] == 1
 
     def test_returns_409_when_already_in_progress(self, client, existing_cve_id):
+        """409 when start_if_idle returns False (tracker already running)."""
         with patch(
-            "src.routes.bulk_refresh.EPSSProgressTracker.get_progress",
-            return_value={"in_progress": True},
+            "src.routes.bulk_refresh.EPSSProgressTracker.start_if_idle",
+            return_value=False,
         ):
             resp = client.post(
                 "/api/vulnerabilities/bulk-epss-refresh",
@@ -223,6 +236,18 @@ class TestBulkEpssRefreshEndpoint:
             )
         assert resp.status_code == 409
         assert "already in progress" in resp.get_json()["error"]
+
+    def test_409_only_after_valid_input(self, client, existing_cve_id):
+        """Invalid input returns 400, not 409, even when tracker is running."""
+        with patch(
+            "src.routes.bulk_refresh.EPSSProgressTracker.start_if_idle",
+            return_value=False,
+        ):
+            resp = client.post(
+                "/api/vulnerabilities/bulk-epss-refresh",
+                json={"cve_ids": ["not-a-cve"]},
+            )
+        assert resp.status_code == 400
 
     def test_cve_ids_normalized_to_uppercase(self, client, existing_cve_id):
         with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
@@ -742,3 +767,69 @@ class TestBulkEpssRefreshCancellation:
         MockTracker.mark_cancelled.assert_called_once()
         MockTracker.complete.assert_not_called()
         mock_commit.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# Concurrent-request tests — verify the atomic start_if_idle guard
+# ---------------------------------------------------------------------------
+
+class TestConcurrentBulkNvdRefresh:
+    """Verify that simultaneous POST requests yield exactly one 202 and one 409."""
+
+    def test_only_one_request_starts_when_concurrent(self, app, existing_cve_id):
+        """Two threads posting simultaneously must produce exactly one 202 and one 409."""
+        import threading
+        RealThread = threading.Thread
+        barrier = threading.Barrier(2)
+        results = []
+
+        def post():
+            barrier.wait()
+            with app.test_client() as c:
+                resp = c.post(
+                    "/api/vulnerabilities/bulk-nvd-refresh",
+                    json={"cve_ids": [existing_cve_id]},
+                )
+            results.append(resp.status_code)
+
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            threads = [RealThread(target=post) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+        results.sort()
+        assert results == [202, 409], f"Expected [202, 409], got {results}"
+
+
+class TestConcurrentBulkEpssRefresh:
+    """Verify that simultaneous POST requests yield exactly one 202 and one 409."""
+
+    def test_only_one_request_starts_when_concurrent(self, app, existing_cve_id):
+        """Two threads posting simultaneously must produce exactly one 202 and one 409."""
+        import threading
+        RealThread = threading.Thread
+        barrier = threading.Barrier(2)
+        results = []
+
+        def post():
+            barrier.wait()
+            with app.test_client() as c:
+                resp = c.post(
+                    "/api/vulnerabilities/bulk-epss-refresh",
+                    json={"cve_ids": [existing_cve_id]},
+                )
+            results.append(resp.status_code)
+
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            threads = [RealThread(target=post) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+        results.sort()
+        assert results == [202, 409], f"Expected [202, 409], got {results}"
