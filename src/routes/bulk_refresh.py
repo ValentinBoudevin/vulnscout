@@ -45,12 +45,19 @@ def _nvd_sleep_interval() -> float:
 
 
 def _safe_commit(label: str) -> None:
-    """Commit the current session; rollback and log on failure."""
+    """Commit the current session; rollback and log on failure.
+
+    Always expunges all objects from the session after commit or rollback so
+    that the SQLAlchemy identity map does not accumulate loaded records across
+    many loop iterations (fix for unbounded session-cache growth).
+    """
     try:
         db.session.commit()
     except Exception as exc:
         print(f"[{label}] commit error: {exc}", flush=True)
         db.session.rollback()
+    finally:
+        db.session.expunge_all()
 
 
 def init_app(app):
