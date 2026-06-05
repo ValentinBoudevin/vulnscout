@@ -4,7 +4,7 @@ import type { Assessment } from "../handlers/assessments";
 import type { NVDProgress } from "../handlers/nvd_progress";
 import type { EPSSProgress } from "../handlers/epss_progress";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
-import { useMemo, useState, useEffect, useCallback, useRef } from "react";
+import React, { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import SeverityTag from "../components/SeverityTag";
 import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
@@ -19,6 +19,57 @@ import { formatPkgId } from "../helpers/pkgId";
 import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
 import EPSSProgressHandler from "../handlers/epss_progress";
+
+/**
+ * Shared hook for NVD/EPSS progress banner logic.
+ * Detects in-progress updates and phase transitions (completed/cancelled),
+ * updates the banner accordingly, and calls onRefreshComplete when done.
+ */
+function useRefreshProgressEffect(
+    progress: { in_progress: boolean; phase?: string; current: number; total: number } | null,
+    label: string,
+    prevInProgress: React.MutableRefObject<boolean | null>,
+    prevPhase: React.MutableRefObject<string | null>,
+    setBannerMessage: (msg: string) => void,
+    setBannerType: (type: 'error' | 'success') => void,
+    setBannerVisible: (visible: boolean) => void,
+    onRefreshComplete?: () => void,
+) {
+    useEffect(() => {
+        const inProgress = progress?.in_progress ?? false;
+        const phase = progress?.phase;
+        const justCompleted = prevPhase.current !== null && (
+            prevInProgress.current === true ||
+            (prevPhase.current !== 'completed' &&
+             prevPhase.current !== 'cancelled' &&
+             (phase === 'completed' || phase === 'cancelled')));
+        if (inProgress) {
+            if (progress && progress.total > 0 && progress.current > 0) {
+                setBannerMessage(`${label} refresh in progress: ${progress.current}/${progress.total}`);
+                setBannerType('success');
+                setBannerVisible(true);
+            }
+        } else if (justCompleted) {
+            onRefreshComplete?.();
+            if (phase === 'cancelled') {
+                const current = progress?.current ?? 0;
+                const total = progress?.total ?? 0;
+                setBannerMessage(`${label} refresh cancelled${current > 0 ? ` (${current}/${total} CVEs)` : ''}`);
+                setBannerType('error');
+            } else {
+                const total = progress?.total ?? 0;
+                setBannerMessage(`${label} refresh complete${total > 0 ? ` (${total} CVEs)` : ''}`);
+                setBannerType('success');
+            }
+            setBannerVisible(true);
+        }
+        if (progress !== null) {
+            prevInProgress.current = inProgress;
+            prevPhase.current = phase ?? 'idle';
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [progress, onRefreshComplete]);
+}
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTimes, faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
 import RangeSlider from "../components/RangeSlider";
@@ -349,76 +400,19 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         if (filterLabel === "Package") setSelectedPackages([filterValue]);
     }, [filterLabel, filterValue]);
 
-    // Update banner with live NVD progress; reload data when the refresh completes
-    useEffect(() => {
-        const inProgress = nvdProgress?.in_progress ?? false;
-        const phase = nvdProgress?.phase;
-        const justCompleted = prevNvdPhase.current !== null && (
-            prevNvdInProgress.current === true ||
-            (prevNvdPhase.current !== 'completed' &&
-             prevNvdPhase.current !== 'cancelled' &&
-             (phase === 'completed' || phase === 'cancelled')));
-        if (inProgress) {
-            if (nvdProgress && nvdProgress.total > 0 && nvdProgress.current > 0) {
-                setBannerMessage(`NVD refresh in progress: ${nvdProgress.current}/${nvdProgress.total}`);
-                setBannerType('success');
-                setBannerVisible(true);
-            }
-        } else if (justCompleted) {
-            onRefreshComplete?.();
-            if (phase === 'cancelled') {
-                const current = nvdProgress?.current ?? 0;
-                const total = nvdProgress?.total ?? 0;
-                setBannerMessage(`NVD refresh cancelled${current > 0 ? ` (${current}/${total} CVEs)` : ''}`);
-                setBannerType('error');
-            } else {
-                const total = nvdProgress?.total ?? 0;
-                setBannerMessage(`NVD refresh complete${total > 0 ? ` (${total} CVEs)` : ''}`);
-                setBannerType('success');
-            }
-            setBannerVisible(true);
-        }
-        if (nvdProgress !== null) {
-            prevNvdInProgress.current = inProgress;
-            prevNvdPhase.current = phase ?? 'idle';
-        }
-    }, [nvdProgress, onRefreshComplete]);
-
-    // Update banner with live EPSS progress; reload data when the refresh completes
-    useEffect(() => {
-        const inProgress = epssProgress?.in_progress ?? false;
-        // EPSS can complete before the 5-second poll catches in_progress: true, so also detect completion via phase transition.
-        const phase = epssProgress?.phase;
-        const justCompleted = prevEpssPhase.current !== null && (
-            prevEpssInProgress.current === true ||
-            (prevEpssPhase.current !== 'completed' &&
-             prevEpssPhase.current !== 'cancelled' &&
-             (phase === 'completed' || phase === 'cancelled')));
-        if (inProgress) {
-            if (epssProgress && epssProgress.total > 0 && epssProgress.current > 0) {
-                setBannerMessage(`EPSS refresh in progress: ${epssProgress.current}/${epssProgress.total}`);
-                setBannerType('success');
-                setBannerVisible(true);
-            }
-        } else if (justCompleted) {
-            onRefreshComplete?.();
-            if (phase === 'cancelled') {
-                const current = epssProgress?.current ?? 0;
-                const total = epssProgress?.total ?? 0;
-                setBannerMessage(`EPSS refresh cancelled${current > 0 ? ` (${current}/${total} CVEs)` : ''}`);
-                setBannerType('error');
-            } else {
-                const total = epssProgress?.total ?? 0;
-                setBannerMessage(`EPSS refresh complete${total > 0 ? ` (${total} CVEs)` : ''}`);
-                setBannerType('success');
-            }
-            setBannerVisible(true);
-        }
-        if (epssProgress !== null) {
-            prevEpssInProgress.current = inProgress;
-            prevEpssPhase.current = phase ?? 'idle';
-        }
-    }, [epssProgress, onRefreshComplete]);
+    // Update banner with live NVD/EPSS progress; reload data when each refresh completes
+    useRefreshProgressEffect(
+        nvdProgress, 'NVD',
+        prevNvdInProgress, prevNvdPhase,
+        setBannerMessage, setBannerType, setBannerVisible,
+        onRefreshComplete,
+    );
+    useRefreshProgressEffect(
+        epssProgress, 'EPSS',
+        prevEpssInProgress, prevEpssPhase,
+        setBannerMessage, setBannerType, setBannerVisible,
+        onRefreshComplete,
+    );
 
     // Fetch NVD progress on mount and periodically
     useEffect(() => {
