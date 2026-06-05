@@ -294,7 +294,7 @@ describe('MultiEditBar', () => {
             await userEvent.click(screen.getByTestId('refresh-dropdown-toggle'));
         });
         await act(async () => {
-            await userEvent.click(screen.getByRole('button', { name: /Refresh 2 targets/i }));
+            await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
         });
 
         await waitFor(() => {
@@ -329,7 +329,7 @@ describe('MultiEditBar', () => {
         });
         // Button shows only 1 actionable target (EPSS)
         await act(async () => {
-            await userEvent.click(screen.getByRole('button', { name: /Refresh 1 target/i }));
+            await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
         });
 
         await waitFor(() => {
@@ -360,7 +360,7 @@ describe('MultiEditBar', () => {
         });
         // Button shows only 1 actionable target (NVD)
         await act(async () => {
-            await userEvent.click(screen.getByRole('button', { name: /Refresh 1 target/i }));
+            await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
         });
 
         await waitFor(() => {
@@ -1032,22 +1032,22 @@ describe('MultiEditBar', () => {
 
     // ---- Refresh dropdown: checkbox toggles ----
 
-    test('unchecking NVD reduces actionable count to 1', async () => {
+    test('unchecking NVD keeps Start button present and enabled', async () => {
         const props = { ...mockProps, selectedVulns: ['vuln-1'] };
         render(<MultiEditBar {...props} />);
         await act(async () => {
             await userEvent.click(screen.getByTestId('refresh-dropdown-toggle'));
         });
-        // Both checked by default → button says "Refresh 2 targets"
-        expect(screen.getByRole('button', { name: /Refresh 2 targets/i })).toBeInTheDocument();
+        // Both checked by default → Start button is enabled
+        expect(screen.getByRole('button', { name: /^Start$/i })).toBeEnabled();
 
         // Uncheck NVD
         const nvdCheckbox = screen.getByRole('checkbox', { name: /NVD/i });
         await act(async () => { await userEvent.click(nvdCheckbox); });
-        expect(screen.getByRole('button', { name: /Refresh 1 target$/i })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /^Start$/i })).toBeEnabled();
     });
 
-    test('unchecking EPSS reduces actionable count to 1', async () => {
+    test('unchecking EPSS keeps Start button present and enabled', async () => {
         const props = { ...mockProps, selectedVulns: ['vuln-1'] };
         render(<MultiEditBar {...props} />);
         await act(async () => {
@@ -1055,7 +1055,7 @@ describe('MultiEditBar', () => {
         });
         const epssCheckbox = screen.getByRole('checkbox', { name: /EPSS/i });
         await act(async () => { await userEvent.click(epssCheckbox); });
-        expect(screen.getByRole('button', { name: /Refresh 1 target$/i })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /^Start$/i })).toBeEnabled();
     });
 
     test('refresh button is disabled when all targets are unchecked', async () => {
@@ -1070,7 +1070,7 @@ describe('MultiEditBar', () => {
         await act(async () => {
             await userEvent.click(screen.getByRole('checkbox', { name: /EPSS/i }));
         });
-        expect(screen.getByRole('button', { name: /Refresh 0 targets/i })).toBeDisabled();
+        expect(screen.getByRole('button', { name: /^Start$/i })).toBeDisabled();
     });
 
     test('clicking outside the refresh dropdown closes it', async () => {
@@ -1079,13 +1079,13 @@ describe('MultiEditBar', () => {
         await act(async () => {
             await userEvent.click(screen.getByTestId('refresh-dropdown-toggle'));
         });
-        expect(screen.getByRole('button', { name: /Refresh 2 targets/i })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /^Start$/i })).toBeInTheDocument();
 
         // Click outside
         await act(async () => {
             fireEvent.mouseDown(document.body);
         });
-        expect(screen.queryByRole('button', { name: /Refresh 2 targets/i })).toBeNull();
+        expect(screen.queryByRole('button', { name: /^Start$/i })).toBeNull();
     });
 
     // ---- Refresh handler: failure and catch paths ----
@@ -1105,7 +1105,7 @@ describe('MultiEditBar', () => {
             await userEvent.click(screen.getByRole('checkbox', { name: /EPSS/i }));
         });
         await act(async () => {
-            await userEvent.click(screen.getByRole('button', { name: /Refresh 1 target/i }));
+            await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
         });
         await waitFor(() => {
             expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start NVD refresh', 'error');
@@ -1125,7 +1125,7 @@ describe('MultiEditBar', () => {
             await userEvent.click(screen.getByRole('checkbox', { name: /EPSS/i }));
         });
         await act(async () => {
-            await userEvent.click(screen.getByRole('button', { name: /Refresh 1 target/i }));
+            await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
         });
         await waitFor(() => {
             expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start NVD refresh', 'error');
@@ -1145,7 +1145,7 @@ describe('MultiEditBar', () => {
             await userEvent.click(screen.getByRole('checkbox', { name: /NVD/i }));
         });
         await act(async () => {
-            await userEvent.click(screen.getByRole('button', { name: /Refresh 1 target/i }));
+            await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
         });
         await waitFor(() => {
             expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start EPSS refresh', 'error');
@@ -1165,7 +1165,7 @@ describe('MultiEditBar', () => {
             await userEvent.click(screen.getByRole('checkbox', { name: /NVD/i }));
         });
         await act(async () => {
-            await userEvent.click(screen.getByRole('button', { name: /Refresh 1 target/i }));
+            await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
         });
         await waitFor(() => {
             expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start EPSS refresh', 'error');

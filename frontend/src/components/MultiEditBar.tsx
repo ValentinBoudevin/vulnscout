@@ -414,9 +414,9 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                 data-testid="refresh-dropdown-toggle"
                                 className="bg-sky-900 p-1 px-2 flex items-center gap-1"
                                 onClick={() => setRefreshMenuOpen(o => !o)}
-                                title="Select refresh targets"
+                                title="Select databases to fetch latest vulnerability data from"
                             >
-                                Refresh
+                                Refresh Vulnerability Data
                                 {(nvdInProgress || epssInProgress) && (
                                     <span className="inline-block w-2 h-2 rounded-full bg-cyan-400 animate-pulse ml-1" title="Refresh in progress" />
                                 )}
@@ -425,7 +425,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
 
                             {refreshMenuOpen && (
                                 <div className="absolute left-0 top-full mt-1 z-50 w-64 rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-3">
-                                    <div className="text-xs font-semibold text-sky-300 mb-2">Refresh targets</div>
+                                    <div className="text-xs font-semibold text-sky-300 mb-2">Fetch latest data from:</div>
 
                                     {/* NVD row */}
                                     <div className="flex items-center justify-between py-1 px-1 rounded hover:bg-sky-900/40">
@@ -500,7 +500,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                             title={allSelectedRefreshing ? 'All selected targets are already refreshing' : 'Start refresh for selected targets'}
                                             onClick={handleRefresh}
                                         >
-                                            Refresh {actionableRefreshCount} target{actionableRefreshCount !== 1 ? 's' : ''}
+                                            Start
                                         </button>
                                     </div>
                                 </div>
