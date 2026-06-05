@@ -21,13 +21,6 @@ from ..models.metrics import Metrics as MetricsModel
 from ..extensions import db
 
 
-# ---------------------------------------------------------------------------
-# Remote-refresh delay helpers
-# ---------------------------------------------------------------------------
-# DEPRECATED: Caching/staleness system has been removed.
-# All data fetches now attempt fresh data from remote sources.
-
-
 def _batch_commit(done: int, total: int, label: str) -> None:
     """Try to commit the DB session and log progress.
 
