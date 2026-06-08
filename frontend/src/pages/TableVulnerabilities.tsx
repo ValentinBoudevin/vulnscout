@@ -4,7 +4,7 @@ import type { Assessment } from "../handlers/assessments";
 import type { NVDProgress } from "../handlers/nvd_progress";
 import type { EPSSProgress } from "../handlers/epss_progress";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
-import { useMemo, useState, useEffect, useCallback, useRef } from "react";
+import React, { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import SeverityTag from "../components/SeverityTag";
 import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
@@ -19,6 +19,57 @@ import { formatPkgId } from "../helpers/pkgId";
 import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
 import EPSSProgressHandler from "../handlers/epss_progress";
+
+/**
+ * Shared hook for NVD/EPSS progress banner logic.
+ * Detects in-progress updates and phase transitions (completed/cancelled),
+ * updates the banner accordingly, and calls onRefreshComplete when done.
+ */
+function useRefreshProgressEffect(
+    progress: { in_progress: boolean; phase?: string; current: number; total: number } | null,
+    label: string,
+    prevInProgress: React.MutableRefObject<boolean | null>,
+    prevPhase: React.MutableRefObject<string | null>,
+    setBannerMessage: (msg: string) => void,
+    setBannerType: (type: 'error' | 'success') => void,
+    setBannerVisible: (visible: boolean) => void,
+    onRefreshComplete?: () => void,
+) {
+    useEffect(() => {
+        const inProgress = progress?.in_progress ?? false;
+        const phase = progress?.phase;
+        const justCompleted = prevPhase.current !== null && (
+            prevInProgress.current === true ||
+            (prevPhase.current !== 'completed' &&
+             prevPhase.current !== 'cancelled' &&
+             (phase === 'completed' || phase === 'cancelled')));
+        if (inProgress) {
+            if (progress && progress.total > 0 && progress.current > 0) {
+                setBannerMessage(`${label} refresh in progress: ${progress.current}/${progress.total}`);
+                setBannerType('success');
+                setBannerVisible(true);
+            }
+        } else if (justCompleted) {
+            onRefreshComplete?.();
+            if (phase === 'cancelled') {
+                const current = progress?.current ?? 0;
+                const total = progress?.total ?? 0;
+                setBannerMessage(`${label} refresh cancelled${current > 0 ? ` (${current}/${total} CVEs)` : ''}`);
+                setBannerType('error');
+            } else {
+                const total = progress?.total ?? 0;
+                setBannerMessage(`${label} refresh complete${total > 0 ? ` (${total} CVEs)` : ''}`);
+                setBannerType('success');
+            }
+            setBannerVisible(true);
+        }
+        if (progress !== null) {
+            prevInProgress.current = inProgress;
+            prevPhase.current = phase ?? 'idle';
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [progress, onRefreshComplete]);
+}
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTimes, faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
 import RangeSlider from "../components/RangeSlider";
@@ -36,6 +87,8 @@ type Props = {
     baseVariantId?: string;
     /** 'difference' or 'intersection' when compare mode is active */
     compareOperation?: string;
+    /** Called when an NVD or EPSS bulk refresh completes, so the parent can reload data */
+    onRefreshComplete?: () => void;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -273,7 +326,7 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, onRefreshComplete }: Readonly<Props>) {
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
@@ -298,7 +351,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
-        'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated', 'Published Date'
+        'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated'
     ]);
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
@@ -318,6 +371,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
     const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
     const moreFiltersRef = useRef<HTMLDivElement>(null);
+    const prevNvdInProgress = useRef<boolean | null>(null);
+    const prevNvdPhase = useRef<string | null>(null);
+    const prevEpssInProgress = useRef<boolean | null>(null);
+    const prevEpssPhase = useRef<string | null>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -342,6 +399,20 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         if (filterLabel === "Status") setSelectedStatuses([filterValue]);
         if (filterLabel === "Package") setSelectedPackages([filterValue]);
     }, [filterLabel, filterValue]);
+
+    // Update banner with live NVD/EPSS progress; reload data when each refresh completes
+    useRefreshProgressEffect(
+        nvdProgress, 'NVD',
+        prevNvdInProgress, prevNvdPhase,
+        setBannerMessage, setBannerType, setBannerVisible,
+        onRefreshComplete,
+    );
+    useRefreshProgressEffect(
+        epssProgress, 'EPSS',
+        prevEpssInProgress, prevEpssPhase,
+        setBannerMessage, setBannerType, setBannerVisible,
+        onRefreshComplete,
+    );
 
     // Fetch NVD progress on mount and periodically
     useEffect(() => {
@@ -695,7 +766,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     return <div className="flex items-center justify-center h-full text-center"><span className="text-xs text-gray-500 italic">fetching…</span></div>;
                 }
                 if (!published) {
-                    return <div className="flex items-center justify-center h-full text-center text-gray-400">Unknown</div>;
+                    return <div className="flex items-center justify-center h-full text-center text-gray-400">Requires a NVD refresh</div>;
                 }
                 const publishedDate = new Date(published);
                 const formattedDate = publishedDate.toLocaleDateString(undefined, {
@@ -986,7 +1057,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setPublishedDateFrom('');
         setPublishedDateTo('');
         setSelectedRows({});
-        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated', 'Published Date']);
+        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated']);
         setShowCustomSeverityFilter(false);
         setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
         setShowCustomEpssFilter(false);
@@ -1385,6 +1456,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             variantId={variantId}
             baseVariantId={baseVariantId}
             compareOperation={compareOperation}
+            nvdProgress={nvdProgress}
+            epssProgress={epssProgress}
         />
 
         <TableGeneric

@@ -123,6 +123,10 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         loadData(currentVariantId, currentVariantId ? undefined : currentProjectId);
     }, [loadData, currentVariantId, currentProjectId]);
 
+    const handleRefreshComplete = useCallback(() => {
+        loadData(currentVariantId, currentVariantId ? undefined : currentProjectId);
+    }, [loadData, currentVariantId, currentProjectId]);
+
 
     function appendAssessment(added: Assessment) {
         const updatedVulns = Vulnerabilities.append_assessment(vulns, added);
@@ -273,6 +277,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     projectId={currentProjectId}
                     baseVariantId={currentBaseVariantId}
                     compareOperation={currentOperation}
+                    onRefreshComplete={handleRefreshComplete}
                 />}
                 {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
                 {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}

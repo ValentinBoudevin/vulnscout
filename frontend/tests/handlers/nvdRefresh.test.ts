@@ -82,4 +82,34 @@ describe("NvdRefreshHandler.triggerSingleRefresh", () => {
             expect(result.apiKeyConfigured).toBe(true);
         }
     });
+
+    it("returns kind:error code:unavailable when vulnerabilities array is empty", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => ({ vulnerabilities: [] }),
+        } as Response);
+
+        const result = await NvdRefreshHandler.triggerSingleRefresh("CVE-2024-0001");
+        expect(result.kind).toBe("error");
+        if (result.kind === "error") {
+            expect(result.code).toBe("unavailable");
+            expect(result.apiKeyConfigured).toBe(true);
+        }
+    });
+
+    it("returns kind:error code:unavailable when json() throws (malformed response)", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => { throw new Error("invalid json"); },
+        } as unknown as Response);
+
+        const result = await NvdRefreshHandler.triggerSingleRefresh("CVE-2024-0001");
+        expect(result.kind).toBe("error");
+        if (result.kind === "error") {
+            expect(result.code).toBe("unavailable");
+            expect(result.apiKeyConfigured).toBe(true);
+        }
+    });
 });

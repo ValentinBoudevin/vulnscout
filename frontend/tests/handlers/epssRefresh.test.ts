@@ -86,4 +86,26 @@ describe("EpssRefreshHandler.triggerSingleRefresh", () => {
         const result = await EpssRefreshHandler.triggerSingleRefresh("CVE-2024-0001");
         expect(result).toBeNull();
     });
+
+    it("returns null when vulnerabilities array is empty", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => ({ vulnerabilities: [] }),
+        } as Response);
+
+        const result = await EpssRefreshHandler.triggerSingleRefresh("CVE-2024-0001");
+        expect(result).toBeNull();
+    });
+
+    it("returns null when json() throws (malformed response)", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => { throw new Error("invalid json"); },
+        } as unknown as Response);
+
+        const result = await EpssRefreshHandler.triggerSingleRefresh("CVE-2024-0001");
+        expect(result).toBeNull();
+    });
 });

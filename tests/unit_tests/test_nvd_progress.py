@@ -120,3 +120,58 @@ def test_thread_safety(fresh_tracker):
     assert tracker.get_progress()["in_progress"] is True
 
 
+def test_start_if_idle_returns_true_when_idle(fresh_tracker):
+    tracker = fresh_tracker
+    result = tracker.start_if_idle(phase="test_phase")
+    assert result is True
+    data = tracker.get_progress()
+    assert data["in_progress"] is True
+    assert data["phase"] == "test_phase"
+
+
+def test_start_if_idle_returns_false_when_in_progress(fresh_tracker):
+    tracker = fresh_tracker
+    tracker.start(phase="running")
+    result = tracker.start_if_idle(phase="new_phase")
+    assert result is False
+    # State must not have changed
+    assert tracker.get_progress()["phase"] == "running"
+
+
+def test_start_if_idle_uses_default_phase(fresh_tracker):
+    tracker = fresh_tracker
+    tracker.start_if_idle()
+    assert tracker.get_progress()["phase"] == "enrichment"
+
+
+def test_start_if_idle_resets_cancelled_flag(fresh_tracker):
+    tracker = fresh_tracker
+    tracker.start_if_idle()
+    tracker.cancel()
+    assert tracker.is_cancelled() is True
+    tracker.complete()
+    tracker.start_if_idle()
+    assert tracker.is_cancelled() is False
+
+
+def test_start_if_idle_atomic_under_concurrent_calls(fresh_tracker):
+    """Only one of N concurrent start_if_idle calls should succeed."""
+    import threading
+    tracker = fresh_tracker
+    successes = []
+    barrier = threading.Barrier(10)
+
+    def try_start():
+        barrier.wait()
+        if tracker.start_if_idle(phase="concurrent"):
+            successes.append(1)
+
+    threads = [threading.Thread(target=try_start) for _ in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(successes) == 1, f"Expected 1 success, got {len(successes)}"
+
+
