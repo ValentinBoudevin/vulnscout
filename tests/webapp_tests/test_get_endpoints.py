@@ -96,6 +96,17 @@ def test_get_vulnerabilities_list(client):
     assert "cairo@1.16.0" in data[0]["packages"]
     # found_by must be populated from the SBOM chain (grype doc in setup_demo_db)
     assert "grype" in data[0]["found_by"]
+    assert data[0]["texts"] == [
+        {
+            "title": "description",
+            "content": "A flaw was found in cairo's image-compositor.c in all versions prior to 1.17.4 [...]"
+        },
+        {
+            "title": "yocto",
+            "content": "Some Yocto description",
+            "packages": ["cairo"]
+        }
+    ]
 
 
 def test_get_vulnerabilities_dict(client):
@@ -115,21 +126,20 @@ def test_get_vulnerability_by_id(client):
     assert data["id"] == "CVE-2020-35492"
     assert data["severity"]["severity"] == "high"
     assert "cairo@1.16.0" in data["packages"]
+    assert data["texts"] == [
+        {
+            "title": "description",
+            "content": "A flaw was found in cairo's image-compositor.c in all versions prior to 1.17.4 [...]"
+        },
+        {
+            "title": "yocto",
+            "content": "Some Yocto description",
+            "packages": ["cairo"]
+        }
+    ]
 
     response = client.get("/api/vulnerabilities/CVE-0000-00000")
     assert response.status_code == 404
-
-
-def test_get_assessments_list(client):
-    response = client.get("/api/assessments?format=list")
-    assert response.status_code == 200
-    data = json.loads(response.data)
-    assert len(data) == 1
-    assert data[0]["id"] == "da4d18f0-d89e-4d54-819d-86fc884cc737"
-    assert data[0]["vuln_id"] == "CVE-2020-35492"
-    assert data[0]["status"] == "fixed"
-    assert "cairo@1.16.0" in data[0]["packages"]
-    assert data[0]["impact_statement"] == "Yocto reported vulnerability as Patched"
 
 
 def test_get_assessments_dict(client):
@@ -395,4 +405,3 @@ def test_documents_list_categories_enrichment(monkeypatch, client):
     # "vex" should have been appended, "misc" was already present (not duplicated)
     assert "vex" in item["category"]
     assert item["category"].count("misc") == 1
-

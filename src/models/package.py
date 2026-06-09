@@ -10,13 +10,13 @@ from typing import Optional
 
 from sqlalchemy import JSON
 from sqlalchemy.orm import Mapped, relationship, mapped_column
+from packageurl import PackageURL
 
 from ..extensions import db, Base
 
 
 if typing.TYPE_CHECKING:
-    from ..models import SBOMPackage, Finding
-from packageurl import PackageURL
+    from ..models import SBOMObservation, SBOMPackage, Finding
 
 
 def _normalize_purl(purl: str) -> str:
@@ -75,6 +75,10 @@ class Package(Base):
         cascade="all, delete-orphan",
     )
     findings: Mapped[list["Finding"]] = relationship(
+        back_populates="package",
+        cascade="all, delete-orphan",
+    )
+    sbom_observations: Mapped[list["SBOMObservation"]] = relationship(
         back_populates="package",
         cascade="all, delete-orphan",
     )

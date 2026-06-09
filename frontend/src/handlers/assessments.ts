@@ -10,6 +10,11 @@ const STATUS_VEX_TO_GRAPH: { [key: string]: string } = {
     "resolved_with_pedigree": "Fixed"
 };
 
+type VulnText = {
+    title: string;
+    content: string;
+}
+
 type Assessment = {
     id: string;
     vuln_id: string;
@@ -26,7 +31,7 @@ type Assessment = {
     timestamp: string;
     last_update?: string;
     responses: string[];
-    vuln_texts?: Record<string, string>;
+    vuln_texts?: VulnText[];
 };
 
 export type { Assessment };
@@ -40,7 +45,7 @@ type ReviewTimeEstimate = {
     optimistic_iso: string;
     likely_iso: string;
     pessimistic_iso: string;
-    vuln_texts?: Record<string, string>;
+    vuln_texts?: VulnText[];
 };
 
 type ReviewCustomCvss = {
@@ -51,7 +56,7 @@ type ReviewCustomCvss = {
     base_score: number;
     author: string;
     origin?: string;
-    vuln_texts?: Record<string, string>;
+    vuln_texts?: VulnText[];
 };
 
 export type { ReviewTimeEstimate, ReviewCustomCvss };
@@ -93,7 +98,7 @@ const asAssessment = (data: any): Assessment | [] => {
     if (typeof data?.workaround === "string") item.workaround = data.workaround;
     if (typeof data?.workaround_timestamp === "string") item.workaround_timestamp = data.workaround_timestamp;
     if (typeof data?.last_update === "string") item.last_update = data.last_update;
-    if (typeof data?.vuln_texts === "object" && data.vuln_texts !== null) item.vuln_texts = data.vuln_texts;
+    if (Array.isArray(data?.vuln_texts)) item.vuln_texts = data.vuln_texts;
     return item
 }
 

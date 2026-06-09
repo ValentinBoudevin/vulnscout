@@ -42,6 +42,7 @@ type Vulnerability = {
     texts: {
         title: string;
         content: string;
+        packages?: string[];
     }[];
     severity: {
         severity: string;
@@ -242,11 +243,7 @@ const asVulnerability = (data: any): Vulnerability | [] => {
     };
     if (typeof data?.namespace === "string") vuln.namespace = data.namespace
     if (typeof data?.datasource === "string") vuln.datasource = data.datasource
-    if (typeof data?.texts === "object")
-        vuln.texts = Object.entries(data.texts).flatMap(([key, value]) => {
-            if (typeof value !== "string") return [];
-            return { title: key, content: value }
-        })
+    if (Array.isArray(data?.texts)) vuln.texts = data.texts
     if (typeof data?.severity?.severity === "string") vuln.severity.severity = data.severity.severity
     if (typeof data?.severity?.min_score === "number") vuln.severity.min_score = Number(data.severity.min_score)
     if (typeof data?.severity?.max_score === "number") vuln.severity.max_score = Number(data.severity.max_score)

@@ -1,12 +1,12 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from flask import request
-from datetime import datetime
 import re
-from ..models.assessment import Assessment as DBAssessment, STATUS_TO_SIMPLIFIED
-from ..models.package import Package
-from ..models.finding import Finding
+from datetime import datetime
+from uuid import UUID
+
+from ..models import Assessment as DBAssessment, Package, Finding
+from ..models.assessment import STATUS_TO_SIMPLIFIED
 from ..views.openvex import OpenVex
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
@@ -16,6 +16,7 @@ from ..extensions import db, batch_session
 from ..models.vulnerability import Vulnerability as DBVuln
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
+from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
 from ..helpers.assessment_io import (
     build_openvex_archive,
     is_openvex_doc,
@@ -25,6 +26,9 @@ from ..helpers.assessment_io import (
     build_custom_data_export,
     import_custom_data,
 )
+
+from flask import request
+from sqlalchemy import select
 
 OPENVEX_FILE = "/scan/outputs/openvex.json"
 
@@ -147,32 +151,34 @@ def init_app(app):
         from ..models.variant import Variant as DBVariant
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
-        vid = None
+        variant_ids: list[UUID] | None
         if variant_id:
             vid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
-            assessments = [a.to_dict() for a in DBAssessment.get_handmade([vid])]
+            variant_ids = [vid]
+            assessments = DBAssessment.get_handmade([vid])
         elif project_id:
             pid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
             variant_ids = [variant.id for variant in DBVariant.get_by_project(pid)]
-            assessments = [a.to_dict() for a in DBAssessment.get_handmade(variant_ids)]
+            assessments = DBAssessment.get_handmade(variant_ids)
         else:
-            assessments = [a.to_dict() for a in DBAssessment.get_handmade()]
+            variant_ids = None
+            assessments = DBAssessment.get_handmade()
 
         # Enrich with vulnerability texts for front-end tooltips (single DB pass)
-        vuln_ids = {a["vuln_id"] for a in assessments if a.get("vuln_id")}
-        vuln_texts: dict[str, dict] = {}
-        for vid_str in vuln_ids:
-            vuln = DBVuln.get_by_id(vid_str)
-            if vuln is not None:
-                vuln_texts[vid_str] = dict(vuln.texts or {})
-        for a in assessments:
-            a["vuln_texts"] = vuln_texts.get(a.get("vuln_id", ""), {})
+        vuln_ids = {a.vuln_id for a in assessments if a.vuln_id}
+        vuln_texts = fetch_vulnerabilities_texts(vuln_ids, variant_ids=variant_ids)
 
-        return assessments
+        assessments_serialized = []
+        for a in assessments:
+            a_ser = a.to_dict()
+            a_ser["vuln_texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[a.vuln_id]))
+            assessments_serialized.append(a_ser)
+
+        return assessments_serialized
 
     @app.route('/api/assessments/review/export')
     def export_review_openvex():
@@ -232,79 +238,6 @@ def init_app(app):
             # Also keep the original name in case it differs
             variant_by_name[v.name] = v
 
-        # ---- helpers ----
-        def _is_openvex(doc: dict) -> bool:
-            ctx = doc.get("@context", "")
-            return "openvex" in ctx and isinstance(doc.get("statements"), list)
-
-        def _import_statements(statements: list, variant_id) -> tuple[list, list, int]:
-            created: list[dict] = []
-            errors: list[dict] = []
-            skipped = 0
-            for stmt in statements:
-                if not isinstance(stmt, dict):
-                    continue
-                vuln_obj = stmt.get("vulnerability", {})
-                vuln_name = vuln_obj.get("name") if isinstance(vuln_obj, dict) else None
-                if not vuln_name:
-                    errors.append({"error": "Missing vulnerability name", "statement": stmt})
-                    continue
-                status = stmt.get("status")
-                if not status:
-                    errors.append({"vuln_id": vuln_name, "error": "Missing status"})
-                    continue
-
-                products = stmt.get("products", [])
-                pkg_ids = []
-                for prod in products:
-                    if isinstance(prod, dict) and "@id" in prod:
-                        pkg_ids.append(prod["@id"])
-                    elif isinstance(prod, str):
-                        pkg_ids.append(prod)
-                if not pkg_ids:
-                    errors.append({"vuln_id": vuln_name, "error": "No products/packages found"})
-                    continue
-
-                justification = stmt.get("justification", "")
-                impact_statement = stmt.get("impact_statement", "")
-                status_notes = stmt.get("status_notes", "")
-                workaround = stmt.get("action_statement", "")
-
-                for pkg_string_id in pkg_ids:
-                    try:
-                        db_pkg = _resolve_package(pkg_string_id)
-                        DBVuln.get_or_create(vuln_name)
-                        finding = Finding.get_or_create(db_pkg.id, vuln_name)
-
-                        # Check for an existing identical assessment to avoid duplicates
-                        existing = db.session.execute(
-                            db.select(DBAssessment).where(
-                                DBAssessment.finding_id == finding.id,
-                                DBAssessment.variant_id == variant_id,
-                                DBAssessment.status == status,
-                            )
-                        ).scalar_one_or_none()
-                        if existing is not None:
-                            skipped += 1
-                            continue
-
-                        db_a = DBAssessment.create(
-                            status=status,
-                            simplified_status=STATUS_TO_SIMPLIFIED.get(status, "Pending Assessment"),
-                            finding_id=finding.id,
-                            variant_id=variant_id,
-                            origin="custom",
-                            status_notes=status_notes,
-                            justification=justification,
-                            impact_statement=impact_statement,
-                            workaround=workaround,
-                            responses=[],
-                            commit=True,
-                        )
-                        created.append(db_a.to_dict())
-                    except Exception as e:
-                        errors.append({"vuln_id": vuln_name, "package": pkg_string_id, "error": str(e)})
-            return created, errors, skipped
         variant_by_name = build_variant_by_name_map()
 
         # ---- .tar.gz handling ----
@@ -419,12 +352,11 @@ def init_app(app):
 
         # Bulk-load vulnerability texts to avoid N+1 queries
         vuln_ids_for_te = {te.finding.vulnerability_id for te in all_te}
-        vuln_texts_map: dict[str, dict] = {}
+        vuln_texts: dict[str, list[VulnerabilityText]]
         if vuln_ids_for_te:
-            for vuln in db.session.execute(
-                db.select(DBVuln).where(DBVuln.id.in_(vuln_ids_for_te))
-            ).scalars().all():
-                vuln_texts_map[vuln.id] = dict(vuln.texts or {})
+            vuln_texts = fetch_vulnerabilities_texts(vuln_ids_for_te, variant_ids_filter)
+        else:
+            vuln_texts = {}
 
         vuln_map: dict[str, dict] = {}
         for te in all_te:
@@ -446,7 +378,7 @@ def init_app(app):
                 "optimistic_iso": _hours_to_iso(opt),
                 "likely_iso": _hours_to_iso(lik),
                 "pessimistic_iso": _hours_to_iso(pes),
-                "vuln_texts": vuln_texts_map.get(vid, {}),
+                "vuln_texts": list(map(VulnerabilityText.to_dict, vuln_texts.get(vid, []))),
             }
 
         return sorted(vuln_map.values(), key=lambda x: x["vuln_id"])
@@ -462,11 +394,13 @@ def init_app(app):
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
 
-        query = db.select(Metrics).where(Metrics.origin == "custom")
+        variant_ids: list[UUID] | None = None
+        query = select(Metrics).where(Metrics.origin == "custom")
         if variant_id:
             vid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
+            variant_ids = [vid]
             query = query.where(db.or_(Metrics.variant_id == vid, Metrics.variant_id.is_(None)))
         elif project_id:
             pid, err = parse_uuid_or_400(project_id, "project_id")
@@ -477,14 +411,17 @@ def init_app(app):
                 query = query.where(db.or_(Metrics.variant_id.in_(variant_ids), Metrics.variant_id.is_(None)))
             else:
                 query = query.where(db.false())
+        query = query.order_by(Metrics.vulnerability_id)
 
         all_metrics = list(db.session.execute(query).scalars().all())
 
+        vuln_ids = map(lambda m: m.vulnerability_id, all_metrics)
+        vuln_texts = fetch_vulnerabilities_texts(vuln_ids, variant_ids=variant_ids)
+
         result: list[dict] = []
-        for m in sorted(all_metrics, key=lambda m: m.vulnerability_id):
+        for m in all_metrics:
             if _is_scanner_author(m.author):
                 continue
-            vuln = DBVuln.get_by_id(m.vulnerability_id)
             result.append({
                 "vuln_id": m.vulnerability_id,
                 "variant_id": str(m.variant_id) if m.variant_id else None,
@@ -493,7 +430,7 @@ def init_app(app):
                 "base_score": float(m.score) if m.score is not None else 0.0,
                 "author": m.author,
                 "origin": m.origin or "scanner",
-                "vuln_texts": dict(vuln.texts or {}) if vuln else {},
+                "vuln_texts": list(map(VulnerabilityText.to_dict, vuln_texts.get(m.vulnerability_id, []))),
             })
 
         return result

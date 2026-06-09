@@ -33,7 +33,7 @@ class YoctoVulns:
                 package = Package(pkg["name"], pkg["version"], [], [])
                 package.generate_generic_cpe()
                 package.generate_generic_purl()
-                self.packagesCtrl.add(package)
+                package = self.packagesCtrl.add(package)
 
                 # Pre-warm the in-memory index with DB assessments for this
                 # package so that gets_by_vuln_pkg hits only the in-memory
@@ -50,9 +50,7 @@ class YoctoVulns:
                     if "link" in issue:
                         vuln.add_url(issue.get("link"))
                     if "summary" in issue:
-                        vuln.add_text(issue.get("summary"), "description")
-                    if "description" in issue:
-                        vuln.add_text(issue.get("description"), "yocto description")
+                        vuln.description = issue["summary"]
 
                     vector_string = issue.get("vectorString", "")
 
@@ -153,3 +151,11 @@ class YoctoVulns:
                         assessment.set_status("under_investigation")
 
                     self.assessmentsCtrl.add(assessment)
+
+                    if "description" in issue:
+                        self.vulnerabilitiesCtrl.record_sbom_observation(
+                            vuln,
+                            key="Yocto Description",
+                            description=issue["description"],
+                            package=package,
+                        )

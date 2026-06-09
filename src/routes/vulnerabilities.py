@@ -36,6 +36,7 @@ from ..helpers.vuln_helpers import (
     _apply_effort,
 )
 from ._scan_helpers import parse_uuid_or_400
+from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
 
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
 
@@ -609,6 +610,12 @@ def init_app(app):
             for vuln_id, vuln in vulns.items():
                 vuln["first_scan_date"] = first_scan_by_vuln.get(vuln_id)
 
+            # Enrich with observation statuses
+            all_vuln_texts = fetch_vulnerabilities_texts(vuln_ids, include_packages=True, scan_ids=active_scan_ids)
+            for vuln_id, vuln_texts in all_vuln_texts.items():
+                vuln = vulns[vuln_id]
+                vuln["texts"] = list(map(VulnerabilityText.to_dict, vuln_texts))
+
         match request.args.get('format', 'list'):
             case "list":
                 return list(vulns.values())
@@ -631,6 +638,16 @@ def init_app(app):
                 return err
             overrides = _variant_scoped_metrics_and_effort_overrides([record], variant_uuid)
             _apply_variant_scoped_overrides_to_vuln_dicts({response["id"]: response}, overrides)
+        else:
+            variant_uuid = None
+
+        vuln_texts = fetch_vulnerabilities_texts(
+            [id],
+            variant_ids=[variant_uuid] if variant_uuid else None,
+            include_packages=True,
+        )
+        response["texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[id]))
+
         return response
 
     @app.patch('/api/vulnerabilities/<id>')
@@ -896,7 +913,14 @@ def init_app(app):
                 if rec.severity_max_score is None or score > rec.severity_max_score:
                     rec.severity_max_score = score
 
-        return jsonify({"vulnerabilities": [rec.to_dict()]}), 200
+        data = rec.to_dict()
+
+        # Note: we don't have "variant" information here so we fetch all texts.
+        # This can be incoherent.
+        vuln_texts = fetch_vulnerabilities_texts([cve_id_upper], variant_ids=None)
+        data["texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[cve_id_upper]))
+
+        return jsonify({"vulnerabilities": [data]}), 200
 
     @app.route('/api/vulnerabilities/<cve_id>/epss-refresh', methods=['POST'])
     def refresh_single_cve_epss(cve_id):
