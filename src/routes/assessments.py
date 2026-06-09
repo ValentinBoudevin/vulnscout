@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from uuid import UUID
 
-from ..models import Assessment as DBAssessment, Package, Finding, SBOMObservation, SBOMDocument, Scan
+from ..models import Assessment as DBAssessment, Package, Finding
 from ..models.assessment import STATUS_TO_SIMPLIFIED
 from ..views.openvex import OpenVex
 from ..controllers.packages import PackagesController
@@ -16,6 +16,7 @@ from ..extensions import db, batch_session
 from ..models.vulnerability import Vulnerability as DBVuln
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
+from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
 from ..helpers.assessment_io import (
     build_openvex_archive,
     is_openvex_doc,
@@ -169,49 +170,12 @@ def init_app(app):
 
         # Enrich with vulnerability texts for front-end tooltips (single DB pass)
         vuln_ids = {a.vuln_id for a in assessments if a.vuln_id}
-        vuln_texts: dict[str, list[dict]] = {vuln_id: [] for vuln_id in vuln_ids}
-        vuln_desc_query = (
-            select(DBVuln.id, DBVuln.description)
-            .where(DBVuln.id.in_(vuln_ids) & DBVuln.description.is_not(None))
-        )
-        for vuln_id, vuln_desc in db.session.execute(vuln_desc_query).all():
-            vuln_texts[vuln_id].append({
-                "title": "description",
-                "content": vuln_desc,
-            })
-
-        # Enrich with observation statuses
-        sbom_observation_query = (
-            select(
-                SBOMObservation.vulnerability_id,
-                SBOMObservation.key,
-                SBOMObservation.description,
-            )
-            .where(SBOMObservation.vulnerability_id.in_(vuln_ids))
-            .order_by(  # order by to have reproducible results (testing)
-                SBOMObservation.vulnerability_id,
-                SBOMObservation.key,
-                SBOMObservation.description,
-            )
-            .distinct()
-        )
-        if variant_ids is not None:
-            sbom_observation_query = sbom_observation_query \
-                .where(SBOMObservation.sbom_document_id.in_(
-                    select(SBOMDocument.id)
-                    .join(Scan, SBOMDocument.scan_id == Scan.id)
-                    .where(Scan.variant_id.in_(variant_ids))
-                ))
-        for vuln_id, obs_key, obs_desc in db.session.execute(sbom_observation_query).all():
-            vuln_texts[vuln_id].append({
-                "title": obs_key,
-                "content": obs_desc,
-            })
+        vuln_texts = fetch_vulnerabilities_texts(vuln_ids, variant_ids=variant_ids)
 
         assessments_serialized = []
         for a in assessments:
             a_ser = a.to_dict()
-            a_ser["vuln_texts"] = vuln_texts[a.vuln_id]
+            a_ser["vuln_texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[a.vuln_id]))
             assessments_serialized.append(a_ser)
 
         return assessments_serialized
@@ -388,12 +352,11 @@ def init_app(app):
 
         # Bulk-load vulnerability texts to avoid N+1 queries
         vuln_ids_for_te = {te.finding.vulnerability_id for te in all_te}
-        vuln_texts_map: dict[str, dict] = {}
+        vuln_texts: dict[str, list[VulnerabilityText]]
         if vuln_ids_for_te:
-            for vuln in db.session.execute(
-                db.select(DBVuln).where(DBVuln.id.in_(vuln_ids_for_te))
-            ).scalars().all():
-                vuln_texts_map[vuln.id] = dict(vuln.texts or {})
+            vuln_texts = fetch_vulnerabilities_texts(vuln_ids_for_te, variant_ids_filter)
+        else:
+            vuln_texts = {}
 
         vuln_map: dict[str, dict] = {}
         for te in all_te:
@@ -415,7 +378,7 @@ def init_app(app):
                 "optimistic_iso": _hours_to_iso(opt),
                 "likely_iso": _hours_to_iso(lik),
                 "pessimistic_iso": _hours_to_iso(pes),
-                "vuln_texts": vuln_texts_map.get(vid, {}),
+                "vuln_texts": list(map(VulnerabilityText.to_dict, vuln_texts.get(vid, []))),
             }
 
         return sorted(vuln_map.values(), key=lambda x: x["vuln_id"])
@@ -431,11 +394,13 @@ def init_app(app):
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
 
-        query = db.select(Metrics).where(Metrics.origin == "custom")
+        variant_ids: list[UUID] | None = None
+        query = select(Metrics).where(Metrics.origin == "custom")
         if variant_id:
             vid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
+            variant_ids = [vid]
             query = query.where(db.or_(Metrics.variant_id == vid, Metrics.variant_id.is_(None)))
         elif project_id:
             pid, err = parse_uuid_or_400(project_id, "project_id")
@@ -446,14 +411,17 @@ def init_app(app):
                 query = query.where(db.or_(Metrics.variant_id.in_(variant_ids), Metrics.variant_id.is_(None)))
             else:
                 query = query.where(db.false())
+        query = query.order_by(Metrics.vulnerability_id)
 
         all_metrics = list(db.session.execute(query).scalars().all())
 
+        vuln_ids = map(lambda m: m.vulnerability_id, all_metrics)
+        vuln_texts = fetch_vulnerabilities_texts(vuln_ids, variant_ids=variant_ids)
+
         result: list[dict] = []
-        for m in sorted(all_metrics, key=lambda m: m.vulnerability_id):
+        for m in all_metrics:
             if _is_scanner_author(m.author):
                 continue
-            vuln = DBVuln.get_by_id(m.vulnerability_id)
             result.append({
                 "vuln_id": m.vulnerability_id,
                 "variant_id": str(m.variant_id) if m.variant_id else None,
@@ -462,7 +430,7 @@ def init_app(app):
                 "base_score": float(m.score) if m.score is not None else 0.0,
                 "author": m.author,
                 "origin": m.origin or "scanner",
-                "vuln_texts": dict(vuln.texts or {}) if vuln else {},
+                "vuln_texts": list(map(VulnerabilityText.to_dict, vuln_texts.get(m.vulnerability_id, []))),
             })
 
         return result

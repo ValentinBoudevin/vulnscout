@@ -218,6 +218,10 @@ class TestReviewListTexts:
                 "title": "Text Shared",
                 "content": "Content for B",
             },
+            {  # from the db setup
+                "content": "Some Yocto description",
+                "title": "yocto"
+            },
         ]
 
     def test_variant_specific(self, client):
@@ -277,6 +281,10 @@ class TestReviewListTexts:
             {
                 "title": "Text Shared",
                 "content": "Content for B",
+            },
+            {  # from the db setup
+                "content": "Some Yocto description",
+                "title": "yocto"
             },
         ]
 
@@ -803,7 +811,7 @@ def test_export_custom_data_by_variant(client):
     data = json.loads(resp.data)
     assert len(data["assessments"]) >= 1
     for a in data["assessments"]:
-        assert a["variant_id"] == VARIANT_UUID
+        assert a["variant_id"] == str(VARIANT_UUID)
 
 
 def test_export_custom_data_by_project(client):
@@ -1135,7 +1143,7 @@ def test_import_custom_data_via_file_upload(client):
         "vuln_id": "CVE-2020-35492",
         "status": "affected",
         "packages": ["cairo@1.16.0"],
-        "variant_id": VARIANT_UUID,
+        "variant_id": str(VARIANT_UUID),
     }])
     data_bytes = json.dumps(payload).encode("utf-8")
     resp = client.post(

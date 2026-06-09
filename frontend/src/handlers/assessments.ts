@@ -10,6 +10,11 @@ const STATUS_VEX_TO_GRAPH: { [key: string]: string } = {
     "resolved_with_pedigree": "Fixed"
 };
 
+type VulnText = {
+    title: string;
+    content: string;
+}
+
 type Assessment = {
     id: string;
     vuln_id: string;
@@ -26,10 +31,7 @@ type Assessment = {
     timestamp: string;
     last_update?: string;
     responses: string[];
-    vuln_texts?: {
-        title: string;
-        content: string;
-    }[];
+    vuln_texts?: VulnText[];
 };
 
 export type { Assessment };
@@ -43,7 +45,7 @@ type ReviewTimeEstimate = {
     optimistic_iso: string;
     likely_iso: string;
     pessimistic_iso: string;
-    vuln_texts?: Record<string, string>;
+    vuln_texts?: VulnText[];
 };
 
 type ReviewCustomCvss = {
@@ -54,7 +56,7 @@ type ReviewCustomCvss = {
     base_score: number;
     author: string;
     origin?: string;
-    vuln_texts?: Record<string, string>;
+    vuln_texts?: VulnText[];
 };
 
 export type { ReviewTimeEstimate, ReviewCustomCvss };

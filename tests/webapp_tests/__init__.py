@@ -21,6 +21,7 @@ def setup_demo_db(app):
     from src.models.sbom_document import SBOMDocument
     from src.models.sbom_package import SBOMPackage
     from src.models.observation import Observation
+    from src.models import SBOMObservation
 
     with app.app_context():
         db.drop_all()
@@ -99,6 +100,15 @@ def setup_demo_db(app):
         db.session.add(sbom_doc)
         db.session.add(SBOMPackage(sbom_document_id=sbom_doc.id, package_id=pkg.id))
         db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
+        db.session.add(
+            SBOMObservation(
+                key="yocto",
+                description="Some Yocto description",
+                vulnerability=vuln,
+                package=pkg,
+                sbom_document=sbom_doc,
+            )
+        )
         db.session.commit()
 
 

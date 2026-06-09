@@ -8,7 +8,10 @@ dicts/sets without any diff or comparison logic.
 """
 
 import uuid as uuid_module
+from dataclasses import dataclass
+import typing
 
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from ..models.scan import Scan
@@ -19,6 +22,7 @@ from ..models.sbom_package import SBOMPackage
 from ..models.package import Package
 from ..models.variant import Variant
 from ..models.project import Project
+from ..models import SBOMObservation, Vulnerability
 from ..extensions import db
 
 
@@ -452,3 +456,106 @@ def _assessments_detail_for_scan(scan: Scan, next_scan_ts=None, prev_scan=None) 
         "removed_count": removed_count,
         "unchanged_count": unchanged_count,
     }
+
+
+# Vulnerability texts (SBOM Observations)
+
+@dataclass
+class VulnerabilityText:
+    title: str
+    content: str
+    packages: list[str] | None = None
+
+    def to_dict(self) -> dict[str, str | list[str]]:
+        rec: dict[str, str | list[str]] = {
+            "title": self.title,
+            "content": self.content,
+        }
+        if self.packages is not None:
+            rec["packages"] = self.packages
+        return rec
+
+
+def fetch_vulnerabilities_texts(
+    vuln_ids: typing.Iterable[str],
+    include_packages: bool = False,
+    variant_ids: list[uuid_module.UUID] | None = None,
+    scan_ids: list[uuid_module.UUID] | None = None,
+) -> dict[str, list[VulnerabilityText]]:
+    vuln_texts: dict[str, list[VulnerabilityText]] = {vuln_id: [] for vuln_id in vuln_ids}
+    vuln_desc_query = (
+        select(Vulnerability.id, Vulnerability.description)
+        .where(Vulnerability.id.in_(vuln_ids) & Vulnerability.description.is_not(None))
+    )
+    for vuln_id, vuln_desc in db.session.execute(vuln_desc_query).all():
+        vuln_texts[vuln_id].append(VulnerabilityText(
+            title="description",
+            content=vuln_desc,
+        ))
+
+    # Enrich with observation statuses
+    sbom_observation_query = (
+        select(
+            SBOMObservation.vulnerability_id,
+            SBOMObservation.key,
+            SBOMObservation.description,
+        )
+        .where(SBOMObservation.vulnerability_id.in_(vuln_ids))
+        .order_by(  # order by to have reproducible results (testing)
+            SBOMObservation.vulnerability_id,
+            SBOMObservation.key,
+            SBOMObservation.description,
+        )
+        .distinct()
+    )
+
+    if include_packages:
+        sbom_observation_query = sbom_observation_query \
+            .join(Package, SBOMObservation.package_id == Package.id, isouter=True) \
+            .add_columns(Package.name)
+
+    assert not (variant_ids is not None and scan_ids is not None), "Cannot have both variant_ids and scan_ids"
+
+    if variant_ids is not None:
+        sbom_observation_query = sbom_observation_query \
+            .where(SBOMObservation.sbom_document_id.in_(
+                select(SBOMDocument.id)
+                .join(Scan, SBOMDocument.scan_id == Scan.id)
+                .where(Scan.variant_id.in_(variant_ids))
+            ))
+
+    if scan_ids is not None:
+        sbom_observation_query = sbom_observation_query \
+            .join(SBOMDocument, SBOMObservation.sbom_document_id == SBOMDocument.id) \
+            .where(SBOMDocument.scan_id.in_(scan_ids))
+
+    records = db.session.execute(sbom_observation_query).all()
+    for vuln_id, obs_key, obs_desc, *rest in records:
+        texts = vuln_texts[vuln_id]
+        if include_packages:
+            pkg, = rest
+            assert pkg is None or isinstance(pkg, str)
+        else:
+            pkg = None
+
+        if pkg:
+            found = False
+            for text in texts:
+                if text.title == obs_key and text.content == obs_desc:
+                    assert text.packages
+                    text.packages.append(pkg)
+                    found = True
+                    break
+            if not found:
+                texts.append(VulnerabilityText(
+                    title=obs_key,
+                    content=obs_desc,
+                    packages=[pkg]
+                ))
+        else:
+            texts.append(VulnerabilityText(
+                title=obs_key,
+                content=obs_desc,
+            ))
+
+    return vuln_texts

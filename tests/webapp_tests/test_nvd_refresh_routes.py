@@ -88,7 +88,16 @@ class TestSingleCveRefreshEndpoint:
         assert vuln["severity"]["max_score"] is not None
         # Transient fields must reflect the updated DB values (not stale pre-commit state)
         assert vuln["severity"]["severity"] == "high"
-        assert vuln["texts"].get("description") == "updated description"
+        assert vuln["texts"] == [
+            {
+                "title": "description",
+                "content": "updated description"
+            },
+            {  # left untouched
+                "title": "yocto",
+                "content": "Some Yocto description"
+            }
+        ]
         assert any("nvd.nist.gov" in url for url in vuln["urls"])
 
     def test_single_refresh_updates_existing_cvss_score(self, client, existing_cve_id):

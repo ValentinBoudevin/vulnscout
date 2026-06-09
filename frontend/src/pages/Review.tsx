@@ -195,18 +195,12 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 }
                 for (const te of teData) {
                     if (te.vuln_id && !descMap[te.vuln_id] && te.vuln_texts) {
-                        const entries = Object.entries(te.vuln_texts);
-                        descMap[te.vuln_id] = entries.length > 0
-                            ? entries.map(([title, content]) => ({ title, content }))
-                            : [{ title: "description", content: "No description available" }];
+                        descMap[te.vuln_id] = te.vuln_texts || [{ title: "description", content: "No description available" }];
                     }
                 }
                 for (const c of cvssData) {
                     if (c.vuln_id && !descMap[c.vuln_id] && c.vuln_texts) {
-                        const entries = Object.entries(c.vuln_texts);
-                        descMap[c.vuln_id] = entries.length > 0
-                            ? entries.map(([title, content]) => ({ title, content }))
-                            : [{ title: "description", content: "No description available" }];
+                        descMap[c.vuln_id] = c.vuln_texts || [{ title: "description", content: "No description available" }];
                     }
                 }
                 setVulnDescriptions(descMap);
