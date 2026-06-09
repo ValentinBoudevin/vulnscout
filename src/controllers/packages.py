@@ -86,7 +86,7 @@ class PackagesController:
     # Core mutators
     # ------------------------------------------------------------------
 
-    def add(self, package: Package):
+    def add(self, package: Package) -> Package:
         """Persist a Package to the DB and keep it in the session cache."""
         if package is None:
             return
@@ -111,6 +111,7 @@ class PackagesController:
                             self._current_sbom_document.id,
                             self._db_id_cache[string_id],
                         )
+                return package
             else:
                 with db.session.begin_nested():
                     db_pkg = Package.find_or_create(
@@ -127,8 +128,10 @@ class PackagesController:
                     # Link to the current SBOM document if one is active
                     if self._current_sbom_document is not None:
                         SBOMPackage.get_or_create(self._current_sbom_document.id, db_pkg.id)
+                    return db_pkg
         except Exception as e:
             verbose(f"[PackagesController.add {package.string_id!r}] {e}")
+            return package  # TODO: better exception handling. Simply logging it is questionnable
 
     def remove(self, package_id: str) -> bool:
         """Remove a package from the session cache and the DB."""

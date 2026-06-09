@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import NavigationBar from "../components/NavigationBar";
 import MessageBanner from "../components/MessageBanner";
 import VersionDisplay from "../components/VersionDisplay";
@@ -19,6 +19,16 @@ import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '..
 import Config from "../handlers/config";
 import type { AppConfig } from "../handlers/config";
 
+const tabLabels: Record<string, string> = {
+        metrics: 'Metrics',
+        packages: 'SBOM',
+        vulnerabilities: 'Vulnerabilities',
+        scans: 'Scans',
+        review: 'Review',
+        exports: 'Export',
+        settings: 'Settings',
+};
+
 type Props = {
   darkMode: boolean;
   setDarkMode: (mode: boolean) => void;
@@ -28,6 +38,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [selectorKey, setSelectorKey] = useState(0);
     const [pkgs, setPkgs] = useState<Package[]>([]);
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
+    const vulnsRef = useRef<Vulnerability[]>([]);
     const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | "Package" | undefined>(undefined);
     const [filterValue, setFilterValue] = useState<string | undefined>(undefined);
     const [bannerMessage, setBannerMessage] = useState<string>('');
@@ -35,7 +46,14 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
     const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
     const [loadingMessage, setLoadingMessage] = useState<string>("Loading data...");
-    const [defaultConfig, setDefaultConfig] = useState<AppConfig>({ project: null, variant: null, author: "vulnscout" });
+    const [defaultConfig, setDefaultConfig] = useState<AppConfig>({
+        project: null,
+        variant: null,
+        product_name: "",
+        author_name: "vulnscout",
+        client_name: "",
+        contact_email: "",
+    });
     const [currentVariantId, setCurrentVariantId] = useState<string | undefined>(undefined);
     const [currentProjectId, setCurrentProjectId] = useState<string | undefined>(undefined);
     const [currentBaseVariantId, setCurrentBaseVariantId] = useState<string | undefined>(undefined);
@@ -113,6 +131,10 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         loadData(currentVariantId, currentVariantId ? undefined : currentProjectId);
     }, [loadData, currentVariantId, currentProjectId]);
 
+    const handleRefreshComplete = useCallback(() => {
+        loadData(currentVariantId, currentVariantId ? undefined : currentProjectId);
+    }, [loadData, currentVariantId, currentProjectId]);
+
 
     function appendAssessment(added: Assessment) {
         const updatedVulns = Vulnerabilities.append_assessment(vulns, added);
@@ -123,7 +145,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     }
 
     function appendCVSS(vulnId: string, vector: string) {
-        const cvss: CVSS | null = Vulnerabilities.calculate_cvss_from_vector(vector, defaultConfig.author) ?? null;
+        const cvss: CVSS | null = Vulnerabilities.calculate_cvss_from_vector(vector, defaultConfig.author_name) ?? null;
         if (cvss !== null) {
             const updatedVulns = Vulnerabilities.append_cvss(vulns, vulnId, cvss);
             setVulns(updatedVulns);
@@ -135,17 +157,19 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         return null;
     }
 
+    // Keep vulnsRef in sync when vulns state is updated externally
+    // (e.g. after loadData or appendAssessment).
+    useEffect(() => { vulnsRef.current = vulns; }, [vulns]);
+
     function patchVuln(vulnId: string, replace_vuln: Vulnerability) {
-        const updatedVulns = vulns.map(vuln => {
-            if (vuln.id === vulnId) {
-                return replace_vuln;
-            }
-            return vuln;
-        });
-        setVulns(updatedVulns);
+        // Update the ref immediately so the next synchronous call to patchVuln
+        // (for a different CVE in the same multi-edit batch) reads the already-
+        // patched list rather than the stale closure value.
+        vulnsRef.current = vulnsRef.current.map(v => v.id === vulnId ? replace_vuln : v);
+        setVulns(vulnsRef.current);
 
         // Update packages with the new vulnerability data
-        setPkgs(Packages.enrich_with_vulns(pkgs, updatedVulns));
+        setPkgs(Packages.enrich_with_vulns(pkgs, vulnsRef.current));
     }
 
     // Update vulns state in-place after a Review tab edit or delete
@@ -167,13 +191,14 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                         : a
                 );
             }
-            if (newAssessments.length === 0) {
-                return { ...vuln, assessments: [], status: 'unknown', simplified_status: 'unknown' };
-            }
-            const latest = [...newAssessments].sort(
-                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-            )[0];
-            return { ...vuln, assessments: newAssessments, status: latest.status, simplified_status: latest.simplified_status };
+            const [enriched] = Vulnerabilities.enrich_with_assessments([
+                {
+                    ...vuln,
+                    assessments: [],
+                    simplified_status: 'unknown',
+                }
+            ], newAssessments);
+            return enriched;
         }));
     }, []);
 
@@ -200,17 +225,26 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
 
     return (
         <div className="w-screen h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee] flex flex-col overflow-hidden">
-            <NavigationBar
-                key={selectorKey}
-                tab={tab}
-                changeTab={handleTabChange}
-                darkMode={darkMode}
-                setDarkMode={setDarkMode}
-                defaultProject={defaultConfig.project}
-                defaultVariant={defaultConfig.variant}
-                onApply={handleApply}
-            />
+            <a
+                href="#main-content"
+                className="sr-only focus:not-sr-only focus:absolute focus:z-[100] focus:top-2 focus:left-2 focus:px-4 focus:py-2 focus:bg-cyan-800 focus:text-white focus:rounded focus:text-sm focus:font-semibold"
+            >
+                Skip to content
+            </a>
+            <header>
+                <NavigationBar
+                    key={selectorKey}
+                    tab={tab}
+                    changeTab={handleTabChange}
+                    darkMode={darkMode}
+                    setDarkMode={setDarkMode}
+                    defaultProject={defaultConfig.project}
+                    defaultVariant={defaultConfig.variant}
+                    onApply={handleApply}
+                />
+            </header>
 
+            <main id="main-content" aria-label={tabLabels[tab] ?? 'Content'} className="flex-1 flex flex-col overflow-hidden">
             <div className="px-8 pt-4">
                 <MessageBanner
                     type={bannerType}
@@ -221,9 +255,9 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             </div>
 
             {isLoadingData && (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40" role="status" aria-live="polite">
                     <div className="flex flex-col items-center gap-3 text-white">
-                        <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin" aria-hidden="true"></div>
                         <span className="text-sm font-semibold">{loadingMessage}</span>
                     </div>
                 </div>
@@ -254,6 +288,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     projectId={currentProjectId}
                     baseVariantId={currentBaseVariantId}
                     compareOperation={currentOperation}
+                    onRefreshComplete={handleRefreshComplete}
                 />}
                 {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
                 {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
@@ -273,7 +308,10 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     }
                 }} />}
             </div>
-            <VersionDisplay />
+            </main>
+            <footer>
+                <VersionDisplay />
+            </footer>
         </div>
     )
 }

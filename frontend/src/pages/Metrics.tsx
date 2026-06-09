@@ -2,7 +2,7 @@ import { useMemo, useState, useCallback } from "react";
         import type { Package } from "../handlers/packages";
         import type { CVSS } from "../handlers/vulnerabilities";
         import type { Vulnerability } from "../handlers/vulnerabilities";
-        import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
+        import { SEVERITY_ORDER, getVulnerabilityStatusSummary, isVulnerabilityActive } from "../handlers/vulnerabilities";
         import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale, ChartEvent, LegendItem, LegendElement } from 'chart.js';
         import { Pie, Line, Bar } from 'react-chartjs-2';
         import TableGeneric from "../components/TableGeneric";
@@ -154,7 +154,9 @@ const vulnColumns = useMemo(
         <div className="flex items-center justify-center h-full">Package</div>
       ),
       cell: (info: any) => (
-        <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>
+        <div className="flex items-center justify-center h-full text-center min-w-0 w-full overflow-hidden">
+          <span className="truncate block w-full" title={info.getValue()}>{info.getValue()}</span>
+        </div>
       ),
       size: 200,
       enableSorting: false,
@@ -337,9 +339,11 @@ const packageColumns = [
                     datasets: [{
                         label: '# of Vulnerabilities',
                         data: vulnerabilities.reduce((acc, vuln) => {
-                            const status = vuln.simplified_status;
-                            const index = status == 'Not affected' ? 0 : status == 'Fixed' ? 1 : status == 'Pending Assessment' ? 2 : 3;
-                            acc[index]++;
+                          const summary = getVulnerabilityStatusSummary(vuln);
+                          acc[0] += summary.counts['Not affected'] ?? 0;
+                          acc[1] += summary.counts['Fixed'] ?? 0;
+                          acc[2] += summary.counts['Pending Assessment'] ?? 0;
+                          acc[3] += summary.counts['Exploitable'] ?? 0;
                             return acc;
                         }, [0, 0, 0, 0]),
                         backgroundColor: [
@@ -430,7 +434,7 @@ const packageColumns = [
 
   const TopVulns = useMemo(() => {
     return [...vulnerabilities]
-      .filter((vuln) => vuln.simplified_status !== 'Fixed' && vuln.simplified_status !== 'Not affected')
+      .filter((vuln) => isVulnerabilityActive(vuln))
       .map((vuln, index) => {
         const maxCvss = vuln.severity.cvss?.length
           ? Math.max(...vuln.severity.cvss.map((cvss) => cvss.base_score || 0))
@@ -466,6 +470,7 @@ const packageColumns = [
                 // so that the sum of all bars equals the total vulnerability count.
                 const SOURCE_PRIORITY: Record<string, number> = {
                     grype: 1,
+                    yocto_cve_check: 2,
                     yocto: 2,
                     nvd_cpe: 3,
                     osv: 4,
@@ -548,11 +553,11 @@ const packageColumns = [
                     const targetStatus = statusOrder[index];
 
                     const matchingStatus = vulnerabilities.find(v =>
-                        v.simplified_status === targetStatus
-                    )?.simplified_status;
+                      (getVulnerabilityStatusSummary(v).counts[targetStatus] ?? 0) > 0
+                    );
 
                     if (matchingStatus) {
-                        goToVulnsTabWithFilter("Status", matchingStatus);
+                      goToVulnsTabWithFilter("Status", targetStatus);
                     }
                 }
             }
@@ -560,12 +565,12 @@ const packageColumns = [
       return (
         <div className="w-full flex flex-col gap-4 pb-8">
 
-          {/* === TOP CHART GRID === */}
+          {/* === CHARTS SECTION === */}
           <div className="w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
 
             {/* Vulnerabilities by Severity */}
-            <div className="p-4">
-              <div className="bg-zinc-700 p-2 text-center text-xl text-white whitespace-nowrap rounded-t-md">
+            <div className="p-3">
+              <div className="bg-zinc-700 p-2 text-center text-xl text-white rounded-t-md">
                 Vulnerabilities by Severity
               </div>
               <div className="bg-zinc-700 p-4 w-full aspect-square rounded-b-md">
@@ -579,8 +584,8 @@ const packageColumns = [
             </div>
 
             {/* Vulnerabilities by Status */}
-            <div className="p-4">
-              <div className="bg-zinc-700 p-2 text-center text-xl text-white whitespace-nowrap rounded-t-md">
+            <div className="p-3">
+              <div className="bg-zinc-700 p-2 text-center text-xl text-white rounded-t-md">
                 Vulnerabilities by Status
               </div>
               <div className="bg-zinc-700 p-4 w-full aspect-square rounded-b-md">
@@ -594,10 +599,10 @@ const packageColumns = [
             </div>
 
             {/* Exploitable Vulnerabilities */}
-            <div className="p-4">
+            <div className="p-3">
               <div className="bg-zinc-700 p-2 flex items-center justify-center gap-2 rounded-t-md">
                 <div
-                  className="text-xl text-white whitespace-nowrap"
+                  className="text-xl text-white"
                   title="Active vulnerabilities is the sum of exploitable and Pending Assessment vulnerabilities."
                 >
                   Active vulnerabilities
@@ -627,8 +632,8 @@ const packageColumns = [
             </div>
 
             {/* Vulnerabilities by Database */}
-            <div className="p-4">
-              <div className="bg-zinc-700 p-2 text-center text-xl text-white whitespace-nowrap rounded-t-md">
+            <div className="p-3">
+              <div className="bg-zinc-700 p-2 text-center text-xl text-white rounded-t-md">
                 Vulnerabilities by Database
               </div>
               <div className="bg-zinc-700 p-4 w-full aspect-square rounded-b-md">
@@ -641,55 +646,48 @@ const packageColumns = [
               </div>
             </div>
 
-          </div>
+          </div>{/* end charts section */}
 
         {/* === TABLES SECTION === */}
         <div className="w-full grid grid-cols-1 lg:grid-cols-2">
 
-          {/* Most Critical Unfixed Vulnerabilities */}
-          <div className="p-4">
-            {/* Table Header */}
-            <div className="bg-zinc-700 px-4 py-2 flex items-center justify-between rounded-t-md">
-              <h3 className="text-2xl font-bold text-white whitespace-nowrap">
-                Most critical unfixed vulnerabilities
-              </h3>
-              <button
-                className="bg-cyan-800 hover:bg-cyan-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center text-white"
-                onClick={() => setTab('vulnerabilities')}
-              >
-                See all
-              </button>
+            {/* Most Critical Unfixed Vulnerabilities */}
+            <div className="p-3 min-w-0">
+              <div className="bg-zinc-700 px-4 py-2 flex items-center justify-between rounded-t-md flex-wrap gap-2">
+                <h3 className="text-xl font-bold text-white">
+                  Most critical unfixed vulnerabilities
+                </h3>
+                <button
+                  className="bg-cyan-800 hover:bg-cyan-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center text-white"
+                  onClick={() => setTab('vulnerabilities')}
+                >
+                  See all
+                </button>
+              </div>
+              <div className="bg-zinc-700 p-4 rounded-b-md overflow-x-auto">
+                <TableGeneric
+                  columns={vulnColumns}
+                  data={TopVulns}
+                  hasPagination={false}
+                  tableHeight="auto"
+                />
+              </div>
             </div>
 
-            {/* Table Body */}
-            <div className="bg-zinc-700 p-4 rounded-b-md">
-              <TableGeneric
-                columns={vulnColumns}
-                data={TopVulns}
-                hasPagination={false}
-                tableHeight="auto"
-              />
-            </div>
-          </div>
-
-          {/* Most Vulnerable Packages */}
-          <div className="p-4">
-            {/* Table Header */}
-            <div className="bg-zinc-700 px-4 py-2 flex items-center justify-between rounded-t-md">
-              <h3 className="text-2xl font-bold text-white whitespace-nowrap">
-                Most vulnerable packages
-              </h3>
-              <button
-                className="bg-cyan-800 hover:bg-cyan-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center text-white"
-                onClick={() => setTab('packages')}
-              >
-                See all
-              </button>
-            </div>
-
-            {/* Table Body */}
-            <div className="bg-zinc-700 p-4 rounded-b-md">
-              <div className="w-full h-full overflow-y-auto">
+            {/* Most Vulnerable Packages */}
+            <div className="p-3 min-w-0">
+              <div className="bg-zinc-700 px-4 py-2 flex items-center justify-between rounded-t-md flex-wrap gap-2">
+                <h3 className="text-xl font-bold text-white">
+                  Most vulnerable packages
+                </h3>
+                <button
+                  className="bg-cyan-800 hover:bg-cyan-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center text-white"
+                  onClick={() => setTab('packages')}
+                >
+                  See all
+                </button>
+              </div>
+              <div className="bg-zinc-700 p-4 rounded-b-md overflow-x-auto">
                 <TableGeneric
                   columns={packageColumns}
                   data={topVulnerablePackages}
@@ -698,9 +696,8 @@ const packageColumns = [
                 />
               </div>
             </div>
-          </div>
 
-        </div>
+        </div>{/* end tables section */}
 
         {/* === MODAL === */}
         {modalVuln && (

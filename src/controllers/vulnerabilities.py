@@ -5,12 +5,13 @@ import datetime
 import time
 import os
 import json
+import logging
 import typing
 import urllib.request
 import urllib.error
 from typing import Optional
 
-from ..models.vulnerability import Vulnerability
+from ..models import Vulnerability, Package, SBOMObservation
 from ..controllers.packages import PackagesController
 from ..controllers.epss_db import EPSS_DB
 from ..controllers.nvd_db import NVD_DB
@@ -21,63 +22,7 @@ from ..models.metrics import Metrics as MetricsModel
 from ..extensions import db
 
 
-# ---------------------------------------------------------------------------
-# Remote-refresh delay helpers
-# ---------------------------------------------------------------------------
-
-_NEVER = datetime.timedelta.max
-_ALWAYS = None  # sentinel: always re-fetch
-
-
-def parse_refresh_delay(value: Optional[str]) -> Optional[datetime.timedelta]:
-    """Parse a REFRESH_REMOTE_DELAY string into a timedelta.
-
-    Accepted formats:
-      * ``\"never\"``  – only fetch data that was never fetched before
-      * ``\"always\"`` – always re-fetch regardless of age
-      * ``\"<N>h\"``   – re-fetch when data is older than N hours  (e.g. ``48h``, default)
-      * ``"<N>d"``   – re-fetch when data is older than N days   (e.g. ``7d``)
-      * ``"<N>w"``   – re-fetch when data is older than N weeks  (e.g. ``2w``)
-      * ``"<N>m"``   – re-fetch when data is older than N minutes (e.g. ``30m``)
-
-    Returns ``datetime.timedelta.max`` for ``"never"``, ``None`` for
-    ``"always"``, or a :class:`datetime.timedelta` for duration values.
-    """
-    if value is None:
-        return _NEVER
-    v = value.strip().lower()
-    if v == "never":
-        return _NEVER
-    if v == "always":
-        return _ALWAYS
-    units = {"h": "hours", "d": "days", "w": "weeks", "m": "minutes"}
-    if v and v[-1] in units:
-        try:
-            return datetime.timedelta(**{units[v[-1]]: float(v[:-1])})
-        except ValueError:
-            pass
-    raise ValueError(
-        f"Invalid REFRESH_REMOTE_DELAY value {value!r}. "
-        "Use 'never', 'always', or a duration like '48h', '7d', '2w', '30m'."
-    )
-
-
-def _should_refetch(fetched_at: Optional[datetime.datetime], delay: Optional[datetime.timedelta]) -> bool:
-    """Return True if the entry should be (re-)fetched.
-
-    * delay is ``None`` (always)         → always True
-    * ``fetched_at`` is ``None``         → True  (never fetched)
-    * delay is ``timedelta.max`` (never) → False (already fetched, skip)
-    * otherwise                          → True if the data is older than *delay*
-    """
-    if delay is _ALWAYS:
-        return True
-    if fetched_at is None:
-        return True
-    if delay is _NEVER:
-        return False
-    assert delay is not None
-    return (datetime.datetime.utcnow() - fetched_at) >= delay
+_logger = logging.getLogger(__name__)
 
 
 def _batch_commit(done: int, total: int, label: str) -> None:
@@ -168,7 +113,7 @@ class VulnerabilitiesController:
         self._db_record_cache: dict = {}
         """Cache of {vuln_id: DB record} — avoids get_by_id SELECT in persist_from_transient."""
         self.epss_api = EPSS_DB()
-        self.nvd_api = NVD_DB(nvd_api_key=os.getenv("NVD_API_KEY"))
+        self.nvd_api = NVD_DB()
         self._preload_cache()
 
     def _preload_cache(self) -> None:
@@ -352,29 +297,16 @@ class VulnerabilitiesController:
         start_time = time.time()
         nb_vuln = 0
 
-        refresh_delay = parse_refresh_delay(os.environ.get("REFRESH_REMOTE_DELAY"))
-
         # Only CVE-prefixed IDs exist in the EPSS database.
-        # Bulk-fetch epss_fetched_at timestamps to avoid N+1 queries.
         all_cve_ids = [vid for vid in self.vulnerabilities if vid.startswith("CVE-")]
-        fetched_at_map = Vulnerability.get_fetched_at_bulk(all_cve_ids)  # {id: (epss_fa, nvd_fa)}
 
-        cve_vulns = {}
+        cve_vulns = {vid: self.vulnerabilities[vid] for vid in all_cve_ids}
         skipped_non_cve = len(self.vulnerabilities) - len(all_cve_ids)
-        skipped_fresh = 0
-        for vid in all_cve_ids:
-            epss_fa = fetched_at_map.get(vid, (None, None))[0]
-            if _should_refetch(epss_fa, refresh_delay):
-                cve_vulns[vid] = self.vulnerabilities[vid]
-            else:
-                skipped_fresh += 1
 
         total = len(cve_vulns)
         msg = f"=== EPSS: starting enrichment for {total} CVEs"
         if skipped_non_cve:
             msg += f" ({skipped_non_cve} non-CVE IDs skipped)"
-        if skipped_fresh:
-            msg += f" ({skipped_fresh} already up-to-date, skipped)"
         print(msg, flush=True)
 
         tracker = EPSSProgressTracker
@@ -516,20 +448,9 @@ class VulnerabilitiesController:
         start_time = time.time()
         nb_vuln = 0
 
-        refresh_delay = parse_refresh_delay(os.environ.get("REFRESH_REMOTE_DELAY"))
-
-        # Bulk-fetch nvd_fetched_at timestamps to avoid N+1 queries.
-        all_ids = list(self.vulnerabilities.keys())
-        fetched_at_map = Vulnerability.get_fetched_at_bulk(all_ids)  # {id: (epss_fa, nvd_fa)}
-
         ghsa_vulns = {}
         nvd_vulns = []
-        skipped_fresh = 0
         for vuln in self.vulnerabilities.values():
-            nvd_fa = fetched_at_map.get(vuln.id, (None, None))[1]
-            if not _should_refetch(nvd_fa, refresh_delay):
-                skipped_fresh += 1
-                continue
             if "GHSA" in vuln.id:
                 ghsa_vulns[vuln.id] = vuln
             else:
@@ -537,22 +458,19 @@ class VulnerabilitiesController:
 
         total = len(nvd_vulns) + len(ghsa_vulns)
         msg = f"=== NVD: starting enrichment — {len(nvd_vulns)} CVEs + {len(ghsa_vulns)} GHSAs"
-        if skipped_fresh:
-            msg += f" ({skipped_fresh} already up-to-date, skipped)"
         print(msg, flush=True)
         tracker = NVDProgressTracker
         tracker.start("nvd_enrichment")
 
         # NVD lookups via API
+        nvd_api = NVD_DB()
         DB_COMMIT_EVERY = 100
         done = 0
         for vuln in nvd_vulns:
             try:
-                result = self.nvd_api.fetch_cve_data(vuln.id)
+                result = nvd_api.fetch_cve_data(vuln.id)
                 if result and result.get("not_found"):
                     # NVD has no record for this CVE (404 or empty result set).
-                    # Persist nvd_fetched_at as a sentinel so it is not re-queried
-                    # on every restart; _should_refetch will retry after REFRESH_REMOTE_DELAY.
                     print(f"=== NVD: {vuln.id} not found in NVD database.", flush=True)
                     try:
                         rec = self._db_record_cache.get(vuln.id) or Vulnerability.get_by_id(vuln.id)
@@ -639,6 +557,22 @@ class VulnerabilitiesController:
             flush=True,
         )
 
+    def record_sbom_observation(
+        self, vuln: Vulnerability, key: str, description: str, package: Package | None = None
+    ) -> None:
+        # Need the SBOM Document to know in which scan to make the observation
+        if self.packagesCtrl.current_sbom_document is None:
+            _logger.warning("Cannot add SBOM observation '%s' if no scan is ongoing", key)
+        else:
+            SBOMObservation.create(
+                vulnerability_id=vuln.id,
+                sbom_document_id=self.packagesCtrl.current_sbom_document.id,
+                package_id=package.id if package else None,
+                key=key,
+                description=description,
+                commit=False,
+            )
+
     def to_dict(self) -> dict:
         """Export the list of vulnerabilities preferring in-memory data when available."""
         return to_dict_with_fallback(
@@ -716,7 +650,6 @@ class VulnerabilitiesController:
         return {
             "id": record.id,
             "description": record.description,
-            "yocto_description": record.yocto_description,
             "status": record.status,
             "publish_date": record.publish_date.isoformat() if record.publish_date else None,
             "attack_vector": record.attack_vector,
@@ -743,7 +676,6 @@ class VulnerabilitiesController:
     def create_db(
         vuln_id: str,
         description: Optional[str] = None,
-        yocto_description: Optional[str] = None,
         status: Optional[str] = None,
         publish_date: Optional[datetime.date | str] = None,
         attack_vector: Optional[str] = None,
@@ -763,7 +695,6 @@ class VulnerabilitiesController:
         return Vulnerability.create_record(
             id=vuln_id,
             description=description,
-            yocto_description=yocto_description,
             status=status,
             publish_date=safe_date,
             attack_vector=attack_vector,

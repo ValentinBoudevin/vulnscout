@@ -81,7 +81,7 @@ When exporting, users can add filters to export only some vulnerabilities. To by
 | `aliases` | list[string] | Alternative IDs for this vulnerability. |
 | `related_vulnerabilities` | list[string] | IDs of related vulnerabilities. |
 | `urls` | list[string] | Additional reference URLs. |
-| `texts` | dict[str, str] | Descriptions and notes. Key is the title, value is the content. |
+| `description` | string | Description of the vulnerability. |
 | `severity.severity` | string | Severity level: `low`, `medium`, `high`, `critical`, `unknown`. |
 | `severity.min_score` | float | Minimum CVSS score (0–10). |
 | `severity.max_score` | float | Maximum CVSS score (0–10). |
@@ -431,4 +431,3 @@ Project
   {{ variant.name }}: last scanned {{ latest.timestamp | print_iso8601 }}
 {% endfor %}
 ```
-

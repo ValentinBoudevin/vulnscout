@@ -3,6 +3,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faFolderOpen,
   faFileImport,
+  faFileLines,
   faPlus,
   faCheck,
   faSpinner,
@@ -10,12 +11,17 @@ import {
   faTrash,
   faLayerGroup,
   faXmark,
+  faKey,
+  faPenToSquare,
 } from "@fortawesome/free-solid-svg-icons";
 import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
 import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
+import Config from "../handlers/config";
 import ConfirmationModal from "../components/ConfirmationModal";
+import MessageBanner from "../components/MessageBanner";
+import NvdApiKey from "../handlers/nvdApiKey";
 
 type Props = {
   onDataChanged?: (message?: string) => void;
@@ -26,6 +32,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   // ---- Unmount guard for async operations ----
   const unmountedRef = useRef(false);
   useEffect(() => {
+    unmountedRef.current = false;
     return () => { unmountedRef.current = true; };
   }, []);
 
@@ -37,6 +44,59 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       .then(setProjects)
       .catch(() => setProjects([]));
   }, []);
+
+  const [configBusy, setConfigBusy] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [configSaved, setConfigSaved] = useState<string | null>(null);
+  const [configForm, setConfigForm] = useState({
+    product_name: "",
+    author_name: "",
+    client_name: "",
+    contact_email: "",
+  });
+
+  useEffect(() => {
+    Config.get()
+      .then((config) => {
+        if (unmountedRef.current) return;
+        setConfigForm({
+          product_name: config.product_name,
+          author_name: config.author_name,
+          client_name: config.client_name,
+          contact_email: config.contact_email,
+        });
+      })
+      .catch(() => {
+        if (unmountedRef.current) return;
+        setConfigError("Failed to load report metadata settings.");
+      });
+  }, []);
+
+  const handleSaveConfig = async () => {
+    if (configBusy) return;
+    setConfigBusy(true);
+    setConfigError(null);
+    setConfigSaved(null);
+    try {
+      const updated = await Config.patch(configForm);
+      if (unmountedRef.current) return;
+      setConfigForm({
+        product_name: updated.product_name,
+        author_name: updated.author_name,
+        client_name: updated.client_name,
+        contact_email: updated.contact_email,
+      });
+      setConfigSaved("Report metadata settings saved.");
+      onDataChanged?.("Updating default settings...");
+    } catch (e: any) {
+      if (unmountedRef.current) return;
+      setConfigError(e?.message || "Failed to save report metadata settings.");
+    } finally {
+      if (!unmountedRef.current) {
+        setConfigBusy(false);
+      }
+    }
+  };
 
   useEffect(() => {
     loadProjects();
@@ -282,6 +342,68 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     }
   };
 
+  // ---- NVD API Key ----
+  const [nvdKeyInput, setNvdKeyInput] = useState("");
+  const [nvdMaskedKey, setNvdMaskedKey] = useState("");
+  const [nvdHasKey, setNvdHasKey] = useState(false);
+  const [nvdBusy, setNvdBusy] = useState(false);
+  const [nvdMsg, setNvdMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
+  const [nvdEditing, setNvdEditing] = useState(false);
+  const [confirmDeleteNvdKey, setConfirmDeleteNvdKey] = useState(false);
+
+  useEffect(() => {
+    NvdApiKey.get()
+      .then(data => {
+        setNvdHasKey(data.has_key);
+        setNvdMaskedKey(data.masked_key);
+      })
+      .catch((e) => {
+        console.error(e instanceof Error ? e.message : String(e));
+      });
+  }, []);
+
+  const handleSaveNvdKey = async () => {
+    setNvdBusy(true);
+    setNvdMsg(null);
+    try {
+      const data = await NvdApiKey.set(nvdKeyInput);
+      if (!data.ok) {
+        setNvdMsg({ text: data.error || "Failed to save API key", type: "error" });
+      } else {
+        setNvdHasKey(data.has_key);
+        setNvdMaskedKey(data.masked_key);
+        setNvdKeyInput("");
+        setNvdEditing(false);
+        setNvdMsg({ text: data.has_key ? "API key saved." : "API key removed.", type: "success" });
+      }
+    } catch (e) {
+      setNvdMsg({ text: e instanceof Error ? e.message : String(e), type: "error" });
+    } finally {
+      setNvdBusy(false);
+    }
+  };
+
+  const handleRemoveNvdKey = async () => {
+    setConfirmDeleteNvdKey(false);
+    setNvdBusy(true);
+    setNvdMsg(null);
+    try {
+      const data = await NvdApiKey.remove();
+      if (data.ok) {
+        setNvdHasKey(data.has_key);
+        setNvdMaskedKey(data.masked_key);
+        setNvdKeyInput("");
+        setNvdMsg({ text: "API key removed.", type: "success" });
+      } else {
+        setNvdMsg({ text: data.error || "Failed to remove API key", type: "error" });
+      }
+    } catch (e) {
+      setNvdMsg({ text: e instanceof Error ? e.message : String(e), type: "error" });
+    } finally {
+      setNvdBusy(false);
+    }
+  };
+
   // ---- Styles matching Metrics.tsx (zinc-700 dark cards) ----
   const inputClass =
     "w-full rounded px-2 py-1.5 text-sm bg-zinc-800 border border-zinc-600 text-white focus:outline-none focus:border-cyan-400";
@@ -297,35 +419,129 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
           Manage projects, variants, and import SBOM files.
         </p>
 
-        {/* ======== Manage Projects ======== */}
+        {/* ======== Report Metadata ======== */}
         <div>
           <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
-            <FontAwesomeIcon icon={faLayerGroup} className="text-cyan-400" />
-            <h2 className="text-xl font-bold text-white">Manage Projects</h2>
+            <FontAwesomeIcon icon={faFileLines} className="text-cyan-400" />
+            <h2 className="text-xl font-bold text-white">Report Metadata</h2>
+          </div>
+          <div className="bg-zinc-700 p-4 rounded-b-md space-y-3">
+            <div>
+              <label className="block text-sm text-zinc-300 mb-1">PRODUCT_NAME</label>
+              <input
+                type="text"
+                value={configForm.product_name}
+                onChange={(e) => {
+                  setConfigForm((prev) => ({ ...prev, product_name: e.target.value }));
+                  setConfigError(null);
+                  setConfigSaved(null);
+                }}
+                placeholder="Product name embedded in reports and SBOMs"
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm text-zinc-300 mb-1">AUTHOR_NAME</label>
+              <input
+                type="text"
+                value={configForm.author_name}
+                onChange={(e) => {
+                  setConfigForm((prev) => ({ ...prev, author_name: e.target.value }));
+                  setConfigError(null);
+                  setConfigSaved(null);
+                }}
+                placeholder="Author/company name embedded in reports"
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm text-zinc-300 mb-1">CLIENT_NAME</label>
+              <input
+                type="text"
+                value={configForm.client_name}
+                onChange={(e) => {
+                  setConfigForm((prev) => ({ ...prev, client_name: e.target.value }));
+                  setConfigError(null);
+                  setConfigSaved(null);
+                }}
+                placeholder="Customer company name (optional)"
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm text-zinc-300 mb-1">CONTACT_EMAIL</label>
+              <input
+                type="email"
+                value={configForm.contact_email}
+                onChange={(e) => {
+                  setConfigForm((prev) => ({ ...prev, contact_email: e.target.value }));
+                  setConfigError(null);
+                  setConfigSaved(null);
+                }}
+                placeholder="Contact email embedded in reports"
+                className={inputClass}
+              />
+            </div>
+
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                onClick={handleSaveConfig}
+                disabled={configBusy}
+                className={btnPrimary}
+              >
+                {configBusy ? (
+                  <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                ) : (
+                  <FontAwesomeIcon icon={faCheck} className="mr-1" />
+                )}
+                Save
+              </button>
+              {configSaved && <span className="text-emerald-400 text-sm">{configSaved}</span>}
+              {configError && (
+                <span className="text-red-400 text-sm">
+                  <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" />
+                  {configError}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* ======== Manage Projects ======== */}
+        <section aria-labelledby="settings-heading-projects">
+          <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
+            <FontAwesomeIcon icon={faLayerGroup} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-projects" className="text-xl font-bold text-white">Manage Projects</h2>
           </div>
           <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
 
             {/* -- Create project -- */}
             <div className="space-y-2">
-              <label className="block text-sm text-zinc-300 font-semibold">Add Project</label>
+              <label htmlFor="new-project-name" className="block text-sm text-zinc-300 font-semibold">Add Project</label>
               <div className="flex gap-2">
                 <input
+                  id="new-project-name"
                   type="text"
                   value={newProjectName}
                   onChange={(e) => { setNewProjectName(e.target.value); setProjectMsg(null); }}
                   placeholder="New project name"
                   className={inputClass + " flex-1"}
+                  aria-required="true"
                   onKeyDown={(e) => e.key === "Enter" && handleCreateProject()}
                 />
                 <button
                   onClick={handleCreateProject}
                   disabled={createProjectBusy || !newProjectName.trim()}
                   className={btnPrimary}
+                  aria-busy={createProjectBusy}
                 >
                   {createProjectBusy ? (
-                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
                   ) : (
-                    <FontAwesomeIcon icon={faPlus} className="mr-1" />
+                    <FontAwesomeIcon icon={faPlus} className="mr-1" aria-hidden="true" />
                   )}
                   Add
                 </button>
@@ -334,8 +550,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
             {/* -- Rename project -- */}
             <div className="border-t border-zinc-600 pt-4 space-y-2">
-              <label className="block text-sm text-zinc-300 font-semibold">Rename Project</label>
+              <label htmlFor="rename-project-select" className="block text-sm text-zinc-300 font-semibold">Rename Project</label>
               <select
+                id="rename-project-select"
                 value={renameProjectId}
                 onChange={(e) => {
                   setRenameProjectId(e.target.value);
@@ -352,24 +569,28 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
               </select>
 
               <div className="flex gap-2">
+                <label htmlFor="rename-project-name" className="sr-only">New project name</label>
                 <input
+                  id="rename-project-name"
                   type="text"
                   value={renameProjectName}
                   onChange={(e) => setRenameProjectName(e.target.value)}
                   placeholder="Enter new name"
                   className={inputClass + " flex-1"}
                   disabled={!renameProjectId}
+                  aria-required="true"
                   onKeyDown={(e) => e.key === "Enter" && handleRenameProject()}
                 />
                 <button
                   onClick={handleRenameProject}
                   disabled={renameProjectBusy || !renameProjectId || !renameProjectName.trim()}
                   className={btnPrimary}
+                  aria-busy={renameProjectBusy}
                 >
                   {renameProjectBusy ? (
-                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
                   ) : (
-                    <FontAwesomeIcon icon={faCheck} className="mr-1" />
+                    <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
                   )}
                   Rename
                 </button>
@@ -378,9 +599,10 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
             {/* -- Delete project -- */}
             <div className="border-t border-zinc-600 pt-4 space-y-2">
-              <label className="block text-sm text-zinc-300 font-semibold">Delete Project</label>
+              <label htmlFor="delete-project-select" className="block text-sm text-zinc-300 font-semibold">Delete Project</label>
               <div className="flex gap-2">
                 <select
+                  id="delete-project-select"
                   value={deleteProjectId}
                   onChange={(e) => { setDeleteProjectId(e.target.value); setProjectMsg(null); }}
                   className={selectClass + " flex-1"}
@@ -395,7 +617,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                   disabled={!deleteProjectId}
                   className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
                 >
-                  <FontAwesomeIcon icon={faTrash} className="mr-1" />
+                  <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
                   Delete
                 </button>
               </div>
@@ -403,26 +625,27 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
             {/* -- Feedback -- */}
             {projectMsg && (
-              <span className="text-red-400 text-sm">
-                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" />
+              <span role="alert" className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
                 {projectMsg}
               </span>
             )}
           </div>
-        </div>
+        </section>
 
         {/* ======== Manage Variants ======== */}
-        <div>
+        <section aria-labelledby="settings-heading-variants">
           <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
-            <FontAwesomeIcon icon={faFolderOpen} className="text-cyan-400" />
-            <h2 className="text-xl font-bold text-white">Manage Variants</h2>
+            <FontAwesomeIcon icon={faFolderOpen} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-variants" className="text-xl font-bold text-white">Manage Variants</h2>
           </div>
           <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
 
             {/* -- Project picker -- */}
             <div>
-              <label className="block text-sm text-zinc-300 mb-1">Project</label>
+              <label htmlFor="variant-project-select" className="block text-sm text-zinc-300 mb-1">Project</label>
               <select
+                id="variant-project-select"
                 value={variantProjectId}
                 onChange={(e) => {
                   setVariantProjectId(e.target.value);
@@ -444,25 +667,28 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             {/* -- Create variant -- */}
             {variantProjectId && (
               <div className="space-y-2">
-                <label className="block text-sm text-zinc-300 font-semibold">Add Variant</label>
+                <label htmlFor="new-variant-name" className="block text-sm text-zinc-300 font-semibold">Add Variant</label>
                 <div className="flex gap-2">
                   <input
+                    id="new-variant-name"
                     type="text"
                     value={newVariantName}
                     onChange={(e) => { setNewVariantName(e.target.value); setVariantMsg(null); }}
                     placeholder="New variant name"
                     className={inputClass + " flex-1"}
+                    aria-required="true"
                     onKeyDown={(e) => e.key === "Enter" && handleCreateVariant()}
                   />
                   <button
                     onClick={handleCreateVariant}
                     disabled={createVariantBusy || !newVariantName.trim()}
                     className={btnPrimary}
+                    aria-busy={createVariantBusy}
                   >
                     {createVariantBusy ? (
-                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
                     ) : (
-                      <FontAwesomeIcon icon={faPlus} className="mr-1" />
+                      <FontAwesomeIcon icon={faPlus} className="mr-1" aria-hidden="true" />
                     )}
                     Add
                   </button>
@@ -473,8 +699,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             {/* -- Rename variant -- */}
             {variantProjectId && (
               <div className="border-t border-zinc-600 pt-4 space-y-2">
-                <label className="block text-sm text-zinc-300 font-semibold">Rename Variant</label>
+                <label htmlFor="rename-variant-select" className="block text-sm text-zinc-300 font-semibold">Rename Variant</label>
                 <select
+                  id="rename-variant-select"
                   value={renameVariantId}
                   onChange={(e) => {
                     setRenameVariantId(e.target.value);
@@ -491,24 +718,28 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                 </select>
 
                 <div className="flex gap-2">
+                  <label htmlFor="rename-variant-name" className="sr-only">New variant name</label>
                   <input
+                    id="rename-variant-name"
                     type="text"
                     value={renameVariantName}
                     onChange={(e) => setRenameVariantName(e.target.value)}
                     placeholder="Enter new name"
                     className={inputClass + " flex-1"}
                     disabled={!renameVariantId}
+                    aria-required="true"
                     onKeyDown={(e) => e.key === "Enter" && handleRenameVariant()}
                   />
                   <button
                     onClick={handleRenameVariant}
                     disabled={renameVariantBusy || !renameVariantId || !renameVariantName.trim()}
                     className={btnPrimary}
+                    aria-busy={renameVariantBusy}
                   >
                     {renameVariantBusy ? (
-                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
                     ) : (
-                      <FontAwesomeIcon icon={faCheck} className="mr-1" />
+                      <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
                     )}
                     Rename
                   </button>
@@ -519,9 +750,10 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             {/* -- Delete variant -- */}
             {variantProjectId && (
               <div className="border-t border-zinc-600 pt-4 space-y-2">
-                <label className="block text-sm text-zinc-300 font-semibold">Delete Variant</label>
+                <label htmlFor="delete-variant-select" className="block text-sm text-zinc-300 font-semibold">Delete Variant</label>
                 <div className="flex gap-2">
                   <select
+                    id="delete-variant-select"
                     value={deleteVariantId}
                     onChange={(e) => { setDeleteVariantId(e.target.value); setVariantMsg(null); }}
                     className={selectClass + " flex-1"}
@@ -536,7 +768,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                     disabled={!deleteVariantId}
                     className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
                   >
-                    <FontAwesomeIcon icon={faTrash} className="mr-1" />
+                    <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
                     Delete
                   </button>
                 </div>
@@ -545,26 +777,27 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
             {/* -- Feedback -- */}
             {variantMsg && (
-              <span className="text-red-400 text-sm">
-                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" />
+              <span role="alert" className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
                 {variantMsg}
               </span>
             )}
           </div>
-        </div>
+        </section>
 
         {/* ======== Import SBOM ======== */}
-        <div>
+        <section aria-labelledby="settings-heading-import">
           <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
-            <FontAwesomeIcon icon={faFileImport} className="text-cyan-400" />
-            <h2 className="text-xl font-bold text-white">Import SBOM</h2>
+            <FontAwesomeIcon icon={faFileImport} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-import" className="text-xl font-bold text-white">Import SBOM</h2>
           </div>
           <div className="bg-zinc-700 p-4 rounded-b-md space-y-3">
 
             {/* ---- Project selector ---- */}
             <div>
-              <label className="block text-sm text-zinc-300 mb-1">Project</label>
+              <label htmlFor="import-project-select" className="block text-sm text-zinc-300 mb-1">Project</label>
               <select
+                id="import-project-select"
                 value={importProjectId}
                 onChange={(e) => {
                   setImportProjectId(e.target.value);
@@ -582,8 +815,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
             {/* ---- Variant selector ---- */}
             <div>
-              <label className="block text-sm text-zinc-300 mb-1">Variant</label>
+              <label htmlFor="import-variant-select" className="block text-sm text-zinc-300 mb-1">Variant</label>
               <select
+                id="import-variant-select"
                 value={importVariantId}
                 onChange={(e) => { setImportVariantId(e.target.value); setImportMsg(null); }}
                 disabled={!importProjectId}
@@ -598,7 +832,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
             {/* ---- File picker(s) ---- */}
             <div className="space-y-2">
-              <label className="block text-sm text-zinc-300 mb-1">SBOM Files</label>
+              <label className="block text-sm text-zinc-300 mb-1" id="sbom-files-label">SBOM Files</label>
               {/* Existing files */}
               {importFiles.map((file, idx) => (
                 <div key={idx} className="flex items-center gap-2">
@@ -610,9 +844,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                     onClick={() => handleRemoveFile(idx)}
                     disabled={importBusy}
                     className="p-1.5 rounded text-zinc-400 hover:text-red-400 hover:bg-zinc-600 disabled:opacity-40 transition-colors"
-                    title="Remove file"
+                    aria-label={`Remove file ${file.name}`}
                   >
-                    <FontAwesomeIcon icon={faXmark} />
+                    <FontAwesomeIcon icon={faXmark} aria-hidden="true" />
                   </button>
                 </div>
               ))}
@@ -623,6 +857,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                 accept=".json,.spdx,.cdx,.xml"
                 onChange={(e) => handleFileSelected(importFiles.length, e.target.files?.[0] ?? null)}
                 disabled={importBusy}
+                aria-labelledby="sbom-files-label"
                 className={
                   inputClass +
                   " file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-cyan-900 file:text-cyan-300 hover:file:bg-cyan-800"
@@ -636,23 +871,130 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                 onClick={handleUploadSBOM}
                 disabled={importBusy || !importProjectId || !importVariantId || importFiles.length === 0}
                 className={btnPrimary}
+                aria-busy={importBusy}
               >
                 {importBusy ? (
-                  <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                  <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
                 ) : (
-                  <FontAwesomeIcon icon={faFileImport} className="mr-1" />
+                  <FontAwesomeIcon icon={faFileImport} className="mr-1" aria-hidden="true" />
                 )}
                 Import
               </button>
               {importMsg && (
-                <span className="text-red-400 text-sm">
-                  <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" />
+                <span role="alert" className="text-red-400 text-sm">
+                  <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
                   {importMsg}
                 </span>
               )}
             </div>
           </div>
-        </div>
+        </section>
+
+        {/* ======== NVD API Key ======== */}
+        <section aria-labelledby="settings-heading-nvd">
+          <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
+            <FontAwesomeIcon icon={faKey} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-nvd" className="text-xl font-bold text-white">NVD API Key</h2>
+          </div>
+          <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
+            <p id="nvd-key-description" className="text-zinc-400 text-sm">
+              An NVD API key increases the rate limit for vulnerability enrichment from 5 to 50 requests per 30 seconds.
+              Get a free key at{" "}
+              <a
+                href="https://nvd.nist.gov/developers/request-an-api-key"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-cyan-400 hover:text-cyan-300 underline"
+              >
+                nvd.nist.gov
+              </a>.
+            </p>
+
+            {/* -- Feedback -- */}
+            {nvdMsg && (
+              <MessageBanner
+                type={nvdMsg.type}
+                message={nvdMsg.text}
+                isVisible={true}
+                onClose={() => setNvdMsg(null)}
+              />
+            )}
+
+            {nvdHasKey && !nvdEditing ? (
+              <>
+                {/* -- Key is set: show masked key + modify / remove buttons -- */}
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-zinc-300">NVD API key:</span>
+                  <code className="text-sm text-zinc-300 bg-zinc-900 px-2 py-0.5 rounded font-mono">{nvdMaskedKey}</code>
+                </div>
+
+                <div className="flex items-center gap-3 pt-1">
+                  <button
+                    onClick={() => { setNvdEditing(true); setNvdKeyInput(""); setNvdMsg(null); }}
+                    className={btnPrimary}
+                  >
+                    <FontAwesomeIcon icon={faPenToSquare} className="mr-1" aria-hidden="true" />
+                    Modify
+                  </button>
+                  <button
+                    onClick={() => setConfirmDeleteNvdKey(true)}
+                    disabled={nvdBusy}
+                    className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
+                  >
+                    <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
+                    Remove
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* -- No key or editing: show input field -- */}
+                <div className="space-y-2">
+                  <label htmlFor="nvd-api-key-input" className="block text-sm text-zinc-300 font-semibold">
+                    {nvdEditing ? "New API Key" : "API Key"}
+                  </label>
+                  <input
+                    id="nvd-api-key-input"
+                    type="password"
+                    value={nvdKeyInput}
+                    onChange={e => setNvdKeyInput(e.target.value)}
+                    placeholder="Paste your NVD API key..."
+                    className={inputClass}
+                    disabled={nvdBusy}
+                    autoComplete="off"
+                    aria-required="true"
+                    aria-describedby="nvd-key-description"
+                  />
+                </div>
+
+                <div className="flex items-center gap-3 pt-1">
+                  <button
+                    onClick={handleSaveNvdKey}
+                    disabled={nvdBusy || !nvdKeyInput.trim()}
+                    className={btnPrimary}
+                    aria-busy={nvdBusy}
+                  >
+                    {nvdBusy ? (
+                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
+                    ) : (
+                      <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
+                    )}
+                    Save
+                  </button>
+                  {nvdEditing && (
+                    <button
+                      onClick={() => { setNvdEditing(false); setNvdKeyInput(""); setNvdMsg(null); }}
+                      className="px-4 py-2 rounded-lg bg-zinc-600 hover:bg-zinc-500 text-white text-sm font-medium transition-colors duration-150"
+                    >
+                      <FontAwesomeIcon icon={faXmark} className="mr-1" aria-hidden="true" />
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </section>
       </div>
 
       {/* ======== Confirmation Modals ======== */}
@@ -675,6 +1017,16 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         showTitleIcon={true}
         onConfirm={handleDeleteVariant}
         onCancel={() => setConfirmDeleteVariant(false)}
+      />
+      <ConfirmationModal
+        isOpen={confirmDeleteNvdKey}
+        title="Remove NVD API Key"
+        message="Are you sure you want to remove the NVD API key? Vulnerability enrichment will fall back to the lower rate limit."
+        confirmText="Yes, remove"
+        cancelText="Cancel"
+        showTitleIcon={true}
+        onConfirm={handleRemoveNvdKey}
+        onCancel={() => setConfirmDeleteNvdKey(false)}
       />
     </div>
   );

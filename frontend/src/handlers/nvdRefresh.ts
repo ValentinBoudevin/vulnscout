@@ -5,16 +5,36 @@
 import { asVulnerability } from "./vulnerabilities";
 import type { Vulnerability } from "./vulnerabilities";
 
+export type NvdRefreshSuccess = { kind: "success"; vuln: Vulnerability };
+export type NvdRefreshError = {
+    kind: "error";
+    code: "rate_limited" | "unauthorized" | "unavailable";
+    apiKeyConfigured: boolean;
+};
+export type NvdRefreshResult = NvdRefreshSuccess | NvdRefreshError;
+
 class NvdRefreshHandler {
-    static async triggerSingleRefresh(cveId: string): Promise<Vulnerability | null> {
+    static async triggerSingleRefresh(cveId: string): Promise<NvdRefreshResult> {
         const url = `${import.meta.env.VITE_API_URL}/api/vulnerabilities/${encodeURIComponent(cveId)}/nvd-refresh`;
         const response = await fetch(url, { method: "POST", mode: "cors" });
-        if (!response.ok) return null;
+        if (!response.ok) {
+            const body = await response.json().catch(() => null);
+            const code = body?.error_code === "rate_limited"
+                ? "rate_limited"
+                : body?.error_code === "unauthorized"
+                    ? "unauthorized"
+                    : "unavailable";
+            const apiKeyConfigured = typeof body?.api_key_configured === "boolean"
+                ? body.api_key_configured
+                : true;
+            return { kind: "error", code, apiKeyConfigured };
+        }
         const data = await response.json().catch(() => null);
         const vuln = data?.vulnerabilities?.[0];
-        if (!vuln) return null;
+        if (!vuln) return { kind: "error", code: "unavailable", apiKeyConfigured: true };
         const parsed = asVulnerability(vuln);
-        return Array.isArray(parsed) ? null : parsed;
+        if (Array.isArray(parsed)) return { kind: "error", code: "unavailable", apiKeyConfigured: true };
+        return { kind: "success", vuln: parsed };
     }
 }
 

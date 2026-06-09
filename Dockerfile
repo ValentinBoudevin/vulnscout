@@ -10,10 +10,13 @@ WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json .
 RUN npm ci
 
-# Create build .env with API_URL set as blank. This way, fetch call are made to '/api/...' on same origin.
-RUN echo "VITE_API_URL=\"\"" > .env
-
 COPY frontend .
+
+# .env* files are excluded by .dockerignore so VITE_API_URL is never copied
+# from the developer's local environment. Create a production .env explicitly
+# so that all fetch calls go to '/api/...' on the same origin.
+RUN echo 'VITE_API_URL=' > .env
+
 RUN npm run build
 
 
@@ -75,7 +78,7 @@ COPY --from=buildfront /src/static ./src/static
 
 RUN rm -rf /tmp/patches
 
-ARG VULNSCOUT_VERSION=v0.12
+ARG VULNSCOUT_VERSION=v0.16
 ENV VULNSCOUT_VERSION=${VULNSCOUT_VERSION}
 
 LABEL org.opencontainers.image.title="VulnScout"

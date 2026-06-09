@@ -27,7 +27,13 @@ jest.mock('ae-cvss-calculator', () => {
   };
 });
 
-import Vulnerabilities from '../../src/handlers/vulnerabilities';
+import Vulnerabilities, {
+  buildStatusSummary,
+  getTopStatusSummaryLabel,
+  isVulnerabilityActive,
+  getStatusSortIndex,
+  isActiveStatus,
+} from '../../src/handlers/vulnerabilities';
 
 // Utility to build raw vulnerability JSON objects returned by backend
 const rawVuln = (overrides: any = {}) => ({
@@ -155,7 +161,6 @@ describe('enrich_with_assessments', () => {
     ].map((v: any) => {
       return {
         ...v,
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: []
       };
@@ -196,7 +201,6 @@ describe('enrich_with_assessments', () => {
 
     // CVE-2021-1 should have latest assessment (most recent timestamp)
     const cve1 = enriched.find((v: any) => v.id === 'CVE-2021-1');
-    expect(cve1?.status).toBe('resolved');
     expect(cve1?.simplified_status).toBe('closed');
     expect(cve1?.assessments).toHaveLength(3);
     // Assessments should be sorted by timestamp
@@ -206,13 +210,11 @@ describe('enrich_with_assessments', () => {
 
     // CVE-2021-2 should have single assessment
     const cve2 = enriched.find((v: any) => v.id === 'CVE-2021-2');
-    expect(cve2?.status).toBe('affected');
     expect(cve2?.simplified_status).toBe('open');
     expect(cve2?.assessments).toHaveLength(1);
 
     // CVE-2021-3 should remain unchanged
     const cve3 = enriched.find((v: any) => v.id === 'CVE-2021-3');
-    expect(cve3?.status).toBe('unknown');
     expect(cve3?.simplified_status).toBe('unknown');
     expect(cve3?.assessments).toHaveLength(0);
   });
@@ -221,14 +223,13 @@ describe('enrich_with_assessments', () => {
     const vulns = [
       {
         ...rawVuln({ id: 'CVE-2021-1' }),
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: []
       }
     ];
 
     const enriched = Vulnerabilities.enrich_with_assessments(vulns, []);
-    expect(enriched[0].status).toBe('unknown');
+    expect(enriched[0].simplified_status).toBe('unknown');
     expect(enriched[0].assessments).toHaveLength(0);
   });
 
@@ -236,7 +237,6 @@ describe('enrich_with_assessments', () => {
     const vulns = [
       {
         ...rawVuln({ id: 'CVE-2021-1' }),
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: []
       }
@@ -244,7 +244,7 @@ describe('enrich_with_assessments', () => {
 
     // This simulates the case where no assessments exist for the vulnerability
     const enriched = Vulnerabilities.enrich_with_assessments(vulns, []);
-    expect(enriched[0].status).toBe('unknown');
+    expect(enriched[0].simplified_status).toBe('unknown');
   });
 });
 
@@ -253,13 +253,11 @@ describe('append_assessment', () => {
     const vulns = [
       {
         ...rawVuln({ id: 'CVE-2021-1' }),
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: []
       },
       {
         ...rawVuln({ id: 'CVE-2021-2' }),
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: []
       }
@@ -276,12 +274,11 @@ describe('append_assessment', () => {
     const result = Vulnerabilities.append_assessment(vulns, assessment);
 
     const cve1 = result.find((v: any) => v.id === 'CVE-2021-1');
-    expect(cve1?.status).toBe('investigating');
     expect(cve1?.simplified_status).toBe('open');
     expect(cve1?.assessments).toHaveLength(1);
 
     const cve2 = result.find((v: any) => v.id === 'CVE-2021-2');
-    expect(cve2?.status).toBe('unknown');
+    expect(cve2?.simplified_status).toBe('unknown');
     expect(cve2?.assessments).toHaveLength(0);
   });
 });
@@ -291,7 +288,6 @@ describe('append_cvss', () => {
     const vulns = [
       {
         ...rawVuln({ id: 'CVE-2021-1' }),
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: [],
         severity: {
@@ -324,7 +320,6 @@ describe('append_cvss', () => {
     const vulns = [
       {
         ...rawVuln({ id: 'CVE-2021-1' }),
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: [],
         severity: {
@@ -336,7 +331,6 @@ describe('append_cvss', () => {
       },
       {
         ...rawVuln({ id: 'CVE-2021-2' }),
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: [],
         severity: {
@@ -398,5 +392,283 @@ describe('calculate_cvss_from_vector error handling', () => {
     expect(consoleErrorSpy).not.toHaveBeenCalled();
 
     consoleErrorSpy.mockRestore();
+  });
+});
+
+describe('buildStatusSummary helpers', () => {
+  const makeAssessment = (simplified_status: string, timestamp: string, variant_id?: string) => ({
+    id: 'a',
+    vuln_id: 'CVE-1',
+    packages: [],
+    origin: 'sbom',
+    status: simplified_status,
+    simplified_status,
+    timestamp,
+    responses: [],
+    variant_id,
+  });
+
+  test('empty assessments returns unknown summary', () => {
+    const summary = buildStatusSummary([]);
+    expect(summary.dominant_status).toBe('unknown');
+    expect(summary.total_assessments).toBe(0);
+    expect(summary.has_active_status).toBe(false);
+  });
+
+  test('single assessment builds correct summary', () => {
+    const summary = buildStatusSummary([makeAssessment('Fixed', '2024-01-01T00:00:00')]);
+    expect(summary.dominant_status).toBe('Fixed');
+    expect(summary.total_assessments).toBe(1);
+    expect(summary.has_active_status).toBe(false);
+  });
+
+  test('multiple variants each contribute one slot', () => {
+    // v1 → Fixed, v2 → Exploitable; dominant_status should be Exploitable
+    const assessments = [
+      makeAssessment('Fixed', '2024-01-01T00:00:00', 'v1'),
+      makeAssessment('Exploitable', '2024-01-02T00:00:00', 'v2'),
+    ];
+    const summary = buildStatusSummary(assessments);
+    expect(summary.counts['Fixed']).toBe(1);
+    expect(summary.counts['Exploitable']).toBe(1);
+    expect(summary.dominant_status).toBe('Exploitable');
+    expect(summary.has_active_status).toBe(true);
+    // ordered should have 2 entries, triggering the sort comparator
+    expect(summary.ordered.length).toBe(2);
+  });
+
+  test('sort comparator uses count as tiebreaker', () => {
+    // v1 and v2 → Pending Assessment, v3 → Exploitable
+    const assessments = [
+      makeAssessment('Pending Assessment', '2024-01-01T00:00:00', 'v1'),
+      makeAssessment('Pending Assessment', '2024-01-01T00:00:00', 'v2'),
+      makeAssessment('Exploitable', '2024-01-01T00:00:00', 'v3'),
+    ];
+    const summary = buildStatusSummary(assessments);
+    // Exploitable has higher priority (lower index) so it's first despite lower count
+    expect(summary.dominant_status).toBe('Exploitable');
+    expect(summary.ordered[0].status).toBe('Exploitable');
+    expect(summary.ordered[1].status).toBe('Pending Assessment');
+  });
+
+  test('sort comparator uses localeCompare when priority and count tie', () => {
+    // Two unknown statuses from two variants, both non-standard
+    const assessments = [
+      makeAssessment('ZStatus', '2024-01-01T00:00:00', 'v1'),
+      makeAssessment('AStatus', '2024-01-01T00:00:00', 'v2'),
+    ];
+    const summary = buildStatusSummary(assessments);
+    // Both are equal priority and equal count → sorted alphabetically
+    expect(summary.ordered[0].status).toBe('AStatus');
+    expect(summary.ordered[1].status).toBe('ZStatus');
+  });
+
+  test('keeps latest assessment per variant', () => {
+    const assessments = [
+      makeAssessment('Pending Assessment', '2024-01-01T00:00:00', 'v1'),
+      makeAssessment('Fixed', '2024-01-02T00:00:00', 'v1'), // latest for v1
+    ];
+    const summary = buildStatusSummary(assessments);
+    expect(summary.dominant_status).toBe('Fixed');
+    expect(summary.counts['Fixed']).toBe(1);
+    expect(summary.counts['Pending Assessment']).toBeUndefined();
+  });
+
+  test('assessments without variant_id share one slot', () => {
+    const assessments = [
+      makeAssessment('Pending Assessment', '2024-01-01T00:00:00'),  // no variant
+      makeAssessment('Fixed', '2024-01-02T00:00:00'),               // no variant, later
+    ];
+    const summary = buildStatusSummary(assessments);
+    // Both share __no_variant__ → only Fixed (latest) counts
+    expect(summary.dominant_status).toBe('Fixed');
+    expect(Object.keys(summary.counts)).toHaveLength(1);
+  });
+});
+
+describe('getTopStatusSummaryLabel', () => {
+  test('returns all statuses when 2 or fewer', () => {
+    const summary = buildStatusSummary([
+      { id: 'a', vuln_id: 'CVE-1', packages: [], origin: '', status: 'Fixed', simplified_status: 'Fixed', timestamp: '2024-01-01T00:00:00', responses: [] }
+    ]);
+    expect(getTopStatusSummaryLabel(summary)).toBe('Fixed');
+  });
+
+  test('appends +N more when more than 2 entries', () => {
+    // Force a summary with 3 entries
+    const summary = {
+      counts: { 'Exploitable': 1, 'Pending Assessment': 1, 'Fixed': 1 },
+      ordered: [
+        { status: 'Exploitable', count: 1 },
+        { status: 'Pending Assessment', count: 1 },
+        { status: 'Fixed', count: 1 },
+      ],
+      total_assessments: 3,
+      dominant_status: 'Exploitable',
+      has_active_status: true,
+    };
+    const label = getTopStatusSummaryLabel(summary);
+    expect(label).toContain('+1 more');
+    expect(label).toContain('Exploitable');
+    expect(label).toContain('Pending Assessment');
+  });
+
+  test('custom maxItems parameter', () => {
+    const summary = {
+      counts: { 'A': 1, 'B': 1, 'C': 1, 'D': 1 },
+      ordered: [
+        { status: 'A', count: 1 },
+        { status: 'B', count: 1 },
+        { status: 'C', count: 1 },
+        { status: 'D', count: 1 },
+      ],
+      total_assessments: 4,
+      dominant_status: 'A',
+      has_active_status: false,
+    };
+    const label = getTopStatusSummaryLabel(summary, 3);
+    expect(label).toContain('+1 more');
+    expect(label).not.toContain('D');
+  });
+});
+
+describe('isVulnerabilityActive', () => {
+  const makeVuln = (simplified_status: string, status_summary?: any) => ({
+    id: 'CVE-1',
+    aliases: [],
+    related_vulnerabilities: [],
+    namespace: '',
+    found_by: [],
+    datasource: '',
+    packages: [],
+    packages_current: [],
+    variants: [],
+    urls: [],
+    texts: [],
+    severity: { severity: 'unknown', min_score: 0, max_score: 0, cvss: [] },
+    epss: { score: undefined, percentile: undefined },
+    effort: { optimistic: null as any, likely: null as any, pessimistic: null as any },
+    fix: { state: 'unknown' },
+    simplified_status,
+    assessments: [],
+    status_summary,
+  });
+
+  test('returns false for Fixed', () => {
+    expect(isVulnerabilityActive(makeVuln('Fixed') as any)).toBe(false);
+  });
+
+  test('returns false for Not affected', () => {
+    expect(isVulnerabilityActive(makeVuln('Not affected') as any)).toBe(false);
+  });
+
+  test('returns false for unknown', () => {
+    expect(isVulnerabilityActive(makeVuln('unknown') as any)).toBe(false);
+  });
+
+  test('returns true for Exploitable', () => {
+    expect(isVulnerabilityActive(makeVuln('Exploitable') as any)).toBe(true);
+  });
+
+  test('returns true for Pending Assessment', () => {
+    expect(isVulnerabilityActive(makeVuln('Pending Assessment') as any)).toBe(true);
+  });
+
+  test('uses status_summary when present', () => {
+    const vuln = makeVuln('unknown', {
+      counts: { 'Exploitable': 1 },
+      ordered: [{ status: 'Exploitable', count: 1 }],
+      total_assessments: 1,
+      dominant_status: 'Exploitable',
+      has_active_status: true,
+    });
+    expect(isVulnerabilityActive(vuln as any)).toBe(true);
+  });
+});
+
+describe('isActiveStatus', () => {
+  test('Fixed is not active', () => expect(isActiveStatus('Fixed')).toBe(false));
+  test('Not affected is not active', () => expect(isActiveStatus('Not affected')).toBe(false));
+  test('unknown is not active', () => expect(isActiveStatus('unknown')).toBe(false));
+  test('Exploitable is active', () => expect(isActiveStatus('Exploitable')).toBe(true));
+  test('Pending Assessment is active', () => expect(isActiveStatus('Pending Assessment')).toBe(true));
+});
+
+describe('getStatusSortIndex', () => {
+  test('known statuses return expected index', () => {
+    expect(getStatusSortIndex('unknown')).toBe(0);
+    expect(getStatusSortIndex('Pending Assessment')).toBe(1);
+    expect(getStatusSortIndex('Exploitable')).toBe(2);
+    expect(getStatusSortIndex('Not affected')).toBe(3);
+    expect(getStatusSortIndex('Fixed')).toBe(4);
+  });
+
+  test('unknown status returns length of order array', () => {
+    expect(getStatusSortIndex('NonExistent')).toBe(5);
+  });
+});
+
+describe('append_assessment via sort comparator', () => {
+  const makeVuln = (id: string) => ({
+    ...rawVuln({ id }),
+    simplified_status: 'unknown',
+    assessments: [],
+  });
+
+  test('append_assessment with two assessments triggers sort comparator', () => {
+    const vulns = [makeVuln('CVE-2021-1')];
+    const a1 = {
+      vuln_id: 'CVE-2021-1', status: 'fixed', simplified_status: 'Fixed',
+      timestamp: '2024-01-02T00:00:00', packages: [], responses: [], id: 'a1', origin: 'sbom',
+    } as any;
+    vulns[0].assessments = [a1];
+
+    const a2 = {
+      vuln_id: 'CVE-2021-1', status: 'affected', simplified_status: 'Exploitable',
+      timestamp: '2024-01-01T00:00:00', packages: [], responses: [], id: 'a2', origin: 'sbom',
+    } as any;
+
+    const result = Vulnerabilities.append_assessment(vulns as any, a2);
+    // a2 is earlier, a1 is later → sorted order [a2, a1] → latest is Fixed
+    expect(result[0].assessments).toHaveLength(2);
+    expect(result[0].assessments[0].id).toBe('a2'); // earlier first after sort
+    expect(result[0].assessments[1].id).toBe('a1');
+  });
+
+  test('dominant status reflects highest-priority variant', () => {
+    // enrich_with_assessments with two variants: Fixed and Exploitable
+    // Exploitable has higher priority so it should be dominant
+    const vuln = {
+      ...rawVuln({ id: 'CVE-X' }),
+      simplified_status: 'unknown',
+      assessments: [],
+    };
+    const assessments = [
+      {
+        vuln_id: 'CVE-X',
+        id: 'b1',
+        status: 'fixed',
+        simplified_status: 'Fixed',
+        timestamp: '2024-01-01T00:00:00',
+        packages: [],
+        responses: [],
+        variant_id: 'v1',
+        origin: 'sbom',
+      },
+      {
+        vuln_id: 'CVE-X',
+        id: 'b2',
+        status: 'affected',
+        simplified_status: 'Exploitable',
+        timestamp: '2024-01-01T00:00:00',
+        packages: [],
+        responses: [],
+        variant_id: 'v2',
+        origin: 'sbom',
+      },
+    ] as any[];
+
+    const enriched = Vulnerabilities.enrich_with_assessments([vuln as any], assessments);
+    expect(enriched[0].simplified_status).toBe('Exploitable');
   });
 });

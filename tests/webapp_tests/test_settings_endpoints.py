@@ -674,3 +674,264 @@ class TestProcessSBOMBackground:
             status = _upload_status[upload_id]
             # Should either succeed (no docs to parse) or fail gracefully
             assert status["status"] in ("done", "error")
+
+
+# ---------------------------------------------------------------------------
+# NVD API key endpoint
+# ---------------------------------------------------------------------------
+
+class TestNvdApiKey:
+    """Tests for GET/PUT /api/config/nvd-api-key."""
+
+    def test_get_no_key(self, client):
+        """GET returns has_key=false when NVD_API_KEY is not set."""
+        os.environ.pop("NVD_API_KEY", None)
+        resp = client.get("/api/config/nvd-api-key")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["has_key"] is False
+        assert data["masked_key"] == ""
+
+    def test_get_with_key(self, client):
+        """GET returns has_key=true and a masked version of the key."""
+        os.environ["NVD_API_KEY"] = "abcdefghijklmnop"
+        try:
+            resp = client.get("/api/config/nvd-api-key")
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data["has_key"] is True
+            assert data["masked_key"].startswith("abcd")
+            assert data["masked_key"].endswith("mnop")
+            assert "****" in data["masked_key"]
+        finally:
+            os.environ.pop("NVD_API_KEY", None)
+
+    @patch("src.routes.config.NVD_DB")
+    def test_put_valid_key_saves_and_sets_env(self, mock_nvd_cls, client, tmp_path):
+        """PUT with a valid key (NVD returns 200) persists key and returns ok."""
+        mock_instance = MagicMock()
+        mock_instance.api_probe_cve.return_value = (
+            200,
+            {"vulnerabilities": [{"cve": {}}]},
+            {"x-ratelimit-limit": "50"},
+        )
+        mock_nvd_cls.return_value = mock_instance
+
+        os.environ.pop("NVD_API_KEY", None)
+        config_file = str(tmp_path / "config.env")
+        os.environ["VULNSCOUT_CONFIG"] = config_file
+        try:
+            resp = client.put("/api/config/nvd-api-key", json={"api_key": "valid-key-1234"})
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data["status"] == "ok"
+            assert data["has_key"] is True
+            assert data["masked_key"] == "vali******1234"
+
+            # Key should now be in the process environment
+            assert os.environ.get("NVD_API_KEY") == "valid-key-1234"
+
+            # Key should be written to config.env
+            assert os.path.exists(config_file)
+            content = open(config_file).read()
+            assert "NVD_API_KEY=valid-key-1234" in content
+        finally:
+            os.environ.pop("NVD_API_KEY", None)
+            os.environ.pop("VULNSCOUT_CONFIG", None)
+
+    @patch("src.routes.config.NVD_DB")
+    def test_put_invalid_key_rejected(self, mock_nvd_cls, client, tmp_path):
+        """PUT with a key that NVD rejects (403) returns 400 and does not save."""
+        mock_instance = MagicMock()
+        mock_instance.api_probe_cve.return_value = (403, {}, {})
+        mock_nvd_cls.return_value = mock_instance
+
+        os.environ.pop("NVD_API_KEY", None)
+        os.environ["VULNSCOUT_CONFIG"] = str(tmp_path / "config.env")
+        try:
+            resp = client.put("/api/config/nvd-api-key", json={"api_key": "wrong-key"})
+            assert resp.status_code == 400
+            assert "Invalid" in resp.get_json()["error"]
+
+            # Key must NOT have been stored
+            assert os.environ.get("NVD_API_KEY") is None
+        finally:
+            os.environ.pop("NVD_API_KEY", None)
+            os.environ.pop("VULNSCOUT_CONFIG", None)
+
+    @patch("src.routes.config.NVD_DB")
+    def test_put_key_rejected_by_probe(self, mock_nvd_cls, client, tmp_path):
+        """PUT rejects keys when the NVD probe rejects them, regardless of format."""
+        mock_instance = MagicMock()
+        mock_instance.api_probe_cve.return_value = (403, {}, {})
+        mock_nvd_cls.return_value = mock_instance
+
+        os.environ.pop("NVD_API_KEY", None)
+        os.environ["VULNSCOUT_CONFIG"] = str(tmp_path / "config.env")
+        try:
+            resp = client.put("/api/config/nvd-api-key", json={"api_key": "test65869896"})
+            assert resp.status_code == 400
+            assert "Invalid" in resp.get_json()["error"]
+
+            # Validation should go through the NVD probe even if the key format is unusual.
+            assert os.environ.get("NVD_API_KEY") is None
+            mock_nvd_cls.assert_called_once_with(nvd_api_key="test65869896")
+        finally:
+            os.environ.pop("NVD_API_KEY", None)
+            os.environ.pop("VULNSCOUT_CONFIG", None)
+
+    @patch("src.routes.config.NVD_DB")
+    def test_put_network_error_returns_503(self, mock_nvd_cls, client, tmp_path):
+        """PUT when NVD API is unreachable returns 503 and does not save."""
+        mock_instance = MagicMock()
+        mock_instance.api_probe_cve.side_effect = ConnectionError("timeout")
+        mock_nvd_cls.return_value = mock_instance
+
+        os.environ.pop("NVD_API_KEY", None)
+        os.environ["VULNSCOUT_CONFIG"] = str(tmp_path / "config.env")
+        try:
+            resp = client.put("/api/config/nvd-api-key", json={"api_key": "some-key"})
+            assert resp.status_code == 503
+            assert os.environ.get("NVD_API_KEY") is None
+        finally:
+            os.environ.pop("NVD_API_KEY", None)
+            os.environ.pop("VULNSCOUT_CONFIG", None)
+
+    @patch("src.routes.config.NVD_DB")
+    def test_put_unexpected_probe_status_still_saves(self, mock_nvd_cls, client, tmp_path):
+        """Unexpected probe statuses (e.g. 404) should not block saving the key."""
+        mock_instance = MagicMock()
+        mock_instance.api_probe_cve.return_value = (404, {}, {})
+        mock_nvd_cls.return_value = mock_instance
+
+        os.environ.pop("NVD_API_KEY", None)
+        config_file = str(tmp_path / "config.env")
+        os.environ["VULNSCOUT_CONFIG"] = config_file
+        key = "D77A230D-E55D-F111-836C-0EBF96DE670D"
+        try:
+            resp = client.put("/api/config/nvd-api-key", json={"api_key": key})
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data["status"] == "ok"
+            assert data["has_key"] is True
+            assert data["masked_key"].startswith("D77A")
+            assert data["masked_key"].endswith("670D")
+            assert "warning" in data
+
+            # Key should be stored despite unexpected probe status.
+            assert os.environ.get("NVD_API_KEY") == key
+            content = open(config_file).read()
+            assert f"NVD_API_KEY={key}" in content
+        finally:
+            os.environ.pop("NVD_API_KEY", None)
+            os.environ.pop("VULNSCOUT_CONFIG", None)
+
+    @patch("src.routes.config.NVD_DB")
+    def test_put_clear_key(self, mock_nvd_cls, client, tmp_path):
+        """PUT with empty api_key clears the key from env and config.env."""
+        os.environ["NVD_API_KEY"] = "old-key"
+        config_file = str(tmp_path / "config.env")
+        with open(config_file, "w") as fh:
+            fh.write("NVD_API_KEY=old-key\nOTHER=value\n")
+        os.environ["VULNSCOUT_CONFIG"] = config_file
+        try:
+            resp = client.put("/api/config/nvd-api-key", json={"api_key": ""})
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data["has_key"] is False
+            assert data["masked_key"] == ""
+
+            # Key removed from env
+            assert os.environ.get("NVD_API_KEY") is None
+
+            # Key removed from config.env but other entries preserved
+            content = open(config_file).read()
+            assert "NVD_API_KEY" not in content
+            assert "OTHER=value" in content
+
+            # NVD_DB should NOT have been instantiated (no key to validate)
+            mock_nvd_cls.assert_not_called()
+        finally:
+            os.environ.pop("NVD_API_KEY", None)
+            os.environ.pop("VULNSCOUT_CONFIG", None)
+
+    @patch("src.routes.config._write_config_key", return_value=False)
+    @patch("src.routes.config.NVD_DB")
+    def test_put_write_failure_returns_500(self, mock_nvd_cls, mock_write_config, client, tmp_path):
+        """If config.env cannot be written, the request should fail."""
+        mock_instance = MagicMock()
+        mock_instance.api_probe_cve.return_value = (
+            200,
+            {"vulnerabilities": [{}]},
+            {"x-ratelimit-limit": "50"},
+        )
+        mock_nvd_cls.return_value = mock_instance
+
+        os.environ.pop("NVD_API_KEY", None)
+        os.environ["VULNSCOUT_CONFIG"] = str(tmp_path / "config.env")
+        try:
+            resp = client.put("/api/config/nvd-api-key", json={"api_key": "persist-me-5678"})
+            assert resp.status_code == 500
+            assert "persist" in resp.get_json()["error"].lower()
+            assert os.environ.get("NVD_API_KEY") is None
+        finally:
+            os.environ.pop("NVD_API_KEY", None)
+            os.environ.pop("VULNSCOUT_CONFIG", None)
+
+    def test_put_missing_field_returns_400(self, client):
+        """PUT without api_key field returns 400."""
+        resp = client.put("/api/config/nvd-api-key", json={"other": "stuff"})
+        assert resp.status_code == 400
+
+    def test_put_non_string_api_key_returns_400(self, client):
+        """PUT with a non-string api_key returns 400."""
+        resp = client.put("/api/config/nvd-api-key", json={"api_key": 12345})
+        assert resp.status_code == 400
+        assert "must be a string" in resp.get_json()["error"].lower()
+
+    @patch("src.routes.config.NVD_DB")
+    def test_put_config_file_persists_between_calls(self, mock_nvd_cls, client, tmp_path):
+        """Setting a key writes to config.env; a subsequent GET sees it via os.environ."""
+        mock_instance = MagicMock()
+        mock_instance.api_probe_cve.return_value = (
+            200,
+            {"vulnerabilities": [{}]},
+            {"x-ratelimit-limit": "50"},
+        )
+        mock_nvd_cls.return_value = mock_instance
+
+        config_file = str(tmp_path / "config.env")
+        os.environ.pop("NVD_API_KEY", None)
+        os.environ["VULNSCOUT_CONFIG"] = config_file
+        try:
+            client.put("/api/config/nvd-api-key", json={"api_key": "persist-me-5678"})
+            resp = client.get("/api/config/nvd-api-key")
+            assert resp.get_json()["has_key"] is True
+        finally:
+            os.environ.pop("NVD_API_KEY", None)
+            os.environ.pop("VULNSCOUT_CONFIG", None)
+
+    @patch("src.routes.config.NVD_DB")
+    def test_put_rejects_anonymous_rate_limit_probe(self, mock_nvd_cls, client, tmp_path):
+        """If probe indicates anonymous rate limit, key should be treated as invalid."""
+        mock_instance = MagicMock()
+        mock_instance.api_probe_cve.return_value = (
+            200,
+            {"vulnerabilities": [{"cve": {}}]},
+            {"x-ratelimit-limit": "5"},
+        )
+        mock_nvd_cls.return_value = mock_instance
+
+        os.environ.pop("NVD_API_KEY", None)
+        os.environ["VULNSCOUT_CONFIG"] = str(tmp_path / "config.env")
+        try:
+            resp = client.put(
+                "/api/config/nvd-api-key",
+                json={"api_key": "D77A230D-E55D-F111-836C-0EBF96DE670A"},
+            )
+            assert resp.status_code == 400
+            assert "invalid" in resp.get_json()["error"].lower()
+            assert os.environ.get("NVD_API_KEY") is None
+        finally:
+            os.environ.pop("NVD_API_KEY", None)
+            os.environ.pop("VULNSCOUT_CONFIG", None)

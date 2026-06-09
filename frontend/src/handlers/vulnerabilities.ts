@@ -6,6 +6,7 @@ import { Cvss2, Cvss3P0, Cvss3P1, Cvss4P0 } from 'ae-cvss-calculator';
 type CVSS = {
     author: string;
     origin?: string;
+    variant_id?: string;
     severity: string;
     version: string;
     vector_string: string;
@@ -13,6 +14,14 @@ type CVSS = {
     base_score: number;
     exploitability_score: number;
     impact_score: number;
+};
+
+type StatusSummary = {
+    counts: Record<string, number>;
+    ordered: { status: string; count: number }[];
+    total_assessments: number;
+    dominant_status: string;
+    has_active_status: boolean;
 };
 
 type Vulnerability = {
@@ -33,6 +42,7 @@ type Vulnerability = {
     texts: {
         title: string;
         content: string;
+        packages?: string[];
     }[];
     severity: {
         severity: string;
@@ -52,14 +62,116 @@ type Vulnerability = {
     fix: {
         state: string;
     };
-    status: string;
     simplified_status: string;
+    status_summary?: StatusSummary;
     assessments: Assessment[];
 };
 
 export type { Vulnerability, CVSS };
 
 const SEVERITY_ORDER = ['NONE', 'UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+const STATUS_SORT_ORDER = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'];
+const STATUS_DOMINANT_PRIORITY = ['Exploitable', 'Pending Assessment', 'Not affected', 'Fixed', 'unknown'];
+
+const getStatusSortIndex = (status: string): number => {
+    const index = STATUS_SORT_ORDER.indexOf(status);
+    return index === -1 ? STATUS_SORT_ORDER.length : index;
+}
+
+const getStatusDominantIndex = (status: string): number => {
+    const index = STATUS_DOMINANT_PRIORITY.indexOf(status);
+    return index === -1 ? STATUS_DOMINANT_PRIORITY.length : index;
+}
+
+const isActiveStatus = (status: string): boolean => {
+    return status !== 'Fixed' && status !== 'Not affected' && status !== 'unknown';
+}
+
+const getStatusSummaryEntries = (counts: Record<string, number>): { status: string; count: number }[] => {
+    return Object.entries(counts)
+        .map(([status, count]) => ({ status, count }))
+        .sort((a, b) => {
+            const priorityDelta = getStatusDominantIndex(a.status) - getStatusDominantIndex(b.status);
+            if (priorityDelta !== 0) return priorityDelta;
+            if (b.count !== a.count) return b.count - a.count;
+            return a.status.localeCompare(b.status);
+        });
+}
+
+const buildStatusSummary = (assessments: Assessment[]): StatusSummary => {
+    if (assessments.length === 0) {
+        return {
+            counts: { unknown: 1 },
+            ordered: [{ status: 'unknown', count: 1 }],
+            total_assessments: 0,
+            dominant_status: 'unknown',
+            has_active_status: false,
+        };
+    }
+
+    // Group assessments by variant_id. Assessments without a variant_id are
+    // grouped together under a single fallback key so they contribute one slot.
+    const byVariant = new Map<string, Assessment[]>();
+    assessments.forEach((assessment) => {
+        const key = assessment.variant_id ?? '__no_variant__';
+        if (!byVariant.has(key)) byVariant.set(key, []);
+        byVariant.get(key)!.push(assessment);
+    });
+
+    // For each variant keep only the most recent assessment.
+    const latestPerVariant: Assessment[] = [];
+    byVariant.forEach((variantAssessments) => {
+        const latest = variantAssessments.reduce((best, a) =>
+            new Date(a.timestamp).getTime() > new Date(best.timestamp).getTime() ? a : best
+        );
+        latestPerVariant.push(latest);
+    });
+
+    // Count how many variants share each simplified status.
+    const counts = latestPerVariant.reduce((acc, assessment) => {
+        const simplified = assessment.simplified_status || 'unknown';
+        acc[simplified] = (acc[simplified] || 0) + 1;
+        return acc;
+    }, {} as Record<string, number>);
+
+    const ordered = getStatusSummaryEntries(counts);
+    const dominant_status = ordered[0]?.status ?? 'unknown';
+    return {
+        counts,
+        ordered,
+        total_assessments: assessments.length,
+        dominant_status,
+        has_active_status: ordered.some((entry) => isActiveStatus(entry.status)),
+    };
+}
+
+const buildFallbackStatusSummary = (simplified_status: string): StatusSummary => {
+    const fallbackStatus = simplified_status || 'unknown';
+    return {
+        counts: { [fallbackStatus]: 1 },
+        ordered: [{ status: fallbackStatus, count: 1 }],
+        total_assessments: 0,
+        dominant_status: fallbackStatus,
+        has_active_status: isActiveStatus(fallbackStatus),
+    };
+}
+
+const getVulnerabilityStatusSummary = (vulnerability: Pick<Vulnerability, 'status_summary' | 'simplified_status'>): StatusSummary => {
+    return vulnerability.status_summary ?? buildFallbackStatusSummary(vulnerability.simplified_status);
+}
+
+const getTopStatusSummaryLabel = (summary: StatusSummary, maxItems = 2): string => {
+    const top = summary.ordered.slice(0, maxItems).map((entry) => entry.status);
+    const hiddenCount = summary.ordered.length - top.length;
+    if (hiddenCount > 0) {
+        top.push(`+${hiddenCount} more`);
+    }
+    return top.join(', ');
+}
+
+const isVulnerabilityActive = (vulnerability: Vulnerability): boolean => {
+    return getVulnerabilityStatusSummary(vulnerability).has_active_status;
+}
 
 const asCVSS = (data: any): CVSS | [] => {
     if (typeof data !== "object") return [];
@@ -68,6 +180,7 @@ const asCVSS = (data: any): CVSS | [] => {
     let score: CVSS = {
         author: "unknown",
         origin: "scanner",
+        variant_id: undefined,
         severity: "unknown",
         version: data.version,
         vector_string: "",
@@ -78,6 +191,7 @@ const asCVSS = (data: any): CVSS | [] => {
     };
     if (typeof data?.author === "string") score.author = data.author
     if (typeof data?.origin === "string") score.origin = data.origin
+    if (typeof data?.variant_id === "string") score.variant_id = data.variant_id
     if (typeof data?.severity === "string") score.severity = data.severity
     if (typeof data?.vector_string === "string") {
         score.vector_string = data.vector_string
@@ -124,17 +238,12 @@ const asVulnerability = (data: any): Vulnerability | [] => {
         fix: {
             state: "unknown",
         },
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: [],
     };
     if (typeof data?.namespace === "string") vuln.namespace = data.namespace
     if (typeof data?.datasource === "string") vuln.datasource = data.datasource
-    if (typeof data?.texts === "object")
-        vuln.texts = Object.entries(data.texts).flatMap(([key, value]) => {
-            if (typeof value !== "string") return [];
-            return { title: key, content: value }
-        })
+    if (Array.isArray(data?.texts)) vuln.texts = data.texts
     if (typeof data?.severity?.severity === "string") vuln.severity.severity = data.severity.severity
     if (typeof data?.severity?.min_score === "number") vuln.severity.min_score = Number(data.severity.min_score)
     if (typeof data?.severity?.max_score === "number") vuln.severity.max_score = Number(data.severity.max_score)
@@ -182,18 +291,25 @@ class Vulnerabilities {
         }, {} as {[key: string]: Assessment[]});
 
         return vulns.map((vuln) => {
-            if (!assessments_per_vuln[vuln.id]) return vuln;
-            if (assessments_per_vuln[vuln.id].length < 1) return vuln;
+            if (!assessments_per_vuln[vuln.id] || assessments_per_vuln[vuln.id].length < 1) {
+                return {
+                    ...vuln,
+                    simplified_status: 'unknown',
+                    status_summary: buildStatusSummary([]),
+                    assessments: [],
+                };
+            }
 
             assessments_per_vuln[vuln.id].sort((a, b) => {
                 return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
             });
-            const latest = assessments_per_vuln[vuln.id][assessments_per_vuln[vuln.id].length - 1];
+            const vulnAssessments = assessments_per_vuln[vuln.id];
+            const statusSummary = buildStatusSummary(vulnAssessments);
             return {
                 ...vuln,
-                status: latest?.status ?? 'unknown',
-                simplified_status: latest?.simplified_status ?? 'unknown',
-                assessments: assessments_per_vuln[vuln.id],
+                simplified_status: statusSummary.dominant_status,
+                status_summary: statusSummary,
+                assessments: vulnAssessments,
             };
         });
     }
@@ -201,11 +317,15 @@ class Vulnerabilities {
     static append_assessment(vulns: Vulnerability[], assessment: Assessment): Vulnerability[] {
         return vulns.map((vuln) => {
             if (vuln.id === assessment.vuln_id) {
+                const assessments = [...vuln.assessments, assessment].sort((a, b) => {
+                    return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+                });
+                const statusSummary = buildStatusSummary(assessments);
                 return {
                     ...vuln,
-                    status: assessment.status,
-                    simplified_status: assessment.simplified_status,
-                    assessments: [...vuln.assessments, assessment],
+                    simplified_status: statusSummary.dominant_status,
+                    status_summary: statusSummary,
+                    assessments,
                 };
             }
 
@@ -291,4 +411,14 @@ class Vulnerabilities {
 
 
 export default Vulnerabilities;
-export { SEVERITY_ORDER, asVulnerability };
+export {
+    SEVERITY_ORDER,
+    STATUS_SORT_ORDER,
+    asVulnerability,
+    buildStatusSummary,
+    getStatusSortIndex,
+    getTopStatusSummaryLabel,
+    getVulnerabilityStatusSummary,
+    isActiveStatus,
+    isVulnerabilityActive,
+};

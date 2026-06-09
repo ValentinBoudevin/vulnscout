@@ -1,5 +1,6 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
+import { asVulnerability, buildStatusSummary } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import { asAssessment } from "../handlers/assessments";
 import { escape } from "lodash-es";
@@ -24,6 +25,7 @@ import { splitPkgId, formatPkgId, extractSupplierName } from '../helpers/pkgId';
 import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback } from "react";
 import NvdRefreshHandler from "../handlers/nvdRefresh";
+import EpssRefreshHandler from "../handlers/epssRefresh";
 
 type Props = {
     vuln: Vulnerability;
@@ -57,6 +59,18 @@ type AssessmentGroup = {
     packages: string[];
 };
 
+type VariantScopedSnapshot = {
+    variantId: string;
+    variantName: string;
+    hasEffort: boolean;
+    effort: {
+        optimistic?: string;
+        likely?: string;
+        pessimistic?: string;
+    };
+    customCvss: CVSS[];
+};
+
   function VulnModal(props: Readonly<Props>) {
     const { vuln, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-details");
@@ -73,6 +87,9 @@ type AssessmentGroup = {
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
+    const [selectedTargetVariantIds, setSelectedTargetVariantIds] = useState<string[]>([]);
+    const [variantSnapshots, setVariantSnapshots] = useState<VariantScopedSnapshot[]>([]);
+    const [snapshotVersion, setSnapshotVersion] = useState(0);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
     const [editingGroup, setEditingGroup] = useState<AssessmentGroup | null>(null);
 
@@ -107,6 +124,69 @@ type AssessmentGroup = {
             .catch(() => {});
     }, [vuln.id]);
 
+    // In all-variants mode, default to all variant targets for custom CVSS/time edits.
+    useEffect(() => {
+        if (variantId || availableVariants.length === 0) {
+            setSelectedTargetVariantIds([]);
+            return;
+        }
+        setSelectedTargetVariantIds(availableVariants.map(v => v.id));
+    }, [variantId, vuln.id, availableVariants]);
+
+    // Build per-variant snapshots so the modal can show where custom CVSS and
+    // effort differ across variants directly in all-variants mode.
+    useEffect(() => {
+        let cancelled = false;
+        if (variantId || availableVariants.length === 0) {
+            setVariantSnapshots([]);
+            return;
+        }
+
+        (async () => {
+            const snapshots = await Promise.all(availableVariants.map(async (variant): Promise<VariantScopedSnapshot | null> => {
+                try {
+                    const response = await fetch(
+                        import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}?variant_id=${encodeURIComponent(variant.id)}`,
+                        { mode: 'cors' }
+                    );
+                    if (!response.ok) return null;
+                    const raw = await response.json();
+                    const vulnData = asVulnerability(raw);
+                    if (Array.isArray(vulnData)) return null;
+                    const customCvss = Array.isArray(vulnData?.severity?.cvss)
+                        ? vulnData.severity.cvss.filter(score => score.origin === 'custom')
+                        : [];
+
+                    const optimisticDuration = vulnData?.effort?.optimistic;
+                    const likelyDuration = vulnData?.effort?.likely;
+                    const pessimisticDuration = vulnData?.effort?.pessimistic;
+                    const hasEffort = [optimisticDuration, likelyDuration, pessimisticDuration].some((duration) => {
+                        return typeof duration?.total_seconds === 'number' && duration.total_seconds > 0;
+                    });
+                    return {
+                        variantId: variant.id,
+                        variantName: variant.name,
+                        hasEffort,
+                        effort: {
+                            optimistic: typeof optimisticDuration?.formatHumanShort === 'function' && optimisticDuration.total_seconds > 0 ? optimisticDuration.formatHumanShort() : undefined,
+                            likely: typeof likelyDuration?.formatHumanShort === 'function' && likelyDuration.total_seconds > 0 ? likelyDuration.formatHumanShort() : undefined,
+                            pessimistic: typeof pessimisticDuration?.formatHumanShort === 'function' && pessimisticDuration.total_seconds > 0 ? pessimisticDuration.formatHumanShort() : undefined,
+                        },
+                        customCvss,
+                    };
+                } catch {
+                    return null;
+                }
+            }));
+
+            if (!cancelled) {
+                setVariantSnapshots(snapshots.filter((s): s is VariantScopedSnapshot => s !== null));
+            }
+        })();
+
+        return () => { cancelled = true; };
+    }, [variantId, availableVariants, vuln.id, snapshotVersion]);
+
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
     const hasUnsavedChanges = hasTimeChanges || hasAssessmentChanges;
@@ -115,9 +195,9 @@ type AssessmentGroup = {
     const [bannerMessage, setBannerMessage] = useState("");
     const [bannerType, setBannerType] = useState<"error" | "success">("error");
     const [showBanner, setShowBanner] = useState(false);
-    const [nvdRefreshing, setNvdRefreshing] = useState(false);
-    const [nvdRefreshError, setNvdRefreshError] = useState<string | null>(null);
-    const [nvdRefreshDone, setNvdRefreshDone] = useState(false);
+    const [refreshing, setRefreshing] = useState(false);
+    const [refreshError, setRefreshError] = useState<string | null>(null);
+    const [refreshedList, setRefreshedList] = useState<string[]>([]);
 
     const modalRef = useRef<HTMLDivElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -155,9 +235,9 @@ type AssessmentGroup = {
     }, [vuln.id]);
 
     useEffect(() => {
-        setNvdRefreshing(false);
-        setNvdRefreshError(null);
-        setNvdRefreshDone(false);
+        setRefreshing(false);
+        setRefreshError(null);
+        setRefreshedList([]);
     }, [vuln.id]);
 
     const showMessage = (message: string, type: "error" | "success") => {
@@ -215,38 +295,66 @@ type AssessmentGroup = {
         ? `Vulnerability ${currentIndex + 1} of ${vulnerabilities.length}`
         : null;
 
-    const handleNvdRefresh = useCallback(async () => {
-        setNvdRefreshing(true);
-        setNvdRefreshError(null);
-        setNvdRefreshDone(false);
+    const handleRefresh = useCallback(async () => {
+        setRefreshing(true);
+        setRefreshError(null);
+        setRefreshedList([]);
         try {
-            const updated = await NvdRefreshHandler.triggerSingleRefresh(vuln.id);
-            if (updated === null) {
-                setNvdRefreshError("NVD API unavailable. Please try again later.");
-            } else {
-                // Strip out fields that asVulnerability() fills with defaults but the
-                // NVD refresh API doesn't actually provide (to_dict() omits them, or
-                // returns empty because the route doesn't run the full post-processing
-                // pipeline the main list endpoint does).
-                // Then overlay the genuine NVD updates on top of the original vuln
-                // so every non-refreshed column keeps its current value.
-                const {
-                    status: _s,
-                    simplified_status: _ss,
-                    assessments: _a,
-                    packages_current: _pc,
-                    variants: _v,
-                    found_by: _fb,
-                    ...nvdUpdates
-                } = updated;
-                const merged = { ...vuln, ...nvdUpdates };
-                patchVuln(vuln.id, merged);
-                setNvdRefreshDone(true);
+            const [nvdResult, epssResult] = await Promise.allSettled([
+                NvdRefreshHandler.triggerSingleRefresh(vuln.id),
+                EpssRefreshHandler.triggerSingleRefresh(vuln.id),
+            ]);
+
+            const errors: string[] = [];
+            const nvdValue = nvdResult.status === "fulfilled" ? nvdResult.value : null;
+            const nvdUpdated = nvdValue?.kind === "success";
+            if (!nvdUpdated) {
+                if (nvdValue?.kind === "error" && nvdValue.code === "rate_limited") {
+                    errors.push(nvdValue.apiKeyConfigured
+                        ? "NVD rate-limited. Your NVD API key may be exhausted, please try again later."
+                        : "NVD rate-limited. Set NVD API key in settings to reduce throttling.");
+                } else {
+                    errors.push("NVD API unavailable");
+                }
             }
-        } catch {
-            setNvdRefreshError("NVD API unavailable. Please try again later.");
+            if (epssResult.status === "rejected" || epssResult.value === null) {
+                errors.push("EPSS API unavailable");
+            }
+
+            const epssUpdated = epssResult.status === "fulfilled" && epssResult.value !== null;
+
+            let merged = { ...vuln };
+
+            if (nvdUpdated || epssUpdated) {
+                if (nvdUpdated) {
+                    const {
+                        simplified_status: _ss,
+                        assessments: _a,
+                        packages_current: _pc,
+                        variants: _v,
+                        found_by: _fb,
+                        ...nvdUpdates
+                    } = nvdValue.vuln;
+
+                    merged = { ...merged, ...nvdUpdates };
+                    setRefreshedList(prev => [...prev, "NVD"]);
+                }
+
+                if (epssUpdated) {
+                    merged = { ...merged, epss: epssResult.value!.epss };
+                    setRefreshedList(prev => [...prev, "EPSS"]);
+                }
+
+                patchVuln(vuln.id, merged);
+            }
+
+            if (errors.length > 0) {
+                setRefreshError(errors.join(". ") + ". Please try again later.");
+            }
+        } catch (error) {
+            setRefreshError(String(error) + " Please try again later.");
         } finally {
-            setNvdRefreshing(false);
+            setRefreshing(false);
         }
     }, [vuln, patchVuln]);
 
@@ -299,7 +407,6 @@ type AssessmentGroup = {
                     const sortedAssessments = [...vuln.assessments].sort(
                         (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
                     );
-                    vuln.status = sortedAssessments[0].status;
                     vuln.simplified_status = sortedAssessments[0].simplified_status;
                 }
 
@@ -480,7 +587,6 @@ type AssessmentGroup = {
                 (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
             )[0];
             if (latest) {
-                vuln.status = latest.status;
                 vuln.simplified_status = latest.simplified_status;
             }
             patchVuln(vuln.id, vuln);
@@ -554,6 +660,9 @@ type AssessmentGroup = {
 
     const groupedAssessments = groupAssessments(vuln.assessments);
 
+    const bothRefreshed = refreshedList.includes('NVD') && refreshedList.includes('EPSS');
+    const partialRefreshed = refreshedList.length > 0 && !bothRefreshed;
+
     // Get the default status for new assessments
     // Use the most recent assessment's status, or "under_investigation" if no assessments exist
     const getDefaultStatus = () => {
@@ -626,7 +735,6 @@ type AssessmentGroup = {
                         vuln.assessments.push(casted);
                         // Keep allVulnAssessments in sync so variant tags appear immediately
                         setAllVulnAssessments(prev => [...prev, casted]);
-                        vuln.status = casted.status;
                         vuln.simplified_status = casted.simplified_status;
                     }
                 }
@@ -636,7 +744,14 @@ type AssessmentGroup = {
         }
 
         if (lastCasted) {
-            patchVuln(vuln.id, vuln);
+            const updatedAssessments = [...vuln.assessments];
+            const statusSummary = buildStatusSummary(updatedAssessments);
+            patchVuln(vuln.id, {
+                ...vuln,
+                assessments: updatedAssessments,
+                simplified_status: statusSummary.dominant_status,
+                status_summary: statusSummary,
+            });
             const msg = successCount > 1
                 ? `Successfully added assessment to ${successCount} variants.`
                 : 'Successfully added assessment.';
@@ -657,29 +772,55 @@ type AssessmentGroup = {
             return;
         }
 
+        const targetVariantIds: Array<string | undefined> =
+            variantId
+                ? [variantId]
+                : (availableVariants.length > 0
+                    ? (selectedTargetVariantIds.length > 0 ? selectedTargetVariantIds : [])
+                    : [undefined]);
 
-        const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
+        if (!variantId && availableVariants.length > 0 && targetVariantIds.length === 0) {
+            showMessage("Please select at least one variant before adding a custom CVSS score.", "error");
+            return;
+        }
+
+        const updates = targetVariantIds.map((vid) => ({
+            id: vuln.id,
+            ...(vid ? { variant_id: vid } : {}),
+            cvss: content,
+        }));
+
+        const url = updates.length > 1
+            ? import.meta.env.VITE_API_URL + '/api/vulnerabilities/batch'
+            : import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`;
+        const body = updates.length > 1 ? { vulnerabilities: updates } : updates[0];
+
+        const response = await fetch(url, {
             method: 'PATCH',
             mode: 'cors',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-                cvss: content
-            })
+            body: JSON.stringify(body)
         });
 
         if (response.status == 200) {
             const data = await response.json();
 
-            if (Array.isArray(data?.severity?.cvss)) {
-                // Update the local vuln object immediately for instant UI update
-                vuln.severity.cvss = data.severity.cvss;
+            const updatedSeverity = updates.length > 1
+                ? data?.vulnerabilities?.[0]?.severity?.cvss
+                : data?.severity?.cvss;
 
-                // Also patch the vulnerability for real-time refresh in other views
+            if (Array.isArray(updatedSeverity) && variantId) {
+                // Only update the local vuln object when viewing a specific variant.
+                // In all-variants mode the snapshot refresh below handles the display.
+                vuln.severity.cvss = updatedSeverity;
                 patchVuln(vuln.id, vuln);
             }
 
+            // Refresh per-variant snapshots immediately so the panel reflects the
+            // new data without requiring the modal to be closed and reopened.
+            setSnapshotVersion(v => v + 1);
             setShowCustomCvss(false);
             showMessage("Successfully added Custom CVSS.", "success");
         } else {
@@ -690,35 +831,65 @@ type AssessmentGroup = {
     };
 
     const saveEstimation = async (content: PostTimeEstimate) => {
-        const body: Record<string, unknown> = {
+        const targetVariantIds: Array<string | undefined> =
+            variantId
+                ? [variantId]
+                : (availableVariants.length > 0
+                    ? (selectedTargetVariantIds.length > 0 ? selectedTargetVariantIds : [])
+                    : [undefined]);
+
+        if (!variantId && availableVariants.length > 0 && targetVariantIds.length === 0) {
+            showMessage("Please select at least one variant before saving an estimate.", "error");
+            return;
+        }
+
+        const updates = targetVariantIds.map((vid) => ({
+            id: vuln.id,
+            ...(vid ? { variant_id: vid } : {}),
             effort: {
                 optimistic: content.optimistic.formatAsIso8601(),
                 likely: content.likely.formatAsIso8601(),
                 pessimistic: content.pessimistic.formatAsIso8601()
             }
-        };
-        if (variantId) body.variant_id = variantId;
-        const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
+        }));
+
+        const url = updates.length > 1
+            ? import.meta.env.VITE_API_URL + '/api/vulnerabilities/batch'
+            : import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`;
+
+        const response = await fetch(url, {
             method: 'PATCH',
             mode: 'cors',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(body)
+            body: JSON.stringify(updates.length > 1 ? { vulnerabilities: updates } : updates[0])
         })
         if (response.status == 200) {
             const data = await response.json()
 
-            // Update the local vuln object immediately for instant UI update
-            if (typeof data?.effort?.optimistic === "string")
-                vuln.effort.optimistic = new Iso8601Duration(data.effort.optimistic);
-            if (typeof data?.effort?.likely === "string")
-                vuln.effort.likely = new Iso8601Duration(data.effort.likely);
-            if (typeof data?.effort?.pessimistic === "string")
-                vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic);
+            const updatedEffort = updates.length > 1
+                ? data?.vulnerabilities?.[0]?.effort
+                : data?.effort;
 
-            // Also patch the vulnerability for real-time refresh in other views
-            patchVuln(vuln.id, vuln);
+            if (variantId) {
+                // Only update the local vuln object when viewing a specific variant.
+                // In all-variants mode the snapshot refresh below handles the display,
+                // so we must not overwrite the global vuln with variant-scoped values.
+                if (typeof updatedEffort?.optimistic === "string")
+                    vuln.effort.optimistic = new Iso8601Duration(updatedEffort.optimistic);
+                if (typeof updatedEffort?.likely === "string")
+                    vuln.effort.likely = new Iso8601Duration(updatedEffort.likely);
+                if (typeof updatedEffort?.pessimistic === "string")
+                    vuln.effort.pessimistic = new Iso8601Duration(updatedEffort.pessimistic);
+
+                // Also patch the vulnerability for real-time refresh in other views
+                patchVuln(vuln.id, vuln);
+            }
+
+            // Refresh per-variant snapshots immediately so the panel reflects the
+            // new data without requiring the modal to be closed and reopened.
+            setSnapshotVersion(v => v + 1);
             setClearTimeFields(true);
             setTimeout(() => setClearTimeFields(false), 100);
             showMessage("Successfully added estimation.", "success");
@@ -805,24 +976,27 @@ type AssessmentGroup = {
                             {!readOnly && (
                                 <div className="flex items-center gap-2">
                                     <button
-                                        onClick={handleNvdRefresh}
-                                        disabled={nvdRefreshing}
-                                        title="Refresh from NVD"
+                                        onClick={handleRefresh}
+                                        disabled={refreshing}
+                                        title="Refresh from NVD & EPSS"
                                         type="button"
                                         className={`px-3 py-2 text-sm font-medium focus:outline-none rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                                            nvdRefreshDone
+                                            bothRefreshed
                                                 ? 'text-green-400 border-green-600 hover:bg-green-900 bg-transparent'
-                                                : 'border-gray-600 hover:bg-gray-600 hover:text-white bg-transparent text-gray-300'
+                                                : partialRefreshed
+                                                    ? 'text-yellow-400 border-yellow-600 hover:bg-yellow-900 bg-transparent'
+                                                    : 'border-gray-600 hover:bg-gray-600 hover:text-white bg-transparent text-gray-300'
                                         }`}
                                     >
                                         <FontAwesomeIcon
-                                            icon={nvdRefreshDone ? faCheck : faRotate}
-                                            className={nvdRefreshing ? "animate-spin" : ""}
+                                            icon={(bothRefreshed || partialRefreshed) ? faCheck : faRotate}
+                                            className={refreshing ? "animate-spin" : ""}
                                         />
-                                        {nvdRefreshDone && <span className="ml-2 text-xs">Updated</span>}
+                                        {bothRefreshed && <span className="ml-2 text-xs">Updated</span>}
+                                        {partialRefreshed && <span className="ml-2 text-xs">{refreshedList[0]} Updated</span>}
                                     </button>
-                                    {nvdRefreshError && (
-                                        <span className="text-xs text-red-400">{nvdRefreshError}</span>
+                                    {refreshError && (
+                                        <span className="text-xs text-red-400">{refreshError}</span>
                                     )}
                                 </div>
                             )}
@@ -931,6 +1105,9 @@ type AssessmentGroup = {
                                                             addCvss(vector);
                                                         }}
                                                         triggerBanner={showMessage}
+                                                        variants={!variantId ? availableVariants : undefined}
+                                                        selectedVariantIds={!variantId ? selectedTargetVariantIds : undefined}
+                                                        onSelectedVariantIdsChange={!variantId ? setSelectedTargetVariantIds : undefined}
                                                     />
                                                 </div>
                                             )}
@@ -947,10 +1124,35 @@ type AssessmentGroup = {
                                         className="bg-gray-800 p-2 rounded-xl min-w-[216px]"
                                     >
                                         <h3 className="text-center font-bold">CVSS {cvss.version}</h3>
+                                        {cvss.variant_id && (
+                                            <div className="flex justify-center mb-1">
+                                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+                                                    {availableVariants.find(v => v.id === cvss.variant_id)?.name ?? cvss.variant_id}
+                                                </span>
+                                            </div>
+                                        )}
                                         <CvssGauge data={cvss} />
                                     </div>
                                     ))}
                                 </div>
+
+                                {!variantId && variantSnapshots.some(s => s.customCvss.length > 0) && (
+                                    <div className="mt-3 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
+                                        <h4 className="font-semibold text-gray-200 mb-2">Custom CVSS by variant</h4>
+                                        <div className="space-y-2">
+                                            {variantSnapshots
+                                                .filter(snapshot => snapshot.customCvss.length > 0)
+                                                .map(snapshot => (
+                                                    <div key={snapshot.variantId} className="text-sm">
+                                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300 mr-2">{snapshot.variantName}</span>
+                                                        <span className="text-gray-300">
+                                                            {snapshot.customCvss.map(score => `CVSS ${score.version} (${score.base_score})`).join(', ')}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
                         </div>
@@ -959,7 +1161,10 @@ type AssessmentGroup = {
                             {vuln.texts.map((text) => {
                                 return (
                                 <div key={encodeURIComponent(text.title)}>
-                                    <h3 className="font-bold mb-2">{text.title?.replace(/\b\w/g, c => c.toLocaleUpperCase())}</h3>
+                                    <h3>
+                                        <span className="font-bold mb-2">{text.title?.replace(/\b\w/g, c => c.toLocaleUpperCase())}</span>
+                                        {text.packages && <span className="pl-2">({text.packages.join(", ")})</span>}
+                                    </h3>
                                     <p className="leading-relaxed bg-gray-800 p-2 px-4 rounded-lg whitespace-pre-line">{text.content}</p>
                                 </div>)
                             })}
@@ -982,12 +1187,31 @@ type AssessmentGroup = {
                                 onFieldsChange={setHasTimeChanges}
                                 triggerBanner={showMessage}
                                 hideInputs={!isEditing}
+                                variants={!variantId && isEditing ? availableVariants : undefined}
+                                selectedVariantIds={!variantId && isEditing ? selectedTargetVariantIds : undefined}
+                                onSelectedVariantIdsChange={!variantId && isEditing ? setSelectedTargetVariantIds : undefined}
                                 actualEstimate={{
                                     optimistic: vuln?.effort?.optimistic?.formatHumanShort(),
                                     likely: vuln?.effort?.likely?.formatHumanShort(),
                                     pessimistic: vuln?.effort?.pessimistic?.formatHumanShort(),
                                 }}
                             />
+
+                            {!variantId && variantSnapshots.some(s => s.hasEffort) && (
+                                <div className="mt-3 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
+                                    <h4 className="font-semibold text-gray-200 mb-2">Time estimate by variant</h4>
+                                    <div className="space-y-1 text-sm text-gray-300">
+                                        {variantSnapshots
+                                            .filter(snapshot => snapshot.hasEffort)
+                                            .map(snapshot => (
+                                                <div key={snapshot.variantId}>
+                                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300 mr-2">{snapshot.variantName}</span>
+                                                    <span>O: {snapshot.effort.optimistic ?? 'N/A'} | L: {snapshot.effort.likely ?? 'N/A'} | P: {snapshot.effort.pessimistic ?? 'N/A'}</span>
+                                                </div>
+                                            ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         <div className="mt-6">
@@ -1023,10 +1247,12 @@ type AssessmentGroup = {
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
                                                 {group.packages.map(pkg => {
                                                     const { nameVersion, supplier } = splitPkgId(pkg);
+                                                    const supplierName = extractSupplierName(supplier);
                                                     return (
-                                                        <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300" title={`Supplier: ${extractSupplierName(supplier) || 'unknown supplier'}`}>
+                                                        <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300" title={supplierName ? `Supplier: ${supplierName}` : undefined}>
                                                             <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
-                                                            {nameVersion}<span className="ml-1 opacity-70 text-xs">({extractSupplierName(supplier) || 'unknown supplier'})</span>
+                                                            {nameVersion}
+                                                            {supplierName && <span className="ml-1 opacity-70 text-xs">({supplierName})</span>}
                                                         </span>
                                                     );
                                                 })}

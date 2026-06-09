@@ -42,9 +42,7 @@ def _get_vuln_info(vuln_id: str, vuln_cache: dict) -> dict:
     aliases: list[str] = []
     vuln_url = ""
     if vuln_obj:
-        desc = vuln_obj.texts.get("description", "")
-        yocto_desc = vuln_obj.texts.get("yocto description", "")
-        description = desc or yocto_desc or ""
+        description = vuln_obj.description or ""
         aliases = list(vuln_obj.aliases or [])
         urls = (
             list(vuln_obj.urls) if vuln_obj.urls
@@ -490,8 +488,14 @@ def build_custom_data_export(
     from ..models.metrics import Metrics
     from ..models.time_estimate import TimeEstimate
     from ..models.iso8601_duration import Iso8601Duration
+    from ..models.variant import Variant as DBVariant
 
     handmade = DBAssessment.get_handmade(variant_ids)
+
+    variant_name_by_id: dict[str, str] = {}
+    variant_uuid_set: set[_uuid.UUID] = {
+        a.variant_id for a in handmade if a.variant_id is not None
+    }
 
     exported_assessments = []
     for a in handmade:
@@ -511,14 +515,19 @@ def build_custom_data_export(
     # Gather ALL custom CVSS entries, not just those linked to handmade
     # assessments.
     cvss_entries: list[dict] = []
+    metrics_query = db.select(Metrics).where(Metrics.origin == "custom")
+    if variant_ids is not None:
+        metrics_query = metrics_query.where(Metrics.variant_id.in_(variant_ids))
     all_metrics = list(db.session.execute(
-        db.select(Metrics).where(
-            Metrics.origin == "custom",
-        )
+        metrics_query.order_by(Metrics.vulnerability_id)
     ).scalars().all())
-    for m in sorted(all_metrics, key=lambda m: m.vulnerability_id):
+    for m in all_metrics:
+        if m.variant_id is not None:
+            variant_uuid_set.add(m.variant_id)
         cvss_entries.append({
             "vuln_id": m.vulnerability_id,
+            "variant_id": str(m.variant_id) if m.variant_id is not None else None,
+            "variant": None,
             "version": m.version or "",
             "vector_string": m.vector or "",
             "base_score": float(m.score) if m.score is not None else 0.0,
@@ -529,15 +538,6 @@ def build_custom_data_export(
     # Gather ALL non-zero time estimates, not just those linked to
     # handmade assessments.
     time_estimates: list[dict] = []
-    all_te = list(db.session.execute(
-        db.select(TimeEstimate).where(
-            db.or_(
-                TimeEstimate.optimistic > 0,
-                TimeEstimate.likely > 0,
-                TimeEstimate.pessimistic > 0,
-            )
-        )
-    ).scalars().all())
 
     def _hours_to_iso(h: int) -> str:
         try:
@@ -545,24 +545,67 @@ def build_custom_data_export(
         except (ValueError, TypeError):
             return f"PT{h}H"
 
-    seen_vulns_te: set[str] = set()
-    for te in all_te:
-        if te.finding is None:
+    from ..models.finding import Finding as _Finding
+    te_query = (
+        db.select(
+            _Finding.vulnerability_id,
+            TimeEstimate.variant_id,
+            TimeEstimate.optimistic,
+            TimeEstimate.likely,
+            TimeEstimate.pessimistic,
+        )
+        .join(_Finding, TimeEstimate.finding_id == _Finding.id)
+        .where(
+            db.or_(
+                TimeEstimate.optimistic > 0,
+                TimeEstimate.likely > 0,
+                TimeEstimate.pessimistic > 0,
+            )
+        )
+    )
+    if variant_ids is not None:
+        te_query = te_query.where(TimeEstimate.variant_id.in_(variant_ids))
+    te_rows = db.session.execute(te_query).all()
+
+    seen_vulns_te: set[tuple[str, str]] = set()
+    for vid, te_variant_id, opt, lik, pes in te_rows:
+        if te_variant_id is not None:
+            variant_uuid_set.add(te_variant_id)
+        variant_key = str(te_variant_id) if te_variant_id is not None else ""
+        dedup_key = (vid, variant_key)
+        if dedup_key in seen_vulns_te:
             continue
-        vid = te.finding.vulnerability_id
-        if vid in seen_vulns_te:
-            continue
-        seen_vulns_te.add(vid)
-        opt = te.optimistic or 0
-        lik = te.likely or 0
-        pes = te.pessimistic or 0
+        seen_vulns_te.add(dedup_key)
+        opt = opt or 0
+        lik = lik or 0
+        pes = pes or 0
         time_estimates.append({
             "vuln_id": vid,
+            "variant_id": str(te_variant_id) if te_variant_id is not None else None,
+            "variant": None,
             "optimistic": _hours_to_iso(opt),
             "likely": _hours_to_iso(lik),
             "pessimistic": _hours_to_iso(pes),
         })
-    time_estimates.sort(key=lambda t: t["vuln_id"])
+    time_estimates.sort(key=lambda t: (t["vuln_id"], t.get("variant_id") or ""))
+
+    if variant_uuid_set:
+        variants = db.session.execute(
+            db.select(DBVariant).where(DBVariant.id.in_(variant_uuid_set))
+        ).scalars().all()
+        variant_name_by_id = {str(v.id): v.name for v in variants}
+
+    for item in exported_assessments:
+        vid = item.get("variant_id")
+        item["variant"] = variant_name_by_id.get(vid) if vid else None
+
+    for item in cvss_entries:
+        vid = item.get("variant_id")
+        item["variant"] = variant_name_by_id.get(vid) if vid else None
+
+    for item in time_estimates:
+        vid = item.get("variant_id")
+        item["variant"] = variant_name_by_id.get(vid) if vid else None
 
     return {
         "version": 1,
@@ -607,6 +650,8 @@ def import_custom_data(
     from ..models.vulnerability import Vulnerability as DBVuln
     from ..models.package import Package
     from ..models.finding import Finding
+    from ..models.scan import Scan
+    from ..models.observation import Observation
     from .vuln_helpers import (
         _validate_effort,
         _validate_and_apply_cvss,
@@ -621,6 +666,35 @@ def import_custom_data(
         "time_estimates_imported": 0,
         "errors": [],
     }
+
+    def _variants_for_vuln_id(vuln_id: str) -> list[_uuid.UUID | None]:
+        rows = db.session.execute(
+            db.select(Scan.variant_id)
+            .join(Observation, Observation.scan_id == Scan.id)
+            .join(Finding, Observation.finding_id == Finding.id)
+            .where(Finding.vulnerability_id == vuln_id)
+            .distinct()
+        ).all()
+        return [variant_id for (variant_id,) in rows]
+
+    def _resolve_variant(raw_item: dict) -> "_uuid.UUID | None":
+        if variant_id is not None:
+            return variant_id
+
+        variant_token = raw_item.get("variant_id")
+        if variant_token in (None, ""):
+            variant_token = raw_item.get("variant")
+
+        if variant_token in (None, ""):
+            return None
+
+        try:
+            return _uuid.UUID(str(variant_token))
+        except (ValueError, TypeError):
+            mapped_variant = variant_by_name.get(str(variant_token))
+            if mapped_variant is None:
+                return None
+            return mapped_variant.id
 
     # -- Import assessments --
     assessments_list = data.get("assessments", [])
@@ -645,14 +719,7 @@ def import_custom_data(
                 continue
 
             # Determine which variant to attach to
-            target_variant_id = variant_id
-            if target_variant_id is None and a.get("variant_id"):
-                try:
-                    target_variant_id = _uuid.UUID(a["variant_id"])
-                except (ValueError, TypeError):
-                    v = variant_by_name.get(a["variant_id"])
-                    if v:
-                        target_variant_id = v.id
+            target_variant_id = _resolve_variant(a)
 
             justification = a.get("justification", "")
             impact_statement = a.get("impact_statement", "")
@@ -732,11 +799,35 @@ def import_custom_data(
                 "exploitability_score": c.get("exploitability_score", 0.0),
                 "impact_score": c.get("impact_score", 0.0),
             }
-            err = _validate_and_apply_cvss(cvss_data, record.id,
-                                           log_prefix="import-custom-data")
-            if err:
-                result["errors"].append({"vuln_id": vuln_id, "error": err})
+            cvss_variant_id = _resolve_variant(c)
+
+            variant_token = c.get("variant_id")
+            if variant_token in (None, ""):
+                variant_token = c.get("variant")
+            if cvss_variant_id is None and variant_token not in (None, ""):
+                result["errors"].append({
+                    "vuln_id": vuln_id,
+                    "error": f"Variant '{variant_token}' not found",
+                })
+                continue
+
+            target_variant_ids: list[_uuid.UUID | None]
+            if cvss_variant_id is not None:
+                target_variant_ids = [cvss_variant_id]
             else:
+                target_variant_ids = _variants_for_vuln_id(vuln_id)
+                if not target_variant_ids:
+                    target_variant_ids = [None]
+
+            cvss_failed = False
+            for target_variant_id in target_variant_ids:
+                err = _validate_and_apply_cvss(cvss_data, record.id, target_variant_id,
+                                               log_prefix="import-custom-data")
+                if err:
+                    result["errors"].append({"vuln_id": vuln_id, "error": err})
+                    cvss_failed = True
+                    break
+            if not cvss_failed:
                 result["cvss_imported"] += 1
 
     # -- Import time estimates --
@@ -765,15 +856,28 @@ def import_custom_data(
                 result["errors"].append({"vuln_id": vuln_id, "error": err})
                 continue
 
-            te_variant_id = variant_id
-            if te_variant_id is None and t.get("variant_id"):
-                try:
-                    te_variant_id = _uuid.UUID(t["variant_id"])
-                except (ValueError, TypeError):
-                    pass
+            te_variant_id = _resolve_variant(t)
 
-            _apply_effort(record, te_variant_id, opt, lik, pes,
-                          log_prefix="import-custom-data")
+            variant_token = t.get("variant_id")
+            if variant_token in (None, ""):
+                variant_token = t.get("variant")
+            if te_variant_id is None and variant_token not in (None, ""):
+                result["errors"].append({
+                    "vuln_id": vuln_id,
+                    "error": f"Variant '{variant_token}' not found",
+                })
+                continue
+
+            if te_variant_id is not None:
+                target_variant_ids = [te_variant_id]
+            else:
+                target_variant_ids = _variants_for_vuln_id(vuln_id)
+                if not target_variant_ids:
+                    target_variant_ids = [None]
+
+            for target_variant_id in target_variant_ids:
+                _apply_effort(record, target_variant_id, opt, lik, pes,
+                              log_prefix="import-custom-data")
             result["time_estimates_imported"] += 1
 
     if not result["assessments_imported"] and not result["cvss_imported"] and not result["time_estimates_imported"]:

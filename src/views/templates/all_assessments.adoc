@@ -72,11 +72,9 @@ All vulnerabilities are classed by the date of last change.
 Impacts following packages: {{' & '.join(vuln.packages)}} +
 Reference: {{ vuln.datasource or vuln.urls[0] or "No sources found" }}
 
-{% if vuln.texts -%}
+{% if vuln.description -%}
 **Description:**
-{% for title, content in vuln.texts.items() %}
-{{ content }}
-{% endfor %}
+{{ vuln.description }}
 {%- endif %}
 
 **Assessment:**
@@ -106,11 +104,9 @@ Reference: {{ vuln.datasource or vuln.urls[0] or "No sources found" }}
 Impacts following packages: {{' & '.join(vuln.packages)}} +
 Reference: {{ vuln.datasource or vuln.urls[0] or "No sources found" }}
 
-{% if vuln.texts -%}
+{% if vuln.description -%}
 **Description:**
-{% for title, content in vuln.texts.items() %}
-{{ content }}
-{% endfor %}
+{{ vuln.description }}
 {%- endif %}
 
 ** Assessment:**

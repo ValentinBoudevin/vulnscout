@@ -48,7 +48,6 @@ describe('Vulnerability Modal', () => {
         fix: {
             state: 'unknown'
         },
-        status: 'affected',
         simplified_status: 'active',
         variants: [],
         assessments: [{
@@ -240,7 +239,13 @@ describe('Vulnerability Modal', () => {
 
     test('edit effort estimations', async () => {
         fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {
+                id: 'variant-1',
+                name: 'variant-a',
+                project_id: 'project-1'
+            }
+        ])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             id: vulnerability.id,
@@ -258,7 +263,7 @@ describe('Vulnerability Modal', () => {
         // ARRANGE
         const updateCb = jest.fn();
         const closeBtn = jest.fn();
-        render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeBtn} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={updateCb} />);
+        render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeBtn} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={updateCb} variantId="variant-1" />);
         const user = userEvent.setup();
 
         // ACT
@@ -287,7 +292,7 @@ describe('Vulnerability Modal', () => {
         // appendCVSS returns null -> invalid vector branch (lines 61-66)
         const appendCVSS = jest.fn().mockReturnValue(null);
 
-        render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} isEditing={true} />);
+        render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} isEditing={true} variantId="variant-1" />);
 
         const user = userEvent.setup();
         const addCustomBtn = await screen.getByRole('button', { name: /add custom cvss vector/i });
@@ -329,7 +334,7 @@ describe('Vulnerability Modal', () => {
             } as Response)
         );
 
-        render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} isEditing={true} />);
+        render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} isEditing={true} variantId="variant-1" />);
 
         const user = userEvent.setup();
         await user.click(await screen.getByRole('button', { name: /add custom cvss vector/i }));
@@ -381,7 +386,7 @@ describe('Vulnerability Modal', () => {
         // Use fresh copy so mutation in component doesn't leak to other tests
         const vulnCopy = { ...vulnerability, severity: { ...vulnerability.severity, cvss: [] } };
 
-        render(<VulnModal vuln={vulnCopy} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} isEditing={true} />);
+        render(<VulnModal vuln={vulnCopy} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} isEditing={true} variantId="variant-1" />);
 
         const user = userEvent.setup();
         await user.click(await screen.getByRole('button', { name: /add custom cvss vector/i }));
@@ -571,7 +576,7 @@ describe('Vulnerability Modal', () => {
         // Use fresh copy so mutation in component doesn't leak to other tests
         const vulnCopy = { ...vulnerability };
 
-        render(<VulnModal vuln={vulnCopy} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} isEditing={true} />);
+        render(<VulnModal vuln={vulnCopy} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} isEditing={true} variantId="variant-1" />);
 
         const user = userEvent.setup();
         const optimistic = await screen.getByPlaceholderText(/shortest estimate/i);
@@ -629,7 +634,6 @@ describe('Vulnerability Modal', () => {
             fix: {
                 state: 'unknown'
             },
-            status: 'affected',
             simplified_status: 'active',
             variants: [],
             assessments: []
@@ -1845,6 +1849,8 @@ describe('Vulnerability Modal', () => {
             { id: 'v2', name: 'Variant Beta', project_id: 'proj1' }
         ]));
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify(vulnerability)); // variant snapshot for v1
+        fetchMock.mockResponseOnce(JSON.stringify(vulnerability)); // variant snapshot for v2
         // Two POST responses for two variants
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
@@ -1889,7 +1895,7 @@ describe('Vulnerability Modal', () => {
         const user = userEvent.setup();
 
         // Wait for variants to load, then select both
-        await screen.findByText('Variant Alpha');
+        expect((await screen.findAllByText('Variant Alpha')).length).toBeGreaterThan(0);
         const variantCheckboxes = screen.getAllByRole('checkbox');
         // Select both variants
         for (const cb of variantCheckboxes) {
@@ -2004,8 +2010,8 @@ describe('Vulnerability Modal', () => {
         />);
 
         // Wait for variants to load
-        await screen.findByText('Variant A');
-        expect(screen.getByText('Variant B')).toBeInTheDocument();
+        expect((await screen.findAllByText('Variant A')).length).toBeGreaterThan(0);
+        expect(screen.queryAllByText('Variant B').length).toBeGreaterThan(0);
         // Variant from the other project should NOT be shown
         expect(screen.queryByText('Variant Other')).not.toBeInTheDocument();
     });
@@ -2029,8 +2035,8 @@ describe('Vulnerability Modal', () => {
         />);
 
         // Wait for variants to load — both should be shown without projectId filter
-        await screen.findByText('Variant A');
-        expect(screen.getByText('Variant Other')).toBeInTheDocument();
+        expect((await screen.findAllByText('Variant A')).length).toBeGreaterThan(0);
+        expect(screen.queryAllByText('Variant Other').length).toBeGreaterThan(0);
     });
 
     test('packages_current scopes available packages to current project', async () => {
@@ -2057,9 +2063,9 @@ describe('Vulnerability Modal', () => {
         />);
 
         // Only the project-scoped package (from packages_current) should appear as checkbox
-        await screen.findByText('pkg-alpha@1.0.0 (unknown supplier)');
-        expect(screen.queryByText('pkg-beta@2.0.0 (unknown supplier)')).not.toBeInTheDocument();
-        expect(screen.queryByText('pkg-gamma@3.0.0 (unknown supplier)')).not.toBeInTheDocument();
+        await screen.findByText('pkg-alpha@1.0.0');
+        expect(screen.queryByText('pkg-beta@2.0.0')).not.toBeInTheDocument();
+        expect(screen.queryByText('pkg-gamma@3.0.0')).not.toBeInTheDocument();
     });
 
     test('falls back to all packages when packages_current is empty', async () => {
@@ -2085,12 +2091,12 @@ describe('Vulnerability Modal', () => {
         />);
 
         // Both packages should appear since packages_current is empty (fallback)
-        await screen.findByText('pkg-x@1.0.0 (unknown supplier)');
-        expect(screen.getByText('pkg-y@2.0.0 (unknown supplier)')).toBeInTheDocument();
+        await screen.findByText('pkg-x@1.0.0');
+        expect(screen.getByText('pkg-y@2.0.0')).toBeInTheDocument();
     });
 });
 
-describe('NVD refresh button in VulnModal', () => {
+describe('NVD & EPSS refresh button in VulnModal', () => {
     const vulnerability: Vulnerability = {
         id: 'CVE-2010-1234',
         aliases: [],
@@ -2110,7 +2116,6 @@ describe('NVD refresh button in VulnModal', () => {
             pessimistic: new Iso8601Duration(undefined)
         },
         fix: { state: 'unknown' },
-        status: 'under_investigation',
         simplified_status: 'Pending Assessment',
         assessments: [],
         variants: [],
@@ -2139,25 +2144,26 @@ describe('NVD refresh button in VulnModal', () => {
 
     test('refresh button renders in header when not readOnly', () => {
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-        expect(screen.getByTitle('Refresh from NVD')).toBeInTheDocument();
+        expect(screen.getByTitle('Refresh from NVD & EPSS')).toBeInTheDocument();
     });
 
     test('refresh button is not rendered in readOnly mode', () => {
         render(<VulnModal vuln={vulnerability} readOnly={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-        expect(screen.queryByTitle('Refresh from NVD')).not.toBeInTheDocument();
+        expect(screen.queryByTitle('Refresh from NVD & EPSS')).not.toBeInTheDocument();
     });
 
     test('calls patchVuln with updated vulnerability on successful refresh', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] }));
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
         const patchVuln = jest.fn();
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD'));
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
 
         await waitFor(() => {
             expect(patchVuln).toHaveBeenCalledWith(vulnerability.id, expect.objectContaining({ id: vulnerability.id }));
@@ -2174,7 +2180,6 @@ describe('NVD refresh button in VulnModal', () => {
         const vulnWithAssessment: Vulnerability = {
             ...vulnerability,
             found_by: ['grype', 'osv'],
-            status: 'not_affected',
             simplified_status: 'Not Affected',
             assessments: [assessment],
             packages_current: ['libfoo@1.2.3'],
@@ -2184,20 +2189,20 @@ describe('NVD refresh button in VulnModal', () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] }));
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
         const patchVuln = jest.fn();
         render(<VulnModal vuln={vulnWithAssessment} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD'));
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
 
         await waitFor(() => {
             expect(patchVuln).toHaveBeenCalledWith(
                 vulnWithAssessment.id,
                 expect.objectContaining({
                     found_by: ['grype', 'osv'],
-                    status: 'not_affected',
                     simplified_status: 'Not Affected',
                     assessments: [assessment],
                     packages_current: ['libfoo@1.2.3'],
@@ -2211,31 +2216,73 @@ describe('NVD refresh button in VulnModal', () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] }));
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
 
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD'));
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
 
         await waitFor(() => {
             expect(screen.getByText('Updated')).toBeInTheDocument();
         });
     });
 
-    test('shows error message when NVD refresh API is unavailable', async () => {
+    test('shows error message when NVD and EPSS refresh APIs are unavailable', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 });
+        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // nvd-refresh
+        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // epss-refresh
 
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD'));
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
 
         await waitFor(() => {
-            expect(screen.getByText(/NVD API unavailable/i)).toBeInTheDocument();
+            expect(screen.getByText(/NVD API unavailable.*EPSS API unavailable/i)).toBeInTheDocument();
+        });
+    });
+
+    test('shows rate-limit hint with NVD_API_KEY suggestion when server returns 429 and no key', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(
+            JSON.stringify({ error: 'rate limited', error_code: 'rate_limited', api_key_configured: false }),
+            { status: 429 }
+        ); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/NVD rate-limited.*NVD API key/i)).toBeInTheDocument();
+        });
+    });
+
+    test('shows exhausted-key hint when 429 and api key is already configured', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(
+            JSON.stringify({ error: 'rate limited', error_code: 'rate_limited', api_key_configured: true }),
+            { status: 429 }
+        ); // nvd-refresh
+        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // epss-refresh
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/NVD rate-limited.*exhausted/i)).toBeInTheDocument();
         });
     });
 

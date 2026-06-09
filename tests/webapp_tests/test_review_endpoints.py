@@ -19,8 +19,8 @@ import pytest
 from src.bin.webapp import create_app
 from . import write_demo_files, setup_demo_db
 
-VARIANT_UUID = "22222222-2222-2222-2222-222222222222"
-PROJECT_UUID = "11111111-1111-1111-1111-111111111111"
+VARIANT_UUID = uuid.UUID("22222222-2222-2222-2222-222222222222")
+PROJECT_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────
@@ -130,6 +130,163 @@ def test_review_list_by_project_no_variants(client):
     assert resp.status_code == 200
     data = json.loads(resp.data)
     assert data == []
+
+
+class TestReviewListTexts:
+    VARIANT_A = uuid.UUID(int=1)
+    VARIANT_B = uuid.UUID(int=2)
+    VULNERABILITY_ID = "CVE-2020-35492"
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, app):
+        from src.extensions import db
+        from src.models import Scan, SBOMDocument, Variant, SBOMObservation, Assessment, Finding
+
+        with app.app_context():
+            variant_a = Variant(id=self.VARIANT_A, project_id=PROJECT_UUID, name="a")
+            variant_b = Variant(id=self.VARIANT_B, project_id=PROJECT_UUID, name="b")
+            scan_a = Scan(variant=variant_a)
+            scan_b = Scan(variant=variant_b)
+            doc_a = SBOMDocument(path="x", source_name="x", format="x", scan=scan_a)
+            doc_b = SBOMDocument(path="x", source_name="x", format="x", scan=scan_b)
+            sbom_observations = [
+                SBOMObservation(
+                    vulnerability_id=self.VULNERABILITY_ID,
+                    sbom_document=doc_a,
+                    key="Text A",
+                    description="Text specific to A",
+                ),
+                SBOMObservation(
+                    vulnerability_id=self.VULNERABILITY_ID,
+                    sbom_document=doc_a,
+                    key="Text Shared",
+                    description="Content for A",
+                ),
+                SBOMObservation(
+                    vulnerability_id=self.VULNERABILITY_ID,
+                    sbom_document=doc_a,
+                    key="Text Duplicated",
+                    description="Same content for both",
+                ),
+                SBOMObservation(
+                    vulnerability_id=self.VULNERABILITY_ID,
+                    sbom_document=doc_b,
+                    key="Text Shared",
+                    description="Content for B",
+                ),
+                SBOMObservation(
+                    vulnerability_id=self.VULNERABILITY_ID,
+                    sbom_document=doc_b,
+                    key="Text Duplicated",
+                    description="Same content for both",
+                ),
+            ]
+            finding = Finding.get_by_vulnerability(self.VULNERABILITY_ID)[0]
+            assess_a = Assessment.create(status="x", variant_id=self.VARIANT_A, finding_id=finding.id, origin="custom")
+            assess_b = Assessment.create(status="x", variant_id=self.VARIANT_B, finding_id=finding.id, origin="custom")
+            db.session.add_all(sbom_observations + [assess_a, assess_b])
+            db.session.commit()
+
+    def test_no_variants_all(self, client):
+        resp = client.get("/api/assessments/review")
+        assert resp.status_code == 200
+        assessments = json.loads(resp.data)
+
+        assert isinstance(assessments, list)
+        assert len(assessments) == 2
+        assess_a, assess_b = assessments
+
+        assert assess_a["vuln_texts"] == assess_b["vuln_texts"]  # same vulnerability = same texts
+        assert assess_a["vuln_texts"] == [
+            {
+                "title": "description",
+                "content": "A flaw was found in cairo's image-compositor.c in all versions prior to 1.17.4 [...]"
+            },
+            {
+                "title": "Text A",
+                "content": "Text specific to A"
+            },
+            {  # only once for this duplicated text
+                "title": "Text Duplicated",
+                "content": "Same content for both",
+            },
+            {
+                "title": "Text Shared",
+                "content": "Content for A",
+            },
+            {
+                "title": "Text Shared",
+                "content": "Content for B",
+            },
+            {  # from the db setup
+                "content": "Some Yocto description",
+                "title": "yocto"
+            },
+        ]
+
+    def test_variant_specific(self, client):
+        resp = client.get(f"/api/assessments/review?variant_id={self.VARIANT_B}")
+        assert resp.status_code == 200
+        assessments = json.loads(resp.data)
+
+        assert isinstance(assessments, list)
+        assert len(assessments) == 1
+        assess_b, = assessments
+
+        assert assess_b["vuln_texts"] == [
+            {
+                "title": "description",
+                "content": "A flaw was found in cairo's image-compositor.c in all versions prior to 1.17.4 [...]"
+            },
+            # Text A does not leak
+            {
+                "title": "Text Duplicated",
+                "content": "Same content for both",
+            },
+            # Text Shared for A does not leak
+            {
+                "title": "Text Shared",
+                "content": "Content for B",
+            },
+        ]
+
+    def test_project_specific(self, client):
+        resp = client.get(f"/api/assessments/review?project_id={PROJECT_UUID}")
+        assert resp.status_code == 200
+        assessments = json.loads(resp.data)
+
+        assert isinstance(assessments, list)
+        assert len(assessments) == 2
+        assess_a, assess_b = assessments
+
+        assert assess_a["vuln_texts"] == assess_b["vuln_texts"]  # same vulnerability = same texts
+
+        assert assess_a["vuln_texts"] == [
+            {
+                "title": "description",
+                "content": "A flaw was found in cairo's image-compositor.c in all versions prior to 1.17.4 [...]"
+            },
+            {
+                "title": "Text A",
+                "content": "Text specific to A"
+            },
+            {  # only once for this duplicated text
+                "title": "Text Duplicated",
+                "content": "Same content for both",
+            },
+            {
+                "title": "Text Shared",
+                "content": "Content for A",
+            },
+            {
+                "title": "Text Shared",
+                "content": "Content for B",
+            },
+            {  # from the db setup
+                "content": "Some Yocto description",
+                "title": "yocto"
+            },
+        ]
 
 
 # ── GET /api/assessments (project_id path) ───────────────────────────────
@@ -643,6 +800,7 @@ def test_export_custom_data_basic(client):
     assert "vuln_id" in a
     assert "status" in a
     assert "packages" in a
+    assert "variant" in a
 
 
 def test_export_custom_data_by_variant(client):
@@ -653,7 +811,7 @@ def test_export_custom_data_by_variant(client):
     data = json.loads(resp.data)
     assert len(data["assessments"]) >= 1
     for a in data["assessments"]:
-        assert a["variant_id"] == VARIANT_UUID
+        assert a["variant_id"] == str(VARIANT_UUID)
 
 
 def test_export_custom_data_by_project(client):
@@ -696,6 +854,8 @@ def test_export_custom_data_with_cvss(client):
     data = json.loads(resp.data)
     # The CVSS entry should exist (author may vary depending on Metrics.from_cvss logic)
     assert isinstance(data["cvss"], list)
+    if data["cvss"]:
+        assert "variant" in data["cvss"][0]
 
 
 def test_export_custom_data_with_time_estimate(client):
@@ -722,6 +882,7 @@ def test_export_custom_data_with_time_estimate(client):
     assert "optimistic" in te
     assert "likely" in te
     assert "pessimistic" in te
+    assert "variant" in te
 
 
 def test_export_custom_data_filename_by_variant(client):
@@ -806,6 +967,43 @@ def test_import_custom_data_assessments(client):
     assert result["assessments_imported"] >= 1
 
 
+def test_import_custom_data_assessments_without_variant_field(client):
+    """Import remains backward compatible when variant fields are missing."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["status"] == "success"
+    assert result["assessments_imported"] >= 1
+
+
+def test_import_custom_data_assessments_with_variant_name(client):
+    """Assessment import accepts the human-readable variant name field."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+        "variant": "default",
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["status"] == "success"
+    assert result["assessments_imported"] >= 1
+
+
 def test_import_custom_data_duplicate_skipped(client):
     """Same assessment imported twice → second is skipped."""
     payload = _custom_data_payload(assessments=[{
@@ -851,10 +1049,47 @@ def test_import_custom_data_cvss(client):
     assert result["cvss_imported"] >= 1
 
 
+def test_import_custom_data_cvss_with_variant_name(client):
+    """CVSS import accepts the human-readable variant name field."""
+    payload = _custom_data_payload(cvss=[{
+        "vuln_id": "CVE-2020-35492",
+        "variant": "default",
+        "version": "3.1",
+        "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+        "base_score": 7.5,
+        "author": "custom-author",
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload, content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["cvss_imported"] >= 1
+
+
 def test_import_custom_data_time_estimates(client):
     """Import time estimates via the custom-data endpoint."""
     payload = _custom_data_payload(time_estimates=[{
         "vuln_id": "CVE-2020-35492",
+        "optimistic": "PT2H",
+        "likely": "PT4H",
+        "pessimistic": "PT8H",
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload, content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["time_estimates_imported"] >= 1
+
+
+def test_import_custom_data_time_estimates_with_variant_name(client):
+    """Time-estimate import accepts the human-readable variant name field."""
+    payload = _custom_data_payload(time_estimates=[{
+        "vuln_id": "CVE-2020-35492",
+        "variant": "default",
         "optimistic": "PT2H",
         "likely": "PT4H",
         "pessimistic": "PT8H",
@@ -908,7 +1143,7 @@ def test_import_custom_data_via_file_upload(client):
         "vuln_id": "CVE-2020-35492",
         "status": "affected",
         "packages": ["cairo@1.16.0"],
-        "variant_id": VARIANT_UUID,
+        "variant_id": str(VARIANT_UUID),
     }])
     data_bytes = json.dumps(payload).encode("utf-8")
     resp = client.post(

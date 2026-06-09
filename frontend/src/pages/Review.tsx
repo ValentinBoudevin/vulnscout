@@ -190,26 +190,17 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 const descMap: Record<string, { title: string; content: string }[]> = {};
                 for (const a of reviewData) {
                     if (a.vuln_id && !descMap[a.vuln_id] && a.vuln_texts) {
-                        const entries = Object.entries(a.vuln_texts);
-                        descMap[a.vuln_id] = entries.length > 0
-                            ? entries.map(([title, content]) => ({ title, content }))
-                            : [{ title: "description", content: "No description available" }];
+                        descMap[a.vuln_id] = a.vuln_texts || [{ title: "description", content: "No description available" }];
                     }
                 }
                 for (const te of teData) {
                     if (te.vuln_id && !descMap[te.vuln_id] && te.vuln_texts) {
-                        const entries = Object.entries(te.vuln_texts);
-                        descMap[te.vuln_id] = entries.length > 0
-                            ? entries.map(([title, content]) => ({ title, content }))
-                            : [{ title: "description", content: "No description available" }];
+                        descMap[te.vuln_id] = te.vuln_texts || [{ title: "description", content: "No description available" }];
                     }
                 }
                 for (const c of cvssData) {
                     if (c.vuln_id && !descMap[c.vuln_id] && c.vuln_texts) {
-                        const entries = Object.entries(c.vuln_texts);
-                        descMap[c.vuln_id] = entries.length > 0
-                            ? entries.map(([title, content]) => ({ title, content }))
-                            : [{ title: "description", content: "No description available" }];
+                        descMap[c.vuln_id] = c.vuln_texts || [{ title: "description", content: "No description available" }];
                     }
                 }
                 setVulnDescriptions(descMap);
@@ -729,6 +720,23 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
+        teColumnHelper.accessor("variant_id", {
+            header: () => <div className="flex items-center justify-center">Variant</div>,
+            size: 150,
+            cell: info => {
+                const variant = info.getValue();
+                if (!variant) {
+                    return <div className="flex items-center justify-center h-full"><span className="text-gray-500 italic">-</span></div>;
+                }
+                return (
+                    <div className="flex items-center justify-center h-full">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+                            {variantNames[variant] ?? variant.slice(0, 8)}
+                        </span>
+                    </div>
+                );
+            },
+        }),
         teColumnHelper.accessor("optimistic", {
             header: () => <div className="flex items-center justify-center">Optimistic (h)</div>,
             size: 120,
@@ -756,7 +764,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
-    ], [handleVulnClick]);
+    ], [handleVulnClick, variantNames]);
 
     const cvssColumns = useMemo(() => [
         cvssColumnHelper.accessor("vuln_id", {
@@ -772,6 +780,23 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <span className="font-mono text-sm">{info.getValue()}</span>
                 </div>
             ),
+        }),
+        cvssColumnHelper.accessor("variant_id", {
+            header: () => <div className="flex items-center justify-center">Variant</div>,
+            size: 150,
+            cell: info => {
+                const variant = info.getValue();
+                if (!variant) {
+                    return <div className="flex items-center justify-center h-full"><span className="text-gray-500 italic">-</span></div>;
+                }
+                return (
+                    <div className="flex items-center justify-center h-full">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+                            {variantNames[variant] ?? variant.slice(0, 8)}
+                        </span>
+                    </div>
+                );
+            },
         }),
         cvssColumnHelper.accessor("version", {
             header: () => <div className="flex items-center justify-center">CVSS Version</div>,
@@ -817,7 +842,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
-    ], [handleVulnClick]);
+    ], [handleVulnClick, variantNames]);
 
     if (loading) {
         return (
@@ -836,29 +861,6 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         return (
             <div className="text-center py-10 text-red-400">
                 <p>{error}</p>
-            </div>
-        );
-    }
-
-    const hasAnyData = assessments.length > 0 || timeEstimates.length > 0 || customCvss.length > 0;
-
-    if (!hasAnyData) {
-        return (
-            <div>
-                {showBanner && (
-                    <MessageBanner
-                        type={bannerType}
-                        message={bannerMessage}
-                        isVisible={showBanner}
-                        onClose={() => setShowBanner(false)}
-                    />
-                )}
-                <div className="text-center py-10 text-gray-400">
-                    <p className="text-lg">No custom data found</p>
-                    <p className="text-sm mt-2">
-                        Assessments, time estimates or custom CVSS scores created directly in VulnScout will appear here.
-                    </p>
-                </div>
             </div>
         );
     }
@@ -1112,7 +1114,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                             texts: vulnDescriptions[te.vuln_id] ?? [],
                         }))}
                         search={search}
-                        fuseKeys={["vuln_id"]}
+                        fuseKeys={["vuln_id", "variant_id"]}
                         estimateRowHeight={50}
                         hasPagination={true}
                         hoverField="texts"
@@ -1137,7 +1139,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                             texts: vulnDescriptions[c.vuln_id] ?? [],
                         }))}
                         search={search}
-                        fuseKeys={["vuln_id", "vector_string", "author"]}
+                        fuseKeys={["vuln_id", "variant_id", "vector_string", "author"]}
                         estimateRowHeight={50}
                         hasPagination={true}
                         hoverField="texts"

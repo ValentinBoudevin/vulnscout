@@ -2,6 +2,39 @@
 
 import datetime
 
+from ..models import Metrics
+
+
+def apply_cvss_update(rec, details: dict, db) -> None:
+    """Upsert the CVSS Metrics row for *rec* from NVD *details* (in-place, no commit).
+
+    *db* must be the SQLAlchemy extension instance (passed in to keep this module
+    free of Flask extension imports at load time).
+    """
+    base_score = details.get("base_score")
+    cvss_version = details.get("cvss_version")
+    cvss_vector = details.get("cvss_vector")
+    if base_score is None or cvss_version is None:
+        return
+    existing = db.session.execute(
+        db.select(Metrics).where(
+            Metrics.vulnerability_id == rec.id,
+            Metrics.version == cvss_version,
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if float(existing.score or 0) != float(base_score) or existing.vector != cvss_vector:
+            existing.score = base_score
+            existing.vector = cvss_vector or existing.vector
+    else:
+        db.session.add(Metrics(
+            vulnerability_id=rec.id,
+            version=cvss_version,
+            score=base_score,
+            vector=cvss_vector or "",
+            author="nvd",
+        ))
+
 
 def apply_nvd_update(vuln_record, details: dict, now: datetime.datetime) -> bool:
     """Compare NVD *details* against *vuln_record* and update in place if different.

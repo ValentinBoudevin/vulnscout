@@ -4,9 +4,9 @@ import type { Assessment } from "../handlers/assessments";
 import type { NVDProgress } from "../handlers/nvd_progress";
 import type { EPSSProgress } from "../handlers/epss_progress";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
-import { useMemo, useState, useEffect, useCallback, useRef } from "react";
+import React, { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import SeverityTag from "../components/SeverityTag";
-import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
+import { SEVERITY_ORDER, getStatusSortIndex, getTopStatusSummaryLabel, getVulnerabilityStatusSummary } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
 import VulnModal from "../components/VulnModal";
 import MultiEditBar from "../components/MultiEditBar";
@@ -19,6 +19,57 @@ import { formatPkgId } from "../helpers/pkgId";
 import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
 import EPSSProgressHandler from "../handlers/epss_progress";
+
+/**
+ * Shared hook for NVD/EPSS progress banner logic.
+ * Detects in-progress updates and phase transitions (completed/cancelled),
+ * updates the banner accordingly, and calls onRefreshComplete when done.
+ */
+function useRefreshProgressEffect(
+    progress: { in_progress: boolean; phase?: string; current: number; total: number } | null,
+    label: string,
+    prevInProgress: React.MutableRefObject<boolean | null>,
+    prevPhase: React.MutableRefObject<string | null>,
+    setBannerMessage: (msg: string) => void,
+    setBannerType: (type: 'error' | 'success') => void,
+    setBannerVisible: (visible: boolean) => void,
+    onRefreshComplete?: () => void,
+) {
+    useEffect(() => {
+        const inProgress = progress?.in_progress ?? false;
+        const phase = progress?.phase;
+        const justCompleted = prevPhase.current !== null && (
+            prevInProgress.current === true ||
+            (prevPhase.current !== 'completed' &&
+             prevPhase.current !== 'cancelled' &&
+             (phase === 'completed' || phase === 'cancelled')));
+        if (inProgress) {
+            if (progress && progress.total > 0 && progress.current > 0) {
+                setBannerMessage(`${label} refresh in progress: ${progress.current}/${progress.total}`);
+                setBannerType('success');
+                setBannerVisible(true);
+            }
+        } else if (justCompleted) {
+            onRefreshComplete?.();
+            if (phase === 'cancelled') {
+                const current = progress?.current ?? 0;
+                const total = progress?.total ?? 0;
+                setBannerMessage(`${label} refresh cancelled${current > 0 ? ` (${current}/${total} CVEs)` : ''}`);
+                setBannerType('error');
+            } else {
+                const total = progress?.total ?? 0;
+                setBannerMessage(`${label} refresh complete${total > 0 ? ` (${total} CVEs)` : ''}`);
+                setBannerType('success');
+            }
+            setBannerVisible(true);
+        }
+        if (progress !== null) {
+            prevInProgress.current = inProgress;
+            prevPhase.current = phase ?? 'idle';
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [progress, onRefreshComplete]);
+}
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTimes, faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
 import RangeSlider from "../components/RangeSlider";
@@ -36,6 +87,8 @@ type Props = {
     baseVariantId?: string;
     /** 'difference' or 'intersection' when compare mode is active */
     compareOperation?: string;
+    /** Called when an NVD or EPSS bulk refresh completes, so the parent can reload data */
+    onRefreshComplete?: () => void;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -60,9 +113,20 @@ const sortSeverityByScoreFn: SortingFn<Vulnerability> = (rowA, rowB) => {
 }
 
 const sortStatusFn: SortingFn<Vulnerability> = (rowA, rowB) => {
-    const indexA = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowA.original.simplified_status)
-    const indexB = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowB.original.simplified_status)
-    return indexA - indexB
+    const summaryA = getVulnerabilityStatusSummary(rowA.original);
+    const summaryB = getVulnerabilityStatusSummary(rowB.original);
+    const statusA = summaryA.dominant_status;
+    const statusB = summaryB.dominant_status;
+    const indexA = getStatusSortIndex(statusA);
+    const indexB = getStatusSortIndex(statusB);
+
+    if (indexA !== indexB) return indexA - indexB;
+
+    const dominantCountA = summaryA.counts[statusA] || 0;
+    const dominantCountB = summaryB.counts[statusB] || 0;
+    if (dominantCountA !== dominantCountB) return dominantCountA - dominantCountB;
+
+    return rowA.original.id.localeCompare(rowB.original.id);
 }
 
 const sortAttackVectorFn: SortingFn<Vulnerability> = (rowA, rowB) => {
@@ -273,7 +337,7 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, onRefreshComplete }: Readonly<Props>) {
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
@@ -298,7 +362,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
-        'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated', 'Published Date'
+        'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated'
     ]);
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
@@ -310,6 +374,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [selectedFirstScanDates, setSelectedFirstScanDates] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
+    const [showStatusHelper, setShowStatusHelper] = useState(false);
     const [showMoreFilters, setShowMoreFilters] = useState(false);
 
     const searchInputRef = useRef<HTMLInputElement>(null);
@@ -317,7 +382,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
     const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
     const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
+    const statusHelperButtonRef = useRef<HTMLButtonElement>(null);
+    const statusHelperDropdownRef = useRef<HTMLDivElement>(null);
     const moreFiltersRef = useRef<HTMLDivElement>(null);
+    const prevNvdInProgress = useRef<boolean | null>(null);
+    const prevNvdPhase = useRef<string | null>(null);
+    const prevEpssInProgress = useRef<boolean | null>(null);
+    const prevEpssPhase = useRef<string | null>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -342,6 +413,20 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         if (filterLabel === "Status") setSelectedStatuses([filterValue]);
         if (filterLabel === "Package") setSelectedPackages([filterValue]);
     }, [filterLabel, filterValue]);
+
+    // Update banner with live NVD/EPSS progress; reload data when each refresh completes
+    useRefreshProgressEffect(
+        nvdProgress, 'NVD',
+        prevNvdInProgress, prevNvdPhase,
+        setBannerMessage, setBannerType, setBannerVisible,
+        onRefreshComplete,
+    );
+    useRefreshProgressEffect(
+        epssProgress, 'EPSS',
+        prevEpssInProgress, prevEpssPhase,
+        setBannerMessage, setBannerType, setBannerVisible,
+        onRefreshComplete,
+    );
 
     // Fetch NVD progress on mount and periodically
     useEffect(() => {
@@ -617,10 +702,51 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             }),
             columnHelper.accessor('simplified_status', {
             id: 'simplified_status',
-            header: () => <div className="flex items-center justify-center">Status</div>,
-            cell: info => <div className="flex items-center justify-center h-full text-center"><code>{info.renderValue()}</code></div>,
+            header: () => (
+                <div className="relative flex items-center justify-center gap-1">
+                    <span>Status</span>
+                    <button
+                        ref={statusHelperButtonRef}
+                        type="button"
+                        aria-label="status summary helper"
+                        className="text-sky-300 hover:text-sky-100 transition-colors"
+                        onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setShowStatusHelper(!showStatusHelper);
+                        }}
+                    >
+                        <FontAwesomeIcon icon={faCircleQuestion} />
+                    </button>
+                    {showStatusHelper && (
+                        <div
+                            ref={statusHelperDropdownRef}
+                            className="absolute top-full mt-1 right-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-3 z-50 w-[360px] text-sm text-left"
+                            onClick={(event) => event.stopPropagation()}
+                        >
+                            <h3 className="font-bold text-white mb-2">Status Summary</h3>
+                            <div className="space-y-1 text-gray-100">
+                                <p>Status aggregates all assessment outcomes for the vulnerability in the current scope.</p>
+                                <p>Scope follows your active project, variant, and compare selection.</p>
+                                <p>Display shows top outcomes, for example: Exploitable, Pending Assessment.</p>
+                                <p>Filtering matches vulnerabilities when any selected status is present in the summary.</p>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            ),
+            cell: info => {
+                const summary = getVulnerabilityStatusSummary(info.row.original);
+                const label = getTopStatusSummaryLabel(summary);
+                const details = summary.ordered.map(entry => entry.status).join(', ');
+                return (
+                    <div className="flex items-center justify-center h-full text-center" title={details}>
+                        <code>{label}</code>
+                    </div>
+                );
+            },
             sortingFn: sortStatusFn,
-            size: 130
+            size: 220
             }),
             columnHelper.accessor('effort.likely', {
             id: 'effort.likely',
@@ -695,7 +821,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     return <div className="flex items-center justify-center h-full text-center"><span className="text-xs text-gray-500 italic">fetching…</span></div>;
                 }
                 if (!published) {
-                    return <div className="flex items-center justify-center h-full text-center text-gray-400">Unknown</div>;
+                    return <div className="flex items-center justify-center h-full text-center text-gray-400">Requires a NVD refresh</div>;
                 }
                 const publishedDate = new Date(published);
                 const formattedDate = publishedDate.toLocaleDateString(undefined, {
@@ -853,7 +979,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 size: 20
             })
         ]
-    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange, nvdProgress, epssProgress]);
+    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange, nvdProgress, epssProgress, showStatusHelper]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
@@ -867,7 +993,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const dataToDisplay = useMemo(() => {
         return vulnerabilities.filter((el) => {
             if (selectedSeverities.length && !selectedSeverities.includes(el.severity.severity)) return false;
-            if (selectedStatuses.length && !selectedStatuses.includes(el.simplified_status)) return false;
+            if (selectedStatuses.length) {
+                const summary = getVulnerabilityStatusSummary(el);
+                const statusKeys = new Set(Object.keys(summary.counts));
+                if (!selectedStatuses.some(status => statusKeys.has(status))) return false;
+            }
             if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
             if (selectedPackages.length && !selectedPackages.some(pkg => el.packages_current.includes(pkg))) return false;
 
@@ -967,6 +1097,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
     }, [selectedRows])
 
+    const availableStatuses = useMemo(() => {
+        const statuses = new Set<string>();
+        vulnerabilities.forEach(vuln => {
+            const summary = getVulnerabilityStatusSummary(vuln);
+            Object.keys(summary.counts).forEach(status => statuses.add(status));
+        });
+        return Array.from(statuses).sort((a, b) => getStatusSortIndex(a) - getStatusSortIndex(b));
+    }, [vulnerabilities]);
+
     const handleModalNavigation = (newIndex: number) => {
         if (newIndex >= 0 && newIndex < modalVulnSnapshot.length) {
             setModalVuln(modalVulnSnapshot[newIndex]);
@@ -986,7 +1125,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setPublishedDateFrom('');
         setPublishedDateTo('');
         setSelectedRows({});
-        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated', 'Published Date']);
+        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated']);
         setShowCustomSeverityFilter(false);
         setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
         setShowCustomEpssFilter(false);
@@ -1055,16 +1194,24 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             ) {
                 setShowSearchHelper(false);
             }
+            if (
+                statusHelperDropdownRef.current &&
+                statusHelperButtonRef.current &&
+                !statusHelperDropdownRef.current.contains(event.target as Node) &&
+                !statusHelperButtonRef.current.contains(event.target as Node)
+            ) {
+                setShowStatusHelper(false);
+            }
         };
 
-        if (showShortcutHelper || showSearchHelper) {
+        if (showShortcutHelper || showSearchHelper || showStatusHelper) {
             document.addEventListener('mousedown', handleClickOutside);
         }
 
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
-    }, [showShortcutHelper, showSearchHelper]);
+    }, [showShortcutHelper, showSearchHelper, showStatusHelper]);
 
     // Close "More Filters" on click outside
     useEffect(() => {
@@ -1179,7 +1326,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
             <FilterOption
                 label="Status"
-                options={Array.from(new Set(vulnerabilities.map(v => v.simplified_status)))}
+                options={availableStatuses}
                 selected={selectedStatuses}
                 setSelected={setSelectedStatuses}
             />
@@ -1385,6 +1532,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             variantId={variantId}
             baseVariantId={baseVariantId}
             compareOperation={compareOperation}
+            nvdProgress={nvdProgress}
+            epssProgress={epssProgress}
         />
 
         <TableGeneric

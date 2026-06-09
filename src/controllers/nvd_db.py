@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import json
+import os
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -22,11 +23,13 @@ class NVD_DB(BaseAPIClient):
 
     def __init__(self, nvd_api_key: Optional[str] = None):
         super().__init__()
-        self.nvd_api_key = nvd_api_key or None
+        api_key = nvd_api_key if nvd_api_key is not None else os.getenv("NVD_API_KEY")
+        self.nvd_api_key = api_key or None
 
-    def _call_nvd_api(self, params: dict | None = None) -> Tuple[int, dict]:
+    def _call_nvd_api(self, params: dict | None = None) -> Tuple[int, dict, dict[str, str]]:
         """
-        Call the NVD API and return the status code as int and response as a dictionary.
+        Call the NVD API and return status, JSON body, and response headers.
+        Header names are normalized to lower-case for case-insensitive lookup.
         """
         if params is None:
             params = {}
@@ -45,6 +48,7 @@ class NVD_DB(BaseAPIClient):
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=30) as response:
                 resp_status = response.status
+                resp_headers = {k.lower(): v for k, v in response.headers.items()}
                 raw = response.read()
 
             verbose(f"[NVD API] status={resp_status} body_len={len(raw)}")
@@ -59,12 +63,18 @@ class NVD_DB(BaseAPIClient):
                 )
                 resp_json = {}
 
-            return resp_status, resp_json
+            return resp_status, resp_json, resp_headers
 
         except urllib.error.HTTPError as e:
             body_preview = b""
+            resp_headers = {}
             try:
                 body_preview = e.read(200)
+            except Exception:
+                pass
+            try:
+                if e.headers:
+                    resp_headers = {k.lower(): v for k, v in e.headers.items()}
             except Exception:
                 pass
             if e.code not in {429}:  # 429 = rate-limited, expected under load
@@ -73,7 +83,7 @@ class NVD_DB(BaseAPIClient):
                     f"Body preview: {body_preview!r}",
                     flush=True,
                 )
-            return e.code, {}
+            return e.code, {}, resp_headers
         except Exception as e:
             print(f"Error calling NVD API: {e}", flush=True)
             raise e
@@ -90,18 +100,14 @@ class NVD_DB(BaseAPIClient):
         status = 0
         while retry <= max_retries:
             time.sleep(10 * retry)
-            status, data = self._call_nvd_api({"cveId": cve_id.strip()})
+            status, data, _ = self._call_nvd_api({"cveId": cve_id.strip()})
             if status == 200:
                 return status, data
             elif status in self._NON_RETRYABLE_STATUSES:
                 return status, data
             else:
                 retry += 1
-        raise ConnectionError(
-            f"Failed to call NVD API after 3 retries (status: {status}, cveId: {cve_id}).\n"
-            "Providing an NVD API key may help prevent this error.\n"
-            "If the issue persists after adding the API key, it may have been invalidated."
-        )
+        return status, data
 
     def api_get_cves_by_cpe(
         self,
@@ -138,7 +144,7 @@ class NVD_DB(BaseAPIClient):
                     "virtualMatchString" if use_virtual_match
                     else "cpeName"
                 )
-                status, data = self._call_nvd_api({
+                status, data, _ = self._call_nvd_api({
                     param_key: cpe_name,
                     "startIndex": start_index,
                     "resultsPerPage": results_per_page,
@@ -158,6 +164,10 @@ class NVD_DB(BaseAPIClient):
             if start_index >= total:
                 break
         return all_vulns
+
+    def api_probe_cve(self, cve_id: str) -> Tuple[int, dict, dict[str, str]]:
+        """Single direct probe call used by settings key validation."""
+        return self._call_nvd_api({"cveId": cve_id.strip()})
 
     def api_weaknesses_to_list_str(self, weaknesses: list) -> list[str]:
         """
@@ -325,9 +335,6 @@ class NVD_DB(BaseAPIClient):
                     if "references" in cve else []
                 ),
             }
-        except ConnectionError:
-            print(f"NVD API unavailable for {cve_id}, skipping enrichment.", flush=True)
-            return None
         except Exception as e:
             print(f"Error fetching NVD data for {cve_id}: {e}", flush=True)
             return None

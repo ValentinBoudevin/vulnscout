@@ -26,6 +26,7 @@ class MetricsController:
         return {
             "id": str(metrics.id),
             "vulnerability_id": metrics.vulnerability_id,
+            "variant_id": str(metrics.variant_id) if metrics.variant_id is not None else None,
             "version": metrics.version,
             "score": float(metrics.score) if metrics.score is not None else None,
             "vector": metrics.vector,
@@ -52,6 +53,19 @@ class MetricsController:
         """Return all metrics for the given vulnerability id."""
         return Metrics.get_by_vulnerability(vulnerability_id)
 
+    @staticmethod
+    def get_by_vulnerability_and_variant(
+        vulnerability_id: str,
+        variant_id: uuid.UUID | str,
+        include_unscoped: bool = True,
+    ) -> list[Metrics]:
+        """Return metrics for the given vulnerability and variant."""
+        return Metrics.get_by_vulnerability_and_variant(
+            vulnerability_id,
+            ensure_uuid(variant_id),
+            include_unscoped,
+        )
+
     # ------------------------------------------------------------------
     # Mutations
     # ------------------------------------------------------------------
@@ -59,6 +73,7 @@ class MetricsController:
     @staticmethod
     def create(
         vulnerability_id: str,
+        variant_id: uuid.UUID | str | None = None,
         version: Optional[str] = None,
         score: Optional[float] = None,
         vector: Optional[str] = None,
@@ -70,8 +85,10 @@ class MetricsController:
         :raises ValueError: if *vulnerability_id* is empty or blank.
         """
         vulnerability_id = validate_non_empty(vulnerability_id, "Vulnerability id")
+        normalized_variant_id = ensure_uuid(variant_id) if variant_id is not None else None
         return Metrics.create(
             vulnerability_id=vulnerability_id,
+            variant_id=normalized_variant_id,
             version=version,
             score=score,
             vector=vector,
