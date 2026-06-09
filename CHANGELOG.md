@@ -10,6 +10,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.16.0] - 2026-06-09
+
+### Added
+- Vulnerabilities: store and display Grype fix state; show extra SBOM texts in vuln modal and review page.
+- NVD/EPSS: bulk refresh with progress tracking and cancel support; combined per-CVE refresh button in VulnModal; per-CVE EPSS endpoint.
+- Settings: NVD API key field with validation and persistence; new metadata fields.
+- Variants: scope custom CVSS and time estimates per variant; variant columns in review tables; include variants in custom data export/import.
+- Reports: allow lone boolean elements.
+
+### Changed
+- Status: redesign summary to group by variant/package (render top outcomes), add help tooltip.
+- Refactor: replace `Vulnerability.texts` with new `SBOMObservation` model; update templates and review list accordingly.
+- Config: add file lock, new settings fields per environment variable (NVD API key, author, ...),full field validation and rollback on partial failure .
+- Metrics: responsive frontend; variant-scoped metrics and effort handling.
+- Remove deprecated caching system and NVD enrichment.
+- Yocto: normalize CVE check format via migration; refactor source name mappings.
+- Accessibility: add ARIA roles for explorer, main content, and settings.
+- Hide published date by default.
+- Dockerfile: prevent dev API URL from leaking.
+
+### Fixed
+- Templates: replace `vuln.texts` with `vuln.description`.
+- Assessments review: scope displayed texts to selected variant/project.
+- UI: file input not cleared after upload, review heading shown when no data, supplier tooltip hidden when unknown.
+
+---
+
 ## [0.15.0] - 2026-05-26
 
 ### Added
