@@ -117,9 +117,9 @@ describe('asAssessment optional fields', () => {
   });
 
   test('sets vuln_texts when object and not null', () => {
-    const data = { id: '5', vuln_id: 'CVE-C', status: 'fixed', timestamp: '2024-07-01T00:00:00', packages: [], responses: [], vuln_texts: { key: 'val' } };
+    const data = { id: '5', vuln_id: 'CVE-C', status: 'fixed', timestamp: '2024-07-01T00:00:00', packages: [], responses: [], vuln_texts: [{ title: 'val' }] };
     const assessed = asAssessment(data as any) as any;
-    expect(assessed.vuln_texts).toEqual({ key: 'val' });
+    expect(assessed.vuln_texts).toEqual([{ title: 'val' }]);
   });
 
   test('ignores null vuln_texts', () => {
