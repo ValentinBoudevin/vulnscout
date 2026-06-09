@@ -192,7 +192,7 @@ do_start() {
             -v "$VULNSCOUT_CACHE_DIR:/mnt/cache" \
             -v "$VULNSCOUT_OUTPUTS_DIR:/mnt/outputs" \
             "$DOCKER_IMAGE" \
-            -c "rm -rf /mnt/cache/config.env; chown -R ${uid}:${gid} /mnt/cache /mnt/outputs" \
+            -c "[ -f /mnt/cache/config.env ] && [ \"\$(stat -c %u /mnt/cache/config.env)\" = '0' ] && rm -f /mnt/cache/config.env; chown -R ${uid}:${gid} /mnt/cache /mnt/outputs" \
             2>/dev/null || true
     fi
     if [ ! -f "$VULNSCOUT_CONFIG_FILE" ]; then
