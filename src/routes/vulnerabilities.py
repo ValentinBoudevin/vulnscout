@@ -880,6 +880,7 @@ def init_app(app):
                 db.select(Metrics).where(
                     Metrics.vulnerability_id == rec.id,
                     Metrics.version == cvss_version,
+                    Metrics.variant_id.is_(None),
                 )
             ).scalar_one_or_none()
             if existing is not None:
