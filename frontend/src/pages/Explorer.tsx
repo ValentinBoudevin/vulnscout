@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import NavigationBar from "../components/NavigationBar";
 import MessageBanner from "../components/MessageBanner";
 import VersionDisplay from "../components/VersionDisplay";
@@ -38,6 +38,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [selectorKey, setSelectorKey] = useState(0);
     const [pkgs, setPkgs] = useState<Package[]>([]);
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
+    const vulnsRef = useRef<Vulnerability[]>([]);
     const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | "Package" | undefined>(undefined);
     const [filterValue, setFilterValue] = useState<string | undefined>(undefined);
     const [bannerMessage, setBannerMessage] = useState<string>('');
@@ -156,17 +157,19 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         return null;
     }
 
+    // Keep vulnsRef in sync when vulns state is updated externally
+    // (e.g. after loadData or appendAssessment).
+    useEffect(() => { vulnsRef.current = vulns; }, [vulns]);
+
     function patchVuln(vulnId: string, replace_vuln: Vulnerability) {
-        const updatedVulns = vulns.map(vuln => {
-            if (vuln.id === vulnId) {
-                return replace_vuln;
-            }
-            return vuln;
-        });
-        setVulns(updatedVulns);
+        // Update the ref immediately so the next synchronous call to patchVuln
+        // (for a different CVE in the same multi-edit batch) reads the already-
+        // patched list rather than the stale closure value.
+        vulnsRef.current = vulnsRef.current.map(v => v.id === vulnId ? replace_vuln : v);
+        setVulns(vulnsRef.current);
 
         // Update packages with the new vulnerability data
-        setPkgs(Packages.enrich_with_vulns(pkgs, updatedVulns));
+        setPkgs(Packages.enrich_with_vulns(pkgs, vulnsRef.current));
     }
 
     // Update vulns state in-place after a Review tab edit or delete

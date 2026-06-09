@@ -252,24 +252,31 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
             const data = await response.json().catch(() => ({}));
 
             if (data?.status === 'success' && Array.isArray(data?.assessments)) {
-                // Process successful assessments
+                // Group new assessments by vuln_id so we call patchVuln exactly
+                // once per distinct vuln.  Calling it once-per-assessment caused
+                // React to batch the setVulns calls and only keep the last one,
+                // leaving all other CVEs unchanged.
+                const newAssessmentsByVuln = new Map<string, Assessment[]>();
                 for (const assessmentData of data.assessments) {
                     const casted = asAssessment(assessmentData);
                     if (!Array.isArray(casted) && typeof casted === "object") {
                         appendAssessment(casted);
-
-                        // Update the vulnerability
-                        const vuln = vulnerabilities.find(v => v.id === casted.vuln_id);
-                        if (vuln) {
-                            const updatedAssessments = [...vuln.assessments, casted];
-                            const statusSummary = buildStatusSummary(updatedAssessments);
-                            patchVuln(casted.vuln_id, {
-                                ...vuln,
-                                assessments: updatedAssessments,
-                                simplified_status: statusSummary.dominant_status,
-                                status_summary: statusSummary,
-                            });
-                        }
+                        const list = newAssessmentsByVuln.get(casted.vuln_id) ?? [];
+                        list.push(casted);
+                        newAssessmentsByVuln.set(casted.vuln_id, list);
+                    }
+                }
+                for (const [vuln_id, newAssessments] of newAssessmentsByVuln.entries()) {
+                    const vuln = vulnerabilities.find(v => v.id === vuln_id);
+                    if (vuln) {
+                        const updatedAssessments = [...vuln.assessments, ...newAssessments];
+                        const statusSummary = buildStatusSummary(updatedAssessments);
+                        patchVuln(vuln_id, {
+                            ...vuln,
+                            assessments: updatedAssessments,
+                            simplified_status: statusSummary.dominant_status,
+                            status_summary: statusSummary,
+                        });
                     }
                 }
 
