@@ -991,7 +991,7 @@ class TestBulkGhsaRefreshBackground:
         call_kwargs = mock_rec.update_record.call_args.kwargs
         assert call_kwargs.get("commit") is False
         assert call_kwargs.get("publish_date") is not None
-        assert call_kwargs.get("nvd_fetched_at") is not None
+        assert call_kwargs.get("ghsa_fetched_at") is not None
 
     def test_run_skips_update_when_published_at_is_none(self, client):
         target = self._capture_target(client, ["GHSA-R7JW-VC2X-4GBH"])

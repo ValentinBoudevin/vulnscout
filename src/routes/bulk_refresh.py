@@ -306,7 +306,7 @@ def init_app(app):
                                         publish_date = None
                                     rec.update_record(
                                         publish_date=publish_date,
-                                        nvd_fetched_at=now,
+                                        ghsa_fetched_at=now,
                                         commit=False,
                                     )
                         except Exception as exc:

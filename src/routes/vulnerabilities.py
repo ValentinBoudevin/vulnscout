@@ -1097,7 +1097,7 @@ def init_app(app):
             return jsonify({"error": "GitHub Advisory Database returned an unparseable date"}), 503
         rec.update_record(
             publish_date=publish_date_dt,
-            nvd_fetched_at=now,
+            ghsa_fetched_at=now,
             commit=False,
         )
         db.session.commit()

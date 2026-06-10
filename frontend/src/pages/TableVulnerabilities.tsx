@@ -591,6 +591,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         'first_scan_date': 'First Scan Date',
         'nvd_fetched_at': 'NVD Fetched',
         'nvd_data_updated_at': 'NVD Updated',
+        'ghsa_fetched_at': 'GHSA Fetched',
         'found_by': 'Sources',
         'actions': 'Actions'
     }), []);
@@ -949,6 +950,32 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             sortingFn: (rowA, rowB) => {
                 const a = rowA.original.nvd_data_updated_at ? new Date(rowA.original.nvd_data_updated_at).getTime() : 0;
                 const b = rowB.original.nvd_data_updated_at ? new Date(rowB.original.nvd_data_updated_at).getTime() : 0;
+                return a - b;
+            },
+            size: 130
+            }),
+            columnHelper.accessor('ghsa_fetched_at', {
+            id: 'ghsa_fetched_at',
+            header: () => <div className="flex items-center justify-center">GHSA Fetched</div>,
+            cell: info => {
+                const val = info.getValue();
+                if (!val) return <div className="flex items-center justify-center h-full text-center text-gray-400">Never</div>;
+                const date = new Date(val);
+                const formattedDate = date.toLocaleDateString(undefined, {
+                    year: 'numeric',
+                    month: 'short',
+                    day: '2-digit',
+                }) + ' ' + date.toLocaleTimeString(undefined, {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    timeZoneName: 'short',
+                });
+                return <div className="flex items-center justify-center h-full text-center text-sm">{formattedDate}</div>;
+            },
+            enableSorting: true,
+            sortingFn: (rowA, rowB) => {
+                const a = rowA.original.ghsa_fetched_at ? new Date(rowA.original.ghsa_fetched_at).getTime() : 0;
+                const b = rowB.original.ghsa_fetched_at ? new Date(rowB.original.ghsa_fetched_at).getTime() : 0;
                 return a - b;
             },
             size: 130
@@ -1315,6 +1342,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     'First Scan Date',
                     'NVD Fetched',
                     'NVD Updated',
+                    'GHSA Fetched',
                     'Sources'
                 ]}
                 selected={visibleColumns}

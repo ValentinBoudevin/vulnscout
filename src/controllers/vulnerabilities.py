@@ -568,7 +568,7 @@ class VulnerabilitiesController:
                                 if rec is not None:
                                     rec.update_record(
                                         publish_date=publish_date,
-                                        nvd_fetched_at=datetime.datetime.utcnow(),
+                                        ghsa_fetched_at=datetime.datetime.utcnow(),
                                         commit=False,
                                     )
                             except Exception as e:
