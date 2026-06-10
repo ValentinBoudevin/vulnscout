@@ -19,7 +19,7 @@ type Props = {
     resetVulns: () => void;
     appendAssessment: (added: Assessment) => void;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
-    triggerBanner: (message: string, type: 'error' | 'success') => void;
+    triggerBanner: (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa') => void;
     hideBanner: () => void;
     variantId?: string;
     /** Origin variant when compare mode is active */
@@ -122,25 +122,25 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         if (selectedRefreshTypes.has('nvd') && !nvdInProgress) {
             promises.push(
                 BulkNvdRefreshHandler.trigger(selectedVulns).then(res => {
-                    if (res) triggerBanner(`NVD refresh started for ${res.total} CVE(s)`, 'success');
-                    else triggerBanner('Failed to start NVD refresh', 'error');
-                }).catch(() => triggerBanner('Failed to start NVD refresh', 'error'))
+                    if (res) triggerBanner(`NVD refresh started for ${res.total} CVE(s)`, 'success', 'nvd');
+                    else triggerBanner('Failed to start NVD refresh', 'error', 'nvd');
+                }).catch(() => triggerBanner('Failed to start NVD refresh', 'error', 'nvd'))
             );
         }
         if (selectedRefreshTypes.has('epss') && !epssInProgress) {
             promises.push(
                 BulkEpssRefreshHandler.trigger(selectedVulns).then(res => {
-                    if (res) triggerBanner(`EPSS refresh started for ${res.total} CVE(s)`, 'success');
-                    else triggerBanner('Failed to start EPSS refresh', 'error');
-                }).catch(() => triggerBanner('Failed to start EPSS refresh', 'error'))
+                    if (res) triggerBanner(`EPSS refresh started for ${res.total} CVE(s)`, 'success', 'epss');
+                    else triggerBanner('Failed to start EPSS refresh', 'error', 'epss');
+                }).catch(() => triggerBanner('Failed to start EPSS refresh', 'error', 'epss'))
             );
         }
         if (selectedRefreshTypes.has('ghsa') && !ghsaInProgress && selectedGhsaIds.length > 0) {
             promises.push(
                 BulkGhsaRefreshHandler.trigger(selectedGhsaIds).then(res => {
-                    if (res) triggerBanner(`GHSA refresh started for ${res.total} GHSA(s)`, 'success');
-                    else triggerBanner('Failed to start GHSA refresh', 'error');
-                }).catch(() => triggerBanner('Failed to start GHSA refresh', 'error'))
+                    if (res) triggerBanner(`GHSA refresh started for ${res.total} GHSA(s)`, 'success', 'ghsa');
+                    else triggerBanner('Failed to start GHSA refresh', 'error', 'ghsa');
+                }).catch(() => triggerBanner('Failed to start GHSA refresh', 'error', 'ghsa'))
             );
         }
         if (promises.length > 0) setRefreshMenuOpen(false);
@@ -483,9 +483,9 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                                 onClick={() => {
                                                     setNvdCancelling(true);
                                                     BulkNvdRefreshCancelHandler.trigger().then(res => {
-                                                        if (res) triggerBanner('NVD refresh cancellation requested', 'success');
-                                                        else { setNvdCancelling(false); triggerBanner('Failed to cancel NVD refresh', 'error'); }
-                                                    }).catch(() => { setNvdCancelling(false); triggerBanner('Failed to cancel NVD refresh', 'error'); });
+                                                        if (res) triggerBanner('NVD refresh cancellation requested', 'success', 'nvd');
+                                                        else { setNvdCancelling(false); triggerBanner('Failed to cancel NVD refresh', 'error', 'nvd'); }
+                                                    }).catch(() => { setNvdCancelling(false); triggerBanner('Failed to cancel NVD refresh', 'error', 'nvd'); });
                                                 }}
                                             >{nvdCancelling ? 'Cancelling…' : 'Cancel'}</button>
                                         )}
@@ -516,9 +516,9 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                                 onClick={() => {
                                                     setEpssCancelling(true);
                                                     BulkEpssRefreshCancelHandler.trigger().then(res => {
-                                                        if (res) triggerBanner('EPSS refresh cancellation requested', 'success');
-                                                        else { setEpssCancelling(false); triggerBanner('Failed to cancel EPSS refresh', 'error'); }
-                                                    }).catch(() => { setEpssCancelling(false); triggerBanner('Failed to cancel EPSS refresh', 'error'); });
+                                                        if (res) triggerBanner('EPSS refresh cancellation requested', 'success', 'epss');
+                                                        else { setEpssCancelling(false); triggerBanner('Failed to cancel EPSS refresh', 'error', 'epss'); }
+                                                    }).catch(() => { setEpssCancelling(false); triggerBanner('Failed to cancel EPSS refresh', 'error', 'epss'); });
                                                 }}
                                             >{epssCancelling ? 'Cancelling…' : 'Cancel'}</button>
                                         )}
@@ -552,9 +552,9 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                                 onClick={() => {
                                                     setGhsaCancelling(true);
                                                     BulkGhsaRefreshCancelHandler.trigger().then(res => {
-                                                        if (res) triggerBanner('GHSA refresh cancellation requested', 'success');
-                                                        else { setGhsaCancelling(false); triggerBanner('Failed to cancel GHSA refresh', 'error'); }
-                                                    }).catch(() => { setGhsaCancelling(false); triggerBanner('Failed to cancel GHSA refresh', 'error'); });
+                                                        if (res) triggerBanner('GHSA refresh cancellation requested', 'success', 'ghsa');
+                                                        else { setGhsaCancelling(false); triggerBanner('Failed to cancel GHSA refresh', 'error', 'ghsa'); }
+                                                    }).catch(() => { setGhsaCancelling(false); triggerBanner('Failed to cancel GHSA refresh', 'error', 'ghsa'); });
                                                 }}
                                             >{ghsaCancelling ? 'Cancelling…' : 'Cancel'}</button>
                                         )}

@@ -22,52 +22,47 @@ import EPSSProgressHandler from "../handlers/epss_progress";
 import GHSAProgressHandler from "../handlers/ghsa_progress";
 import type { GHSAProgress } from "../handlers/ghsa_progress";
 
-/**
- * Shared hook for NVD/EPSS progress banner logic.
- * Detects in-progress updates and phase transitions (completed/cancelled),
- * updates the banner accordingly, and calls onRefreshComplete when done.
- */
+type SourceBanner = { message: string; type: 'error' | 'success' } | null;
+
 function useRefreshProgressEffect(
-    progress: { in_progress: boolean; phase?: string; current: number; total: number } | null,
+    progress: { in_progress: boolean; phase?: string; current: number; total: number; started_at?: string } | null,
     label: string,
     prevInProgress: React.MutableRefObject<boolean | null>,
     prevPhase: React.MutableRefObject<string | null>,
-    setBannerMessage: (msg: string) => void,
-    setBannerType: (type: 'error' | 'success') => void,
-    setBannerVisible: (visible: boolean) => void,
+    prevStartedAt: React.MutableRefObject<string | null>,
+    setSourceBanner: (state: SourceBanner) => void,
     onRefreshComplete?: () => void,
 ) {
     useEffect(() => {
         const inProgress = progress?.in_progress ?? false;
         const phase = progress?.phase;
+        const startedAt = progress?.started_at ?? null;
+        const freshCycle = startedAt !== null && startedAt !== prevStartedAt.current;
         const justCompleted = prevPhase.current !== null && (
             prevInProgress.current === true ||
             (prevPhase.current !== 'completed' &&
              prevPhase.current !== 'cancelled' &&
-             (phase === 'completed' || phase === 'cancelled')));
+             (phase === 'completed' || phase === 'cancelled')) ||
+            (freshCycle && (phase === 'completed' || phase === 'cancelled')));
         if (inProgress) {
             if (progress && progress.total > 0 && progress.current > 0) {
-                setBannerMessage(`${label} refresh in progress: ${progress.current}/${progress.total}`);
-                setBannerType('success');
-                setBannerVisible(true);
+                setSourceBanner({ message: `${label} ${progress.current}/${progress.total}`, type: 'success' });
             }
         } else if (justCompleted) {
             onRefreshComplete?.();
             if (phase === 'cancelled') {
                 const current = progress?.current ?? 0;
                 const total = progress?.total ?? 0;
-                setBannerMessage(`${label} refresh cancelled${current > 0 ? ` (${current}/${total} CVEs)` : ''}`);
-                setBannerType('error');
+                setSourceBanner({ message: `${label} refresh cancelled${current > 0 ? ` (${current}/${total} CVEs)` : ''}`, type: 'error' });
             } else {
                 const total = progress?.total ?? 0;
-                setBannerMessage(`${label} refresh complete${total > 0 ? ` (${total} CVEs)` : ''}`);
-                setBannerType('success');
+                setSourceBanner({ message: `${label} refresh complete${total > 0 ? ` (${total} CVEs)` : ''}`, type: 'success' });
             }
-            setBannerVisible(true);
         }
         if (progress !== null) {
             prevInProgress.current = inProgress;
             prevPhase.current = phase ?? 'idle';
+            prevStartedAt.current = startedAt;
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [progress, onRefreshComplete]);
@@ -360,9 +355,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [epssProgress, setEpssProgress] = useState<EPSSProgress | null>(null);
     const [ghsaProgress, setGhsaProgress] = useState<GHSAProgress | null>(null);
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
-    const [bannerMessage, setBannerMessage] = useState<string>('');
-    const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
-    const [bannerVisible, setBannerVisible] = useState<boolean>(false);
+    const [nvdBanner, setNvdBanner] = useState<SourceBanner>(null);
+    const [epssBanner, setEpssBanner] = useState<SourceBanner>(null);
+    const [ghsaBanner, setGhsaBanner] = useState<SourceBanner>(null);
+    const [generalBanner, setGeneralBanner] = useState<SourceBanner>(null);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
         'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated'
@@ -390,10 +386,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const moreFiltersRef = useRef<HTMLDivElement>(null);
     const prevNvdInProgress = useRef<boolean | null>(null);
     const prevNvdPhase = useRef<string | null>(null);
+    const prevNvdStartedAt = useRef<string | null>(null);
     const prevEpssInProgress = useRef<boolean | null>(null);
     const prevEpssPhase = useRef<string | null>(null);
+    const prevEpssStartedAt = useRef<string | null>(null);
     const prevGhsaInProgress = useRef<boolean | null>(null);
     const prevGhsaPhase = useRef<string | null>(null);
+    const prevGhsaStartedAt = useRef<string | null>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -419,25 +418,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         if (filterLabel === "Package") setSelectedPackages([filterValue]);
     }, [filterLabel, filterValue]);
 
-    // Update banner with live NVD/EPSS progress; reload data when each refresh completes
-    useRefreshProgressEffect(
-        nvdProgress, 'NVD',
-        prevNvdInProgress, prevNvdPhase,
-        setBannerMessage, setBannerType, setBannerVisible,
-        onRefreshComplete,
-    );
-    useRefreshProgressEffect(
-        epssProgress, 'EPSS',
-        prevEpssInProgress, prevEpssPhase,
-        setBannerMessage, setBannerType, setBannerVisible,
-        onRefreshComplete,
-    );
-    useRefreshProgressEffect(
-        ghsaProgress, 'GHSA',
-        prevGhsaInProgress, prevGhsaPhase,
-        setBannerMessage, setBannerType, setBannerVisible,
-        onRefreshComplete,
-    );
+    // Update per-source banners with live progress; reload data when each refresh completes
+    useRefreshProgressEffect(nvdProgress, 'NVD', prevNvdInProgress, prevNvdPhase, prevNvdStartedAt, setNvdBanner, onRefreshComplete);
+    useRefreshProgressEffect(epssProgress, 'EPSS', prevEpssInProgress, prevEpssPhase, prevEpssStartedAt, setEpssBanner, onRefreshComplete);
+    useRefreshProgressEffect(ghsaProgress, 'GHSA', prevGhsaInProgress, prevGhsaPhase, prevGhsaStartedAt, setGhsaBanner, onRefreshComplete);
 
     // Fetch NVD progress on mount and periodically
     useEffect(() => {
@@ -488,14 +472,23 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         return () => clearInterval(interval);
     }, []);
 
-    const triggerBanner = (message: string, type: 'error' | 'success') => {
-        setBannerMessage(message);
-        setBannerType(type);
-        setBannerVisible(true);
+    const activeBanners = [nvdBanner, epssBanner, ghsaBanner, generalBanner].filter((b): b is NonNullable<SourceBanner> => b !== null);
+    const bannerVisible = activeBanners.length > 0;
+    const bannerMessage = activeBanners.map(b => b.message).join(' · ');
+    const bannerType: 'error' | 'success' = activeBanners.some(b => b.type === 'error') ? 'error' : 'success';
+
+    const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa') => {
+        if (source === 'nvd') setNvdBanner({ message, type });
+        else if (source === 'epss') setEpssBanner({ message, type });
+        else if (source === 'ghsa') setGhsaBanner({ message, type });
+        else setGeneralBanner({ message, type });
     };
 
     const closeBanner = () => {
-        setBannerVisible(false);
+        setNvdBanner(null);
+        setEpssBanner(null);
+        setGhsaBanner(null);
+        setGeneralBanner(null);
     };
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {

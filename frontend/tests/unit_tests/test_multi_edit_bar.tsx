@@ -296,8 +296,8 @@ describe('MultiEditBar', () => {
         });
 
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('NVD refresh started for 2 CVE(s)', 'success');
-            expect(mockTriggerBanner).toHaveBeenCalledWith('EPSS refresh started for 2 CVE(s)', 'success');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('NVD refresh started for 2 CVE(s)', 'success', 'nvd');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('EPSS refresh started for 2 CVE(s)', 'success', 'epss');
         });
 
         expect(mockHideBanner).toHaveBeenCalledTimes(1);
@@ -972,7 +972,7 @@ describe('MultiEditBar', () => {
 
         await waitFor(() => {
             expect(mockCancelTrigger).toHaveBeenCalled();
-            expect(mockTriggerBanner).toHaveBeenCalledWith('NVD refresh cancellation requested', 'success');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('NVD refresh cancellation requested', 'success', 'nvd');
         });
     });
 
@@ -998,7 +998,7 @@ describe('MultiEditBar', () => {
 
         await waitFor(() => {
             expect(mockCancelTrigger).toHaveBeenCalled();
-            expect(mockTriggerBanner).toHaveBeenCalledWith('EPSS refresh cancellation requested', 'success');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('EPSS refresh cancellation requested', 'success', 'epss');
         });
     });
 
@@ -1106,7 +1106,7 @@ describe('MultiEditBar', () => {
             await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
         });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start NVD refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start NVD refresh', 'error', 'nvd');
         });
     });
 
@@ -1126,7 +1126,7 @@ describe('MultiEditBar', () => {
             await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
         });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start NVD refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start NVD refresh', 'error', 'nvd');
         });
     });
 
@@ -1146,7 +1146,7 @@ describe('MultiEditBar', () => {
             await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
         });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start EPSS refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start EPSS refresh', 'error', 'epss');
         });
     });
 
@@ -1166,7 +1166,7 @@ describe('MultiEditBar', () => {
             await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
         });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start EPSS refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start EPSS refresh', 'error', 'epss');
         });
     });
 
@@ -1186,7 +1186,7 @@ describe('MultiEditBar', () => {
         await act(async () => { await userEvent.click(screen.getByTestId('refresh-dropdown-toggle')); });
         await act(async () => { await userEvent.click(screen.getByTestId('cancel-nvd-refresh')); });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel NVD refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel NVD refresh', 'error', 'nvd');
         });
         // Cancelling flag should reset so button is enabled again
         expect(screen.getByTestId('cancel-nvd-refresh')).not.toBeDisabled();
@@ -1206,7 +1206,7 @@ describe('MultiEditBar', () => {
         await act(async () => { await userEvent.click(screen.getByTestId('refresh-dropdown-toggle')); });
         await act(async () => { await userEvent.click(screen.getByTestId('cancel-nvd-refresh')); });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel NVD refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel NVD refresh', 'error', 'nvd');
         });
         expect(screen.getByTestId('cancel-nvd-refresh')).not.toBeDisabled();
     });
@@ -1225,7 +1225,7 @@ describe('MultiEditBar', () => {
         await act(async () => { await userEvent.click(screen.getByTestId('refresh-dropdown-toggle')); });
         await act(async () => { await userEvent.click(screen.getByTestId('cancel-epss-refresh')); });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel EPSS refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel EPSS refresh', 'error', 'epss');
         });
         expect(screen.getByTestId('cancel-epss-refresh')).not.toBeDisabled();
     });
@@ -1244,7 +1244,7 @@ describe('MultiEditBar', () => {
         await act(async () => { await userEvent.click(screen.getByTestId('refresh-dropdown-toggle')); });
         await act(async () => { await userEvent.click(screen.getByTestId('cancel-epss-refresh')); });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel EPSS refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel EPSS refresh', 'error', 'epss');
         });
         expect(screen.getByTestId('cancel-epss-refresh')).not.toBeDisabled();
     });

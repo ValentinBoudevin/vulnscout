@@ -2627,4 +2627,48 @@ describe('NVD timestamp columns', () => {
             jest.useRealTimers();
         }
     });
+
+    test('shows EPSS completion banner when refresh completes between polls (started_at changes)', async () => {
+        jest.useFakeTimers();
+        try {
+            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+            EPSSProgressHandler.getProgress
+                .mockResolvedValueOnce({ in_progress: false, phase: 'idle', current: 0, total: 0, message: '', started_at: undefined })
+                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 50, total: 50, message: '', started_at: '2026-06-10T10:01:00Z' });
+
+            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            await act(async () => { await Promise.resolve(); });
+            await act(async () => { jest.advanceTimersByTime(5001); });
+            await act(async () => { await Promise.resolve(); });
+
+            await waitFor(() => {
+                expect(screen.getByText(/EPSS refresh complete \(50 CVEs\)/i)).toBeInTheDocument();
+            });
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('shows EPSS completion banner when phase stays completed but started_at changes (re-triggered fast refresh)', async () => {
+        jest.useFakeTimers();
+        try {
+            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+            EPSSProgressHandler.getProgress
+                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 30, total: 30, message: '', started_at: '2026-06-10T09:00:00Z' })
+                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 50, total: 50, message: '', started_at: '2026-06-10T10:01:00Z' });
+
+            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            await act(async () => { await Promise.resolve(); });
+            await act(async () => { jest.advanceTimersByTime(5001); });
+            await act(async () => { await Promise.resolve(); });
+
+            await waitFor(() => {
+                expect(screen.getByText(/EPSS refresh complete \(50 CVEs\)/i)).toBeInTheDocument();
+            });
+        } finally {
+            jest.useRealTimers();
+        }
+    });
 });
