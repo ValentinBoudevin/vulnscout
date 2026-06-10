@@ -310,6 +310,7 @@ def _run_main() -> dict:
     latest_scan = ScanModel.get_latest()
     if latest_scan:
         assessCtrl.current_variant_id = latest_scan.variant_id
+        vulnCtrl.current_variant_id = latest_scan.variant_id
 
     # Wrap all ingestion + post-treatment inside batch_session so that the
     # hundreds/thousands of individual model commit() calls are deferred to a
