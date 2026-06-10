@@ -20,6 +20,7 @@ def apply_cvss_update(rec, details: dict, db) -> None:
         db.select(Metrics).where(
             Metrics.vulnerability_id == rec.id,
             Metrics.version == cvss_version,
+            Metrics.variant_id.is_(None),
         )
     ).scalar_one_or_none()
     if existing is not None:
