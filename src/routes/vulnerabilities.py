@@ -26,6 +26,7 @@ from ..extensions import db
 from ..controllers.nvd_db import NVD_DB
 from ..controllers.nvd_apply import apply_nvd_update
 from ..controllers.epss_db import EPSS_DB
+from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..helpers.active_scans import (
     active_scan_ids_for_variant,
     active_scan_ids_for_project,
@@ -1066,6 +1067,44 @@ def init_app(app):
         rec.epss["percentile"] = epss_data.get("percentile")
 
         # Repopulate transient severity scores from committed metrics
+        for m in (rec.metrics or []):
+            if m.score is not None:
+                score = float(m.score)
+                if rec.severity_min_score is None or score < rec.severity_min_score:
+                    rec.severity_min_score = score
+                if rec.severity_max_score is None or score > rec.severity_max_score:
+                    rec.severity_max_score = score
+
+        return jsonify({"vulnerabilities": [rec.to_dict()]}), 200
+
+    @app.route('/api/vulnerabilities/<ghsa_id>/ghsa-refresh', methods=['POST'])
+    def refresh_single_ghsa(ghsa_id):
+        ghsa_id_upper = ghsa_id.upper()
+        if not ghsa_id_upper.startswith('GHSA-'):
+            return jsonify({"error": "Only GHSA identifiers are supported by this endpoint"}), 400
+        rec = db.session.get(Vulnerability, ghsa_id_upper)
+        if rec is None:
+            return jsonify({"error": "GHSA advisory not found"}), 404
+
+        published_at = VulnerabilitiesController._fetch_ghsa_published(ghsa_id_upper)
+        if published_at is None:
+            return jsonify({"error": "GitHub Advisory Database returned no data for this advisory"}), 503
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        try:
+            publish_date_dt = datetime.datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return jsonify({"error": "GitHub Advisory Database returned an unparseable date"}), 503
+        rec.update_record(
+            publish_date=publish_date_dt,
+            nvd_fetched_at=now,
+            commit=False,
+        )
+        db.session.commit()
+
+        db.session.refresh(rec)
+        rec._init_transient()
+
         for m in (rec.metrics or []):
             if m.score is not None:
                 score = float(m.score)

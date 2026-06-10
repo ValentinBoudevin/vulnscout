@@ -45,14 +45,17 @@ def client(app):
 
 @pytest.fixture(autouse=True)
 def reset_progress_trackers():
-    """Reset NVD and EPSS progress tracker singletons between tests."""
+    """Reset NVD, EPSS, and GHSA progress tracker singletons between tests."""
     from src.controllers.nvd_progress import NVDProgressTracker
     from src.controllers.epss_progress import EPSSProgressTracker
+    from src.controllers.ghsa_progress import GHSAProgressTracker
     NVDProgressTracker.complete()
     EPSSProgressTracker.complete()
+    GHSAProgressTracker.complete()
     yield
     NVDProgressTracker.complete()
     EPSSProgressTracker.complete()
+    GHSAProgressTracker.complete()
 
 
 @pytest.fixture()
@@ -662,6 +665,30 @@ class TestCancelEpssRefreshEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# GHSA progress tracker — smoke test the singleton
+# ---------------------------------------------------------------------------
+
+class TestGhsaProgressTracker:
+
+    def test_singleton_starts_idle(self):
+        from src.controllers.ghsa_progress import GHSAProgressTracker
+        GHSAProgressTracker.complete()  # reset
+        progress = GHSAProgressTracker.get_progress()
+        assert progress["in_progress"] is False
+
+    def test_ghsa_progress_endpoint_returns_200(self, client):
+        from src.controllers.ghsa_progress import GHSAProgressTracker
+        GHSAProgressTracker.complete()
+        resp = client.get("/api/ghsa/progress")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "in_progress" in data
+        assert "phase" in data
+        assert "current" in data
+        assert "total" in data
+
+
+# ---------------------------------------------------------------------------
 # Cancellation checks inside _run() threads
 # ---------------------------------------------------------------------------
 
@@ -820,6 +847,303 @@ class TestConcurrentBulkEpssRefresh:
                 resp = c.post(
                     "/api/vulnerabilities/bulk-epss-refresh",
                     json={"cve_ids": [existing_cve_id]},
+                )
+            results.append(resp.status_code)
+
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            threads = [RealThread(target=post) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+        results.sort()
+        assert results == [202, 409], f"Expected [202, 409], got {results}"
+
+
+# ---------------------------------------------------------------------------
+# Bulk GHSA refresh — /api/vulnerabilities/bulk-ghsa-refresh
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def existing_ghsa_id():
+    return "GHSA-R7JW-VC2X-4GBH"
+
+
+class TestBulkGhsaRefreshEndpoint:
+
+    def test_returns_202_with_valid_ghsa_ids(self, client, existing_ghsa_id):
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-ghsa-refresh",
+                json={"ghsa_ids": [existing_ghsa_id]},
+            )
+        assert resp.status_code == 202
+        data = resp.get_json()
+        assert data["status"] == "started"
+        assert data["total"] >= 1
+        MockThread.return_value.start.assert_called_once()
+
+    def test_returns_400_when_ghsa_ids_missing(self, client):
+        resp = client.post("/api/vulnerabilities/bulk-ghsa-refresh", json={})
+        assert resp.status_code == 400
+        assert "error" in resp.get_json()
+
+    def test_returns_400_when_ghsa_ids_empty_list(self, client):
+        resp = client.post(
+            "/api/vulnerabilities/bulk-ghsa-refresh",
+            json={"ghsa_ids": []},
+        )
+        assert resp.status_code == 400
+
+    def test_returns_400_when_all_ids_are_invalid_format(self, client):
+        resp = client.post(
+            "/api/vulnerabilities/bulk-ghsa-refresh",
+            json={"ghsa_ids": ["not-a-ghsa", "GHSA-short"]},
+        )
+        assert resp.status_code == 400
+        assert "valid GHSA" in resp.get_json()["error"]
+
+    def test_rejects_cve_ids(self, client):
+        resp = client.post(
+            "/api/vulnerabilities/bulk-ghsa-refresh",
+            json={"ghsa_ids": ["CVE-2024-1234"]},
+        )
+        assert resp.status_code == 400
+
+    def test_returns_409_when_already_in_progress(self, client, existing_ghsa_id):
+        with patch(
+            "src.routes.bulk_refresh.GHSAProgressTracker.start_if_idle",
+            return_value=False,
+        ):
+            resp = client.post(
+                "/api/vulnerabilities/bulk-ghsa-refresh",
+                json={"ghsa_ids": [existing_ghsa_id]},
+            )
+        assert resp.status_code == 409
+        assert "already in progress" in resp.get_json()["error"]
+
+    def test_ghsa_ids_normalized_to_uppercase(self, client, existing_ghsa_id):
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-ghsa-refresh",
+                json={"ghsa_ids": [existing_ghsa_id.lower()]},
+            )
+        assert resp.status_code == 202
+
+    def test_total_matches_input_count(self, client, existing_ghsa_id):
+        second_id = "GHSA-J8XG-FQG3-53R7"
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-ghsa-refresh",
+                json={"ghsa_ids": [existing_ghsa_id, second_id]},
+            )
+        assert resp.status_code == 202
+        assert resp.get_json()["total"] == 2
+
+    def test_returns_400_when_count_exceeds_max(self, client):
+        from src.routes.bulk_refresh import _MAX_GHSA_IDS
+        ids = [f"GHSA-{i:04X}-{(i+1):04X}-{(i+2):04X}" for i in range(_MAX_GHSA_IDS + 1)]
+        resp = client.post(
+            "/api/vulnerabilities/bulk-ghsa-refresh",
+            json={"ghsa_ids": ids},
+        )
+        assert resp.status_code == 400
+        assert "at most" in resp.get_json()["error"]
+
+
+class TestBulkGhsaRefreshBackground:
+    """Tests for the _run() closure spawned by bulk_ghsa_refresh."""
+
+    def _capture_target(self, client, ghsa_ids):
+        captured = {}
+
+        def fake_thread(target=None, **kwargs):
+            captured["target"] = target
+            return MagicMock()
+
+        with patch("src.routes.bulk_refresh.threading.Thread", side_effect=fake_thread):
+            resp = client.post(
+                "/api/vulnerabilities/bulk-ghsa-refresh",
+                json={"ghsa_ids": ghsa_ids},
+            )
+        assert resp.status_code == 202
+        return captured["target"]
+
+    def test_run_updates_record_when_published_at_returned(self, client):
+        target = self._capture_target(client, ["GHSA-R7JW-VC2X-4GBH"])
+        mock_rec = MagicMock()
+
+        with patch("src.routes.bulk_refresh.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value="2023-05-01T00:00:00Z"), \
+             patch("src.routes.bulk_refresh.db") as mock_db, \
+             patch("src.routes.bulk_refresh.time.sleep"), \
+             patch("src.routes.bulk_refresh.GHSAProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            mock_db.session.get.return_value = mock_rec
+            target()
+
+        mock_rec.update_record.assert_called_once()
+        call_kwargs = mock_rec.update_record.call_args.kwargs
+        assert call_kwargs.get("commit") is False
+        assert call_kwargs.get("publish_date") is not None
+        assert call_kwargs.get("nvd_fetched_at") is not None
+
+    def test_run_skips_update_when_published_at_is_none(self, client):
+        target = self._capture_target(client, ["GHSA-R7JW-VC2X-4GBH"])
+        mock_rec = MagicMock()
+
+        with patch("src.routes.bulk_refresh.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value=None), \
+             patch("src.routes.bulk_refresh.db") as mock_db, \
+             patch("src.routes.bulk_refresh.time.sleep"), \
+             patch("src.routes.bulk_refresh.GHSAProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            mock_db.session.get.return_value = mock_rec
+            target()
+
+        mock_rec.update_record.assert_not_called()
+
+    def test_run_skips_update_when_record_not_in_db(self, client):
+        target = self._capture_target(client, ["GHSA-R7JW-VC2X-4GBH"])
+
+        with patch("src.routes.bulk_refresh.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value="2023-01-01T00:00:00Z"), \
+             patch("src.routes.bulk_refresh.db") as mock_db, \
+             patch("src.routes.bulk_refresh.time.sleep"), \
+             patch("src.routes.bulk_refresh.GHSAProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            mock_db.session.get.return_value = None
+            target()
+        # No exception — None branch handled correctly
+
+    def test_run_continues_after_per_ghsa_exception(self, client):
+        target = self._capture_target(client, ["GHSA-AAAA-BBBB-CCCC", "GHSA-R7JW-VC2X-4GBH"])
+
+        def fake_fetch(ghsa_id):
+            if ghsa_id == "GHSA-AAAA-BBBB-CCCC":
+                raise RuntimeError("API error")
+            return None
+
+        with patch("src.routes.bulk_refresh.VulnerabilitiesController._fetch_ghsa_published",
+                   side_effect=fake_fetch), \
+             patch("src.routes.bulk_refresh.db"), \
+             patch("src.routes.bulk_refresh.time.sleep"), \
+             patch("src.routes.bulk_refresh.GHSAProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            target()
+
+        MockTracker.complete.assert_called()
+
+    def test_run_calls_complete_on_success(self, client):
+        target = self._capture_target(client, ["GHSA-R7JW-VC2X-4GBH"])
+
+        with patch("src.routes.bulk_refresh.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value=None), \
+             patch("src.routes.bulk_refresh.db"), \
+             patch("src.routes.bulk_refresh.time.sleep"), \
+             patch("src.routes.bulk_refresh.GHSAProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            target()
+
+        MockTracker.complete.assert_called()
+
+    def test_run_calls_error_on_outer_exception(self, client):
+        target = self._capture_target(client, ["GHSA-R7JW-VC2X-4GBH"])
+
+        with patch("src.routes.bulk_refresh.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value=None), \
+             patch("src.routes.bulk_refresh.db"), \
+             patch("src.routes.bulk_refresh.time.sleep"), \
+             patch("src.routes.bulk_refresh.GHSAProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            MockTracker.complete.side_effect = RuntimeError("tracker failure")
+            target()
+
+        MockTracker.error.assert_called_once()
+
+
+class TestCancelGhsaRefreshEndpoint:
+
+    def test_returns_200_when_refresh_in_progress(self, client):
+        with patch(
+            "src.routes.bulk_refresh.GHSAProgressTracker.cancel",
+            return_value=True,
+        ):
+            resp = client.post("/api/vulnerabilities/cancel-ghsa-refresh")
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "cancelling"
+
+    def test_returns_409_when_no_refresh_in_progress(self, client):
+        with patch(
+            "src.routes.bulk_refresh.GHSAProgressTracker.cancel",
+            return_value=False,
+        ):
+            resp = client.post("/api/vulnerabilities/cancel-ghsa-refresh")
+        assert resp.status_code == 409
+        assert "currently in progress" in resp.get_json()["error"]
+
+
+class TestBulkGhsaRefreshCancellation:
+
+    def _capture_target(self, client, ghsa_ids):
+        captured = {}
+
+        def fake_thread(target=None, **kwargs):
+            captured["target"] = target
+            return MagicMock()
+
+        with patch("src.routes.bulk_refresh.threading.Thread", side_effect=fake_thread):
+            resp = client.post(
+                "/api/vulnerabilities/bulk-ghsa-refresh",
+                json={"ghsa_ids": ghsa_ids},
+            )
+        assert resp.status_code == 202
+        return captured["target"]
+
+    def test_run_stops_and_commits_when_cancelled(self, client):
+        ghsa_ids = ["GHSA-AAAA-BBBB-CCCC", "GHSA-R7JW-VC2X-4GBH"]
+        target = self._capture_target(client, ghsa_ids)
+
+        call_count = {"n": 0}
+
+        def fake_is_cancelled():
+            call_count["n"] += 1
+            return call_count["n"] > 1
+
+        with patch("src.routes.bulk_refresh.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value=None), \
+             patch("src.routes.bulk_refresh._safe_commit") as mock_commit, \
+             patch("src.routes.bulk_refresh.db"), \
+             patch("src.routes.bulk_refresh.time.sleep"), \
+             patch("src.routes.bulk_refresh.GHSAProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.side_effect = fake_is_cancelled
+            target()
+
+        MockTracker.mark_cancelled.assert_called_once()
+        MockTracker.complete.assert_not_called()
+        mock_commit.assert_called()
+
+
+class TestConcurrentBulkGhsaRefresh:
+
+    def test_only_one_request_starts_when_concurrent(self, app):
+        import threading
+        RealThread = threading.Thread
+        barrier = threading.Barrier(2)
+        results = []
+        ghsa_id = "GHSA-R7JW-VC2X-4GBH"
+
+        def post():
+            barrier.wait()
+            with app.test_client() as c:
+                resp = c.post(
+                    "/api/vulnerabilities/bulk-ghsa-refresh",
+                    json={"ghsa_ids": [ghsa_id]},
                 )
             results.append(resp.status_code)
 
