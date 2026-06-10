@@ -21,6 +21,10 @@ class CVSS:
         self.base_score = base_score
         self.exploitability_score = exploitability_score
         self.impact_score = impact_score
+        self.source_variant_id: object = None
+        """Set by VulnerabilitiesController._preload_cache to track which variant
+        this CVSS entry was loaded from.  Used by persist_from_transient to prevent
+        custom scores from one variant leaking into another."""
 
     def __str__(self) -> str:
         """Return a string representation of the CVSS score, using it's 3 scores as identifier."""

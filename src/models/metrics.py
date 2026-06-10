@@ -150,11 +150,24 @@ class Metrics(Base):
     ) -> Optional["Metrics"]:
         """Create a :class:`Metrics` record from an in-memory :class:`CVSS` object.
 
-        If a matching record (same vulnerability_id + version + score) already exists it is
+        If a matching record (same vulnerability_id + variant_id + version + score) already exists it is
         returned unchanged when insert fallback is triggered; otherwise a new one is persisted.
         When the session dedup cache hits, ``None`` is returned to signal a no-op.
+
+        Scoping rule based on ``origin``:
+          * ``"custom"`` — user-entered override; stored scoped to *variant_id*
+            so it stays isolated per project/variant.
+          * anything else (``"scanner"`` and the like) — standard data shared by
+            every variant; forced to ``variant_id = NULL`` so it is stored once
+            and never duplicated across variants.
         """
         vid = vulnerability_id.upper()
+
+        # Standard (scanner) metrics are global: never scope them to a variant,
+        # otherwise the same NVD/Grype score would be stored once per variant.
+        origin = getattr(cvss, "origin", None)
+        if origin != "custom":
+            variant_id = None
 
         dedup_key = (
             vid,
@@ -182,7 +195,7 @@ class Metrics(Base):
                     score=cvss.base_score,
                     vector=cvss.vector_string,
                     author=cvss.author,
-                    origin=getattr(cvss, "origin", None),
+                    origin=origin,
                 )
                 db.session.add(record)
                 db.session.flush()
