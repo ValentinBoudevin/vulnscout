@@ -404,7 +404,7 @@ def init_app(app):
                 # package (no supplier from Grype). Pre-populate r.packages instead.
                 if records:
                     _PkgVariant = aliased(Package)
-                    _pkg_var_rows = db.session.execute(
+                    _affx_q = (
                         db.select(
                             Finding.vulnerability_id, _PkgVariant.name,
                             _PkgVariant.version, _PkgVariant.supplier
@@ -413,9 +413,18 @@ def init_app(app):
                         .join(_PkgVariant, (
                             (_PkgVariant.name == Package.name) & (_PkgVariant.version == Package.version)
                         ))
+                        .outerjoin(SBOMPackage, SBOMPackage.package_id == _PkgVariant.id)
+                        .outerjoin(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
                         .where(Finding.vulnerability_id.in_([r.id for r in records]))
+                        .where(db.or_(
+                            SBOMDocument.scan_id.in_(latest_ids),
+                            _PkgVariant.id == Package.id,
+                        ))
                         .distinct()
-                    ).all()
+                    )
+                    if _pkg_ids:
+                        _affx_q = _affx_q.where(Finding.package_id.in_(_pkg_ids))
+                    _pkg_var_rows = db.session.execute(_affx_q).all()
                     _pkgs_by_vuln_var: dict[str, list[str]] = {}
                     for _vid, _pname, _pver, _psup in _pkg_var_rows:
                         _sid = f"{_pname}@{_pver}::{_psup}" if _psup else f"{_pname}@{_pver}"
@@ -507,13 +516,22 @@ def init_app(app):
                 # supplier variants so that Grype-linked packages (no supplier) also surface
                 # SBOM packages that carry supplier information.
                 _PkgVariant = aliased(Package)
-                pkg_rows = db.session.execute(
+                _pkg_q = (
                     db.select(Finding.vulnerability_id, _PkgVariant.name, _PkgVariant.version, _PkgVariant.supplier)
                     .join(Package, Finding.package_id == Package.id)
                     .join(_PkgVariant, (_PkgVariant.name == Package.name) & (_PkgVariant.version == Package.version))
+                    .outerjoin(SBOMPackage, SBOMPackage.package_id == _PkgVariant.id)
+                    .outerjoin(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
                     .where(Finding.vulnerability_id.in_(vuln_ids_subq))
+                    .where(db.or_(
+                        SBOMDocument.scan_id.in_(latest_ids),
+                        _PkgVariant.id == Package.id,
+                    ))
                     .distinct()
-                ).all()
+                )
+                if _pkg_ids:
+                    _pkg_q = _pkg_q.where(Finding.package_id.in_(_pkg_ids))
+                pkg_rows = db.session.execute(_pkg_q).all()
                 pkgs_by_vuln: dict[str, list[str]] = {}
                 for vid, pname, pver, psup in pkg_rows:
                     sid = f"{pname}@{pver}::{psup}" if psup else f"{pname}@{pver}"

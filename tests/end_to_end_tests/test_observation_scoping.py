@@ -230,6 +230,92 @@ def test_observations_not_duplicated_on_second_run(app):
         )
 
 
+def test_affected_pkg_list_excludes_stale_sbom_supplier_variant(app):
+    """GET /api/vulnerabilities?variant_id must not surface supplier-variant
+    packages that only exist in a *stale* (non-current) SBOM document.
+
+    Regression test for the affected-package scoping fix: the supplier
+    expansion joins packages by name+version, so a same-name+version package
+    referenced only by an older SBOM document would otherwise leak into a
+    vulnerability's affected-package list.
+    """
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from src.bin.merger_ci import _run_main
+    from src.extensions import db
+    from src.models.scan import Scan
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+
+    with app.app_context():
+        # Build observations for the current scan so the endpoint returns vulns.
+        _run_main()
+
+        latest_scan = Scan.get_latest()
+        assert latest_scan is not None
+        variant_id = latest_scan.variant_id
+
+        # cairo@1.16.0 is a demo package with a finding/vulnerability.
+        finding = db.session.execute(
+            db.select(Finding)
+            .join(Package, Finding.package_id == Package.id)
+            .where(Package.name == "cairo", Package.version == "1.16.0")
+        ).scalars().first()
+        assert finding is not None, "expected a cairo@1.16.0 finding in the demo DB"
+        cairo = db.session.get(Package, finding.package_id)
+        target_vuln_id = finding.vulnerability_id
+
+        # Inject a STALE (older) SBOM scan that references a supplier-variant of
+        # cairo@1.16.0 (same name+version, different supplier). It must NOT be
+        # part of the current/active scan set.
+        stale_scan = Scan(
+            description="stale sbom",
+            variant_id=variant_id,
+            scan_type="sbom",
+            timestamp=datetime.now(timezone.utc) - timedelta(days=365),
+        )
+        db.session.add(stale_scan)
+        db.session.commit()
+        stale_doc = SBOMDocument.create(
+            path="/sbom/stale.cdx.json", source_name="cdx", scan_id=stale_scan.id
+        )
+        stale_cairo = Package.find_or_create(
+            "cairo", "1.16.0", supplier="Organization: StaleCorp"
+        )
+        db.session.commit()
+        assert stale_cairo.id != cairo.id
+        SBOMPackage.create(stale_doc.id, stale_cairo.id)
+
+        # The injected stale scan must not become the active SBOM scan.
+        assert Scan.get_latest().id == latest_scan.id
+
+        # --- hit the endpoint ---
+        client = app.test_client()
+        app._INT_SCAN_FINISHED = True  # bypass the "scan not finished" 503 guard
+        try:
+            resp = client.get(f"/api/vulnerabilities?variant_id={variant_id}")
+            assert resp.status_code == 200, resp.data
+            vulns = json.loads(resp.data)
+
+            target = next((v for v in vulns if v["id"] == target_vuln_id), None)
+            assert target is not None, (
+                f"{target_vuln_id} should be visible for the current scan"
+            )
+
+            pkgs = target["packages"]
+            # The directly-linked package is still listed...
+            assert any(p.startswith("cairo@1.16.0") for p in pkgs), pkgs
+            # ...but the supplier-variant from the stale SBOM must NOT leak in.
+            assert not any("StaleCorp" in p for p in pkgs), (
+                f"stale-SBOM supplier variant leaked into affected packages: {pkgs}"
+            )
+        finally:
+            app._INT_SCAN_FINISHED = False
+
+
 def test_cross_variant_observation_scoping(tmp_path):
     """Observations for a scan must only cover findings for vulnerabilities
     present in *that variant's* input files — not those from a prior variant.
