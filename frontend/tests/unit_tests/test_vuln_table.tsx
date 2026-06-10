@@ -744,8 +744,8 @@ describe('Vulnerability Table', () => {
         await user.click(btn);
 
         // ASSERT
-        // 3 Variants.listByVuln calls (one per selected vulnerability) + 1 batch assessment API call
-        expect(fetchMock).toHaveBeenCalledTimes(4);
+        // 3 Variants.listByVuln calls (one per selected vulnerability) + 1 batch assessment API call + 1 GHSA progress poll on mount
+        expect(fetchMock).toHaveBeenCalledTimes(5);
     })
 
     test('select and change time estimate', async () => {
@@ -793,7 +793,8 @@ describe('Vulnerability Table', () => {
         await user.click(btn);
 
         // ASSERT
-        expect(fetchMock).toHaveBeenCalledTimes(3);
+        // 2 Variants.listByVuln + 1 batch time estimate API call + 1 GHSA progress poll on mount
+        expect(fetchMock).toHaveBeenCalledTimes(4);
     })
 
     test('show description when hovering vulnerability', async () => {

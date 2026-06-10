@@ -19,6 +19,8 @@ import { formatPkgId } from "../helpers/pkgId";
 import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
 import EPSSProgressHandler from "../handlers/epss_progress";
+import GHSAProgressHandler from "../handlers/ghsa_progress";
+import type { GHSAProgress } from "../handlers/ghsa_progress";
 
 /**
  * Shared hook for NVD/EPSS progress banner logic.
@@ -87,7 +89,7 @@ type Props = {
     baseVariantId?: string;
     /** 'difference' or 'intersection' when compare mode is active */
     compareOperation?: string;
-    /** Called when an NVD or EPSS bulk refresh completes, so the parent can reload data */
+    /** Called when an NVD, EPSS, or GHSA bulk refresh completes, so the parent can reload data */
     onRefreshComplete?: () => void;
 };
 
@@ -356,6 +358,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [publishedDateTo, setPublishedDateTo] = useState<string>('');
     const [nvdProgress, setNvdProgress] = useState<NVDProgress | null>(null);
     const [epssProgress, setEpssProgress] = useState<EPSSProgress | null>(null);
+    const [ghsaProgress, setGhsaProgress] = useState<GHSAProgress | null>(null);
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
@@ -389,6 +392,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const prevNvdPhase = useRef<string | null>(null);
     const prevEpssInProgress = useRef<boolean | null>(null);
     const prevEpssPhase = useRef<string | null>(null);
+    const prevGhsaInProgress = useRef<boolean | null>(null);
+    const prevGhsaPhase = useRef<string | null>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -427,6 +432,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setBannerMessage, setBannerType, setBannerVisible,
         onRefreshComplete,
     );
+    useRefreshProgressEffect(
+        ghsaProgress, 'GHSA',
+        prevGhsaInProgress, prevGhsaPhase,
+        setBannerMessage, setBannerType, setBannerVisible,
+        onRefreshComplete,
+    );
 
     // Fetch NVD progress on mount and periodically
     useEffect(() => {
@@ -459,6 +470,21 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         fetchEpssProgress();
         const interval = setInterval(fetchEpssProgress, 5000); // Poll every 5 seconds
 
+        return () => clearInterval(interval);
+    }, []);
+
+    // Fetch GHSA progress on mount and periodically
+    useEffect(() => {
+        const fetchGhsaProgress = async () => {
+            try {
+                const progress = await GHSAProgressHandler.getProgress();
+                setGhsaProgress(progress);
+            } catch (error) {
+                console.error('Failed to fetch GHSA progress:', error);
+            }
+        };
+        fetchGhsaProgress();
+        const interval = setInterval(fetchGhsaProgress, 3000);
         return () => clearInterval(interval);
     }, []);
 
@@ -1534,6 +1560,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             compareOperation={compareOperation}
             nvdProgress={nvdProgress}
             epssProgress={epssProgress}
+            ghsaProgress={ghsaProgress}
         />
 
         <TableGeneric

@@ -26,6 +26,7 @@ import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback } from "react";
 import NvdRefreshHandler from "../handlers/nvdRefresh";
 import EpssRefreshHandler from "../handlers/epssRefresh";
+import GhsaRefreshHandler from "../handlers/ghsaRefresh";
 
 type Props = {
     vuln: Vulnerability;
@@ -313,61 +314,74 @@ type VariantScopedSnapshot = {
         ? `Vulnerability ${currentIndex + 1} of ${vulnerabilities.length}`
         : null;
 
+    const isGhsaVuln = vuln.id.toUpperCase().startsWith('GHSA-');
+
     const handleRefresh = useCallback(async () => {
         setRefreshing(true);
         setRefreshError(null);
         setRefreshedList([]);
         try {
-            const [nvdResult, epssResult] = await Promise.allSettled([
-                NvdRefreshHandler.triggerSingleRefresh(vuln.id),
-                EpssRefreshHandler.triggerSingleRefresh(vuln.id),
-            ]);
-
-            const errors: string[] = [];
-            const nvdValue = nvdResult.status === "fulfilled" ? nvdResult.value : null;
-            const nvdUpdated = nvdValue?.kind === "success";
-            if (!nvdUpdated) {
-                if (nvdValue?.kind === "error" && nvdValue.code === "rate_limited") {
-                    errors.push(nvdValue.apiKeyConfigured
-                        ? "NVD rate-limited. Your NVD API key may be exhausted, please try again later."
-                        : "NVD rate-limited. Set NVD API key in settings to reduce throttling.");
+            if (vuln.id.toUpperCase().startsWith('GHSA-')) {
+                const result = await GhsaRefreshHandler.triggerSingleRefresh(vuln.id);
+                if (result) {
+                    const { simplified_status: _ss, assessments: _a, packages_current: _pc, variants: _v, found_by: _fb, ...ghsaUpdates } = result;
+                    patchVuln(vuln.id, { ...vuln, ...ghsaUpdates });
+                    setRefreshedList(['GHSA']);
                 } else {
-                    errors.push("NVD API unavailable");
+                    setRefreshError("GitHub Advisory Database refresh failed. Please try again later.");
                 }
-            }
-            if (epssResult.status === "rejected" || epssResult.value === null) {
-                errors.push("EPSS API unavailable");
-            }
+            } else {
+                const [nvdResult, epssResult] = await Promise.allSettled([
+                    NvdRefreshHandler.triggerSingleRefresh(vuln.id),
+                    EpssRefreshHandler.triggerSingleRefresh(vuln.id),
+                ]);
 
-            const epssUpdated = epssResult.status === "fulfilled" && epssResult.value !== null;
-
-            let merged = { ...vuln };
-
-            if (nvdUpdated || epssUpdated) {
-                if (nvdUpdated) {
-                    const {
-                        simplified_status: _ss,
-                        assessments: _a,
-                        packages_current: _pc,
-                        variants: _v,
-                        found_by: _fb,
-                        ...nvdUpdates
-                    } = nvdValue.vuln;
-
-                    merged = { ...merged, ...nvdUpdates };
-                    setRefreshedList(prev => [...prev, "NVD"]);
+                const errors: string[] = [];
+                const nvdValue = nvdResult.status === "fulfilled" ? nvdResult.value : null;
+                const nvdUpdated = nvdValue?.kind === "success";
+                if (!nvdUpdated) {
+                    if (nvdValue?.kind === "error" && nvdValue.code === "rate_limited") {
+                        errors.push(nvdValue.apiKeyConfigured
+                            ? "NVD rate-limited. Your NVD API key may be exhausted, please try again later."
+                            : "NVD rate-limited. Set NVD API key in settings to reduce throttling.");
+                    } else {
+                        errors.push("NVD API unavailable");
+                    }
+                }
+                if (epssResult.status === "rejected" || epssResult.value === null) {
+                    errors.push("EPSS API unavailable");
                 }
 
-                if (epssUpdated) {
-                    merged = { ...merged, epss: epssResult.value!.epss };
-                    setRefreshedList(prev => [...prev, "EPSS"]);
+                const epssUpdated = epssResult.status === "fulfilled" && epssResult.value !== null;
+
+                let merged = { ...vuln };
+
+                if (nvdUpdated || epssUpdated) {
+                    if (nvdUpdated) {
+                        const {
+                            simplified_status: _ss,
+                            assessments: _a,
+                            packages_current: _pc,
+                            variants: _v,
+                            found_by: _fb,
+                            ...nvdUpdates
+                        } = nvdValue.vuln;
+
+                        merged = { ...merged, ...nvdUpdates };
+                        setRefreshedList(prev => [...prev, "NVD"]);
+                    }
+
+                    if (epssUpdated) {
+                        merged = { ...merged, epss: epssResult.value!.epss };
+                        setRefreshedList(prev => [...prev, "EPSS"]);
+                    }
+
+                    patchVuln(vuln.id, merged);
                 }
 
-                patchVuln(vuln.id, merged);
-            }
-
-            if (errors.length > 0) {
-                setRefreshError(errors.join(". ") + ". Please try again later.");
+                if (errors.length > 0) {
+                    setRefreshError(errors.join(". ") + ". Please try again later.");
+                }
             }
         } catch (error) {
             setRefreshError(String(error) + " Please try again later.");
@@ -678,7 +692,9 @@ type VariantScopedSnapshot = {
 
     const groupedAssessments = groupAssessments(vuln.assessments);
 
-    const bothRefreshed = refreshedList.includes('NVD') && refreshedList.includes('EPSS');
+    const bothRefreshed = isGhsaVuln
+        ? refreshedList.includes('GHSA')
+        : refreshedList.includes('NVD') && refreshedList.includes('EPSS');
     const partialRefreshed = refreshedList.length > 0 && !bothRefreshed;
 
     // Get the default status for new assessments
@@ -1010,7 +1026,7 @@ type VariantScopedSnapshot = {
                                     <button
                                         onClick={handleRefresh}
                                         disabled={refreshing}
-                                        title="Refresh from NVD & EPSS"
+                                        title={isGhsaVuln ? "Refresh from GitHub Advisory Database" : "Refresh from NVD & EPSS"}
                                         type="button"
                                         className={`px-3 py-2 text-sm font-medium focus:outline-none rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                                             bothRefreshed

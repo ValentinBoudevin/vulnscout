@@ -8,9 +8,10 @@ import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import { asAssessment, Assessment } from "../handlers/assessments";
 import Iso8601Duration from '../handlers/iso8601duration';
 import Variants from '../handlers/variant';
-import { BulkNvdRefreshHandler, BulkEpssRefreshHandler, BulkNvdRefreshCancelHandler, BulkEpssRefreshCancelHandler } from "../handlers/bulkRefresh";
+import { BulkNvdRefreshHandler, BulkEpssRefreshHandler, BulkNvdRefreshCancelHandler, BulkEpssRefreshCancelHandler, BulkGhsaRefreshHandler, BulkGhsaRefreshCancelHandler } from "../handlers/bulkRefresh";
 import type { NVDProgress } from "../handlers/nvd_progress";
 import type { EPSSProgress } from "../handlers/epss_progress";
+import type { GHSAProgress } from "../handlers/ghsa_progress";
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -27,9 +28,10 @@ type Props = {
     compareOperation?: string;
     nvdProgress?: NVDProgress | null;
     epssProgress?: EPSSProgress | null;
+    ghsaProgress?: GHSAProgress | null;
 };
 
-function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, variantId, baseVariantId, compareOperation, nvdProgress, epssProgress} : Readonly<Props>) {
+function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, variantId, baseVariantId, compareOperation, nvdProgress, epssProgress, ghsaProgress} : Readonly<Props>) {
 
     const [panelOpened, setPanelOpened] = useState<number>(0)
     const [isLoading, setIsLoading] = useState<boolean>(false)
@@ -37,8 +39,9 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     const [isAllVariantsMode, setIsAllVariantsMode] = useState<boolean>(false)
     const [nvdCancelling, setNvdCancelling] = useState<boolean>(false)
     const [epssCancelling, setEpssCancelling] = useState<boolean>(false)
+    const [ghsaCancelling, setGhsaCancelling] = useState<boolean>(false)
     const [refreshMenuOpen, setRefreshMenuOpen] = useState<boolean>(false)
-    const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<'nvd' | 'epss'>>(new Set(['nvd', 'epss']))
+    const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<'nvd' | 'epss' | 'ghsa'>>(new Set(['nvd', 'epss', 'ghsa']))
     const refreshMenuRef = useRef<HTMLDivElement>(null)
     const loadingLabel = selectedVulns.length === 1 ? 'Editing selected CVE...' : 'Editing selected CVEs...'
     const closePanel = () => {
@@ -77,6 +80,10 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     }, [epssProgress?.in_progress]);
 
     useEffect(() => {
+        if (!ghsaProgress?.in_progress) setGhsaCancelling(false);
+    }, [ghsaProgress?.in_progress]);
+
+    useEffect(() => {
         function handleClickOutside(e: MouseEvent) {
             if (refreshMenuRef.current && !refreshMenuRef.current.contains(e.target as Node)) {
                 setRefreshMenuOpen(false);
@@ -88,7 +95,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         }
     }, [refreshMenuOpen]);
 
-    function toggleRefreshType(type: 'nvd' | 'epss') {
+    function toggleRefreshType(type: 'nvd' | 'epss' | 'ghsa') {
         setSelectedRefreshTypes(prev => {
             const next = new Set(prev);
             if (next.has(type)) next.delete(type); else next.add(type);
@@ -98,10 +105,14 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
 
     const nvdInProgress = nvdProgress?.in_progress ?? false;
     const epssInProgress = epssProgress?.in_progress ?? false;
+    const ghsaInProgress = ghsaProgress?.in_progress ?? false;
+    const selectedGhsaIds = selectedVulns.filter(id => id.toUpperCase().startsWith('GHSA-'));
+    const hasGhsaIds = selectedGhsaIds.length > 0;
 
     // Number of selected targets that are not currently refreshing (actionable)
     const actionableRefreshCount = (selectedRefreshTypes.has('nvd') && !nvdInProgress ? 1 : 0)
-        + (selectedRefreshTypes.has('epss') && !epssInProgress ? 1 : 0);
+        + (selectedRefreshTypes.has('epss') && !epssInProgress ? 1 : 0)
+        + (selectedRefreshTypes.has('ghsa') && !ghsaInProgress && hasGhsaIds ? 1 : 0);
 
     const allSelectedRefreshing = selectedRefreshTypes.size === 0 || actionableRefreshCount === 0;
 
@@ -122,6 +133,14 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                     if (res) triggerBanner(`EPSS refresh started for ${res.total} CVE(s)`, 'success');
                     else triggerBanner('Failed to start EPSS refresh', 'error');
                 }).catch(() => triggerBanner('Failed to start EPSS refresh', 'error'))
+            );
+        }
+        if (selectedRefreshTypes.has('ghsa') && !ghsaInProgress && selectedGhsaIds.length > 0) {
+            promises.push(
+                BulkGhsaRefreshHandler.trigger(selectedGhsaIds).then(res => {
+                    if (res) triggerBanner(`GHSA refresh started for ${res.total} GHSA(s)`, 'success');
+                    else triggerBanner('Failed to start GHSA refresh', 'error');
+                }).catch(() => triggerBanner('Failed to start GHSA refresh', 'error'))
             );
         }
         if (promises.length > 0) setRefreshMenuOpen(false);
@@ -429,7 +448,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                 title="Select databases to fetch latest vulnerability data from"
                             >
                                 Refresh Vulnerability Data
-                                {(nvdInProgress || epssInProgress) && (
+                                {(nvdInProgress || epssInProgress || ghsaInProgress) && (
                                     <span className="inline-block w-2 h-2 rounded-full bg-cyan-400 animate-pulse ml-1" title="Refresh in progress" />
                                 )}
                                 <span className="ml-1">▾</span>
@@ -502,6 +521,42 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                                     }).catch(() => { setEpssCancelling(false); triggerBanner('Failed to cancel EPSS refresh', 'error'); });
                                                 }}
                                             >{epssCancelling ? 'Cancelling…' : 'Cancel'}</button>
+                                        )}
+                                    </div>
+
+                                    {/* GHSA row */}
+                                    <div className="flex items-center justify-between py-1 px-1 rounded hover:bg-sky-900/40">
+                                        <div className="flex items-center gap-2 text-sm text-neutral-200">
+                                            {ghsaInProgress ? (
+                                                <span className="inline-block w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin flex-shrink-0" title="GHSA refresh in progress" />
+                                            ) : (
+                                                <input
+                                                    type="checkbox"
+                                                    aria-label="GHSA"
+                                                    checked={selectedRefreshTypes.has('ghsa')}
+                                                    onChange={() => toggleRefreshType('ghsa')}
+                                                    disabled={!hasGhsaIds}
+                                                    className="rounded accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                                                />
+                                            )}
+                                            <span className={!hasGhsaIds && !ghsaInProgress ? 'opacity-40' : ''}>
+                                                GHSA {!hasGhsaIds && !ghsaInProgress && <span className="text-xs text-neutral-400">(none selected)</span>}
+                                            </span>
+                                        </div>
+                                        {ghsaInProgress && (
+                                            <button
+                                                className="text-xs bg-red-800 hover:bg-red-700 px-2 py-0.5 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                                                disabled={ghsaCancelling}
+                                                title="Cancel in-progress GHSA refresh"
+                                                data-testid="cancel-ghsa-refresh"
+                                                onClick={() => {
+                                                    setGhsaCancelling(true);
+                                                    BulkGhsaRefreshCancelHandler.trigger().then(res => {
+                                                        if (res) triggerBanner('GHSA refresh cancellation requested', 'success');
+                                                        else { setGhsaCancelling(false); triggerBanner('Failed to cancel GHSA refresh', 'error'); }
+                                                    }).catch(() => { setGhsaCancelling(false); triggerBanner('Failed to cancel GHSA refresh', 'error'); });
+                                                }}
+                                            >{ghsaCancelling ? 'Cancelling…' : 'Cancel'}</button>
                                         )}
                                     </div>
 
