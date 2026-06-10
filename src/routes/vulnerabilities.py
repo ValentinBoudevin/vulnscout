@@ -152,8 +152,13 @@ def _variant_scoped_metrics_and_effort_overrides(
     overrides: dict[str, _ScopedOverrides] = {}
     for r in records:
         metric_bucket = metrics_by_vuln.get(r.id, {"scoped": [], "fallback": []})
-        selected_metrics = metric_bucket["scoped"] or metric_bucket["fallback"]
+        # CVSS is a union: global (scanner, variant_id IS NULL) scores are
+        # standard data shown for every variant, plus this variant's own
+        # custom scores. Custom scores add to — they don't hide — scanner data.
+        selected_metrics = metric_bucket["fallback"] + metric_bucket["scoped"]
 
+        # Effort is a single value per vuln: a variant-scoped estimate overrides
+        # the global one, falling back to global when none is set.
         chosen_effort = effort_by_vuln.get(r.id) or fallback_effort_by_vuln.get(r.id)
         overrides[str(r.id)] = _ScopedOverrides(selected_metrics, chosen_effort or _Effort(None, None, None))
 
@@ -399,7 +404,7 @@ def init_app(app):
                 # package (no supplier from Grype). Pre-populate r.packages instead.
                 if records:
                     _PkgVariant = aliased(Package)
-                    _pkg_var_rows = db.session.execute(
+                    _affx_q = (
                         db.select(
                             Finding.vulnerability_id, _PkgVariant.name,
                             _PkgVariant.version, _PkgVariant.supplier
@@ -408,9 +413,18 @@ def init_app(app):
                         .join(_PkgVariant, (
                             (_PkgVariant.name == Package.name) & (_PkgVariant.version == Package.version)
                         ))
+                        .outerjoin(SBOMPackage, SBOMPackage.package_id == _PkgVariant.id)
+                        .outerjoin(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
                         .where(Finding.vulnerability_id.in_([r.id for r in records]))
+                        .where(db.or_(
+                            SBOMDocument.scan_id.in_(latest_ids),
+                            _PkgVariant.id == Package.id,
+                        ))
                         .distinct()
-                    ).all()
+                    )
+                    if _pkg_ids:
+                        _affx_q = _affx_q.where(Finding.package_id.in_(_pkg_ids))
+                    _pkg_var_rows = db.session.execute(_affx_q).all()
                     _pkgs_by_vuln_var: dict[str, list[str]] = {}
                     for _vid, _pname, _pver, _psup in _pkg_var_rows:
                         _sid = f"{_pname}@{_pver}::{_psup}" if _psup else f"{_pname}@{_pver}"
@@ -453,46 +467,108 @@ def init_app(app):
                     .order_by(Vulnerability.id)
                 ).scalars().all())
 
-                # Bulk-load metrics per vulnerability
+                # Variants that belong to this project — used to scope custom
+                # CVSS/effort so overrides from other projects don't leak in.
+                # Standard (scanner) metrics live globally (variant_id IS NULL)
+                # and are shown for every project.
+                project_variant_ids = [v.id for v in Variant.get_by_project(project_uuid)]
+                if project_variant_ids:
+                    _metric_var_filter = db.or_(
+                        Metrics.variant_id.in_(project_variant_ids),
+                        Metrics.variant_id.is_(None),
+                    )
+                else:
+                    _metric_var_filter = Metrics.variant_id.is_(None)
+
+                # Bulk-load metrics per vulnerability: global scanner rows plus
+                # this project's custom rows.
                 metric_rows = db.session.execute(
                     db.select(Metrics)
-                    .where(Metrics.vulnerability_id.in_(vuln_ids_subq))
+                    .where(Metrics.vulnerability_id.in_(vuln_ids_subq), _metric_var_filter)
                 ).scalars().all()
-                metrics_by_vuln: dict[str, list] = {}
+                _global_metrics: dict[str, list] = {}
+                _custom_metrics: dict[str, list] = {}
+                _custom_metric_keys: dict[str, set] = {}
                 for m in metric_rows:
-                    metrics_by_vuln.setdefault(m.vulnerability_id, []).append(m)
+                    if m.variant_id is not None:
+                        # Dedupe identical custom metrics across the project's
+                        # variants so the same score isn't listed once per variant.
+                        key = (
+                            m.version,
+                            float(m.score) if m.score is not None else None,
+                            m.vector,
+                            m.author,
+                            m.origin,
+                        )
+                        seen = _custom_metric_keys.setdefault(m.vulnerability_id, set())
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        _custom_metrics.setdefault(m.vulnerability_id, []).append(m)
+                    else:
+                        _global_metrics.setdefault(m.vulnerability_id, []).append(m)
+                # Union: global scanner data + project custom overrides.
+                metrics_by_vuln: dict[str, list] = {}
+                for vid in set(_global_metrics) | set(_custom_metrics):
+                    metrics_by_vuln[vid] = _global_metrics.get(vid, []) + _custom_metrics.get(vid, [])
 
                 # Bulk-load packages per vulnerability, expanding to all same-name+version
                 # supplier variants so that Grype-linked packages (no supplier) also surface
                 # SBOM packages that carry supplier information.
                 _PkgVariant = aliased(Package)
-                pkg_rows = db.session.execute(
+                _pkg_q = (
                     db.select(Finding.vulnerability_id, _PkgVariant.name, _PkgVariant.version, _PkgVariant.supplier)
                     .join(Package, Finding.package_id == Package.id)
                     .join(_PkgVariant, (_PkgVariant.name == Package.name) & (_PkgVariant.version == Package.version))
+                    .outerjoin(SBOMPackage, SBOMPackage.package_id == _PkgVariant.id)
+                    .outerjoin(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
                     .where(Finding.vulnerability_id.in_(vuln_ids_subq))
+                    .where(db.or_(
+                        SBOMDocument.scan_id.in_(latest_ids),
+                        _PkgVariant.id == Package.id,
+                    ))
                     .distinct()
-                ).all()
+                )
+                if _pkg_ids:
+                    _pkg_q = _pkg_q.where(Finding.package_id.in_(_pkg_ids))
+                pkg_rows = db.session.execute(_pkg_q).all()
                 pkgs_by_vuln: dict[str, list[str]] = {}
                 for vid, pname, pver, psup in pkg_rows:
                     sid = f"{pname}@{pver}::{psup}" if psup else f"{pname}@{pver}"
                     pkgs_by_vuln.setdefault(vid, []).append(sid)
 
-                # Bulk-load effort (time estimates) per vulnerability
+                # Bulk-load effort (time estimates) per vulnerability, scoped to
+                # this project's variants (plus global NULL rows). Project-scoped
+                # estimates take precedence over global ones.
+                if project_variant_ids:
+                    _te_var_filter = db.or_(
+                        TimeEstimate.variant_id.in_(project_variant_ids),
+                        TimeEstimate.variant_id.is_(None),
+                    )
+                else:
+                    _te_var_filter = TimeEstimate.variant_id.is_(None)
                 te_rows = db.session.execute(
                     db.select(
                         Finding.vulnerability_id,
+                        TimeEstimate.variant_id,
                         TimeEstimate.optimistic,
                         TimeEstimate.likely,
                         TimeEstimate.pessimistic,
                     )
                     .join(Finding, TimeEstimate.finding_id == Finding.id)
-                    .where(Finding.vulnerability_id.in_(vuln_ids_subq))
+                    .where(Finding.vulnerability_id.in_(vuln_ids_subq), _te_var_filter)
                 ).all()
                 effort_by_vuln: dict[str, tuple] = {}
-                for vid, opti, like, pess in te_rows:
+                _fallback_effort_by_vuln: dict[str, tuple] = {}
+                for vid, te_variant_id, opti, like, pess in te_rows:
+                    if te_variant_id is not None:
+                        if vid not in effort_by_vuln:
+                            effort_by_vuln[vid] = (opti, like, pess)
+                    elif vid not in _fallback_effort_by_vuln:
+                        _fallback_effort_by_vuln[vid] = (opti, like, pess)
+                for vid, fallback in _fallback_effort_by_vuln.items():
                     if vid not in effort_by_vuln:
-                        effort_by_vuln[vid] = (opti, like, pess)
+                        effort_by_vuln[vid] = fallback
 
                 # Pre-populate transient fields so to_dict() won't lazy-load findings
                 for r in records:
@@ -880,6 +956,7 @@ def init_app(app):
                 db.select(Metrics).where(
                     Metrics.vulnerability_id == rec.id,
                     Metrics.version == cvss_version,
+                    Metrics.variant_id.is_(None),
                 )
             ).scalar_one_or_none()
             if existing is not None:

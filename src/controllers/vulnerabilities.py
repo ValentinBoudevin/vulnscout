@@ -7,6 +7,7 @@ import os
 import json
 import logging
 import typing
+import uuid
 import urllib.request
 import urllib.error
 from typing import Optional
@@ -40,7 +41,7 @@ def _batch_commit(done: int, total: int, label: str) -> None:
 
 def _persist_vuln_to_db(
         vuln: Vulnerability, pkg_id_cache=None, finding_cache=None,
-        db_record_cache=None, use_savepoint: bool = True) -> None:
+        db_record_cache=None, use_savepoint: bool = True, variant_id=None) -> None:
     """Silently persist a Vulnerability to the DB.
 
     Uses a SAVEPOINT so that a failure (e.g. IntegrityError) only rolls
@@ -54,12 +55,16 @@ def _persist_vuln_to_db(
     *db_record_cache* (``{vuln_id: record}``) avoids the ``get_by_id``
     SELECT for vulnerabilities already fetched in this session.
 
+    *variant_id* scopes persisted CVSS metrics to the variant currently
+    being processed (passed through to ``persist_from_transient``).
+
     Args:
         vuln: The vulnerability to persist
         pkg_id_cache: Optional cache of package IDs to avoid SELECT queries
         finding_cache: Optional cache of findings
         db_record_cache: Optional cache of DB Vulnerability records
         use_savepoint: If True (default), use SAVEPOINT. Set False in batch context.
+        variant_id: Optional variant UUID to scope persisted CVSS metrics.
     """
     try:
         from ..extensions import db
@@ -70,6 +75,7 @@ def _persist_vuln_to_db(
                     pkg_id_cache=pkg_id_cache,
                     finding_cache=finding_cache,
                     db_record_cache=db_record_cache,
+                    variant_id=variant_id,
                 )
         else:
             # Skip SAVEPOINT for better perf in bulk operations
@@ -78,6 +84,7 @@ def _persist_vuln_to_db(
                 pkg_id_cache=pkg_id_cache,
                 finding_cache=finding_cache,
                 db_record_cache=db_record_cache,
+                variant_id=variant_id,
             )
     except Exception as e:
         verbose(f"[_persist_vuln_to_db {vuln.id!r}] {e}")
@@ -112,6 +119,10 @@ class VulnerabilitiesController:
         observation for the new scan — preventing cross-variant observation leakage."""
         self._db_record_cache: dict = {}
         """Cache of {vuln_id: DB record} — avoids get_by_id SELECT in persist_from_transient."""
+        self.current_variant_id: uuid.UUID | None = None
+        """Variant UUID currently being processed. When set, persisted CVSS metrics
+        are scoped to this variant so scores from one project/variant don't leak
+        into another. Set by the process run from the latest scan's variant."""
         self.epss_api = EPSS_DB()
         self.nvd_api = NVD_DB()
         self._preload_cache()
@@ -135,7 +146,7 @@ class VulnerabilitiesController:
                 # Populate transient CVSS list from eager-loaded metrics
                 for m in (rec.metrics or []):
                     try:
-                        rec.register_cvss(CVSS(
+                        _cvss = CVSS(
                             m.version,
                             m.vector or "",
                             m.author or "unknown",
@@ -143,7 +154,12 @@ class VulnerabilitiesController:
                             0.0,
                             0.0,
                             m.origin or "scanner",
-                        ))
+                        )
+                        # Tag the CVSS with its source variant so that
+                        # persist_from_transient can skip custom scores that
+                        # belong to a different variant and must not be copied.
+                        _cvss.source_variant_id = m.variant_id
+                        rec.register_cvss(_cvss)
                     except Exception as e:
                         verbose(f"[VulnerabilitiesController._preload_cache register_cvss {rec.id!r}] {e}")
                 self.vulnerabilities[rec.id] = rec
@@ -152,10 +168,12 @@ class VulnerabilitiesController:
                 # Cache the DB record so persist_from_transient skips get_by_id.
                 self._db_record_cache[rec.id] = rec
                 # Pre-populate Metrics._seen so from_cvss skips the SELECT
-                # for every metric that already exists in the DB.
+                # for every metric that already exists in the DB. The dedup key
+                # must match from_cvss exactly: (vuln_id, variant_id, version, score).
                 for m in (rec.metrics or []):
                     MetricsModel._seen.add((
                         rec.id,
+                        m.variant_id,
                         m.version,
                         float(m.score) if m.score is not None else None,
                     ))
@@ -213,12 +231,14 @@ class VulnerabilitiesController:
             known_pkgs = stored._persisted_packages
             if known_pkgs is None:
                 # First persist for this vuln
-                _persist_vuln_to_db(stored, use_savepoint=self.use_savepoints, **_caches)
+                _persist_vuln_to_db(stored, use_savepoint=self.use_savepoints,
+                                    variant_id=self.current_variant_id, **_caches)
                 stored._persisted_packages = set(stored.packages)
                 self._persisted_ids.add(canonical_id)
             elif (new_packages - known_pkgs) or merged:
                 # New packages or metadata may have changed — re-persist.
-                _persist_vuln_to_db(stored, use_savepoint=self.use_savepoints, **_caches)
+                _persist_vuln_to_db(stored, use_savepoint=self.use_savepoints,
+                                    variant_id=self.current_variant_id, **_caches)
                 stored._persisted_packages = set(stored.packages)
             # else: already persisted, nothing new — skip DB entirely
 
@@ -300,13 +320,27 @@ class VulnerabilitiesController:
         # Only CVE-prefixed IDs exist in the EPSS database.
         all_cve_ids = [vid for vid in self.vulnerabilities if vid.startswith("CVE-")]
 
-        cve_vulns = {vid: self.vulnerabilities[vid] for vid in all_cve_ids}
+        # Skip CVEs whose EPSS score was already fetched in a previous run
+        # (``epss_fetched_at`` is set). The score is persisted in the DB at
+        # ingestion time, so re-fetching it from the FIRST.org API on every
+        # webapp start is redundant network/DB work.
+        cve_vulns = {
+            vid: self.vulnerabilities[vid]
+            for vid in all_cve_ids
+            if getattr(self.vulnerabilities[vid], "epss_fetched_at", None) is None
+        }
         skipped_non_cve = len(self.vulnerabilities) - len(all_cve_ids)
+        skipped_already_fetched = len(all_cve_ids) - len(cve_vulns)
 
         total = len(cve_vulns)
         msg = f"=== EPSS: starting enrichment for {total} CVEs"
+        extra = []
         if skipped_non_cve:
-            msg += f" ({skipped_non_cve} non-CVE IDs skipped)"
+            extra.append(f"{skipped_non_cve} non-CVE IDs skipped")
+        if skipped_already_fetched:
+            extra.append(f"{skipped_already_fetched} already enriched")
+        if extra:
+            msg += f" ({', '.join(extra)})"
         print(msg, flush=True)
 
         tracker = EPSSProgressTracker

@@ -768,7 +768,7 @@ class TestMetricsModelExtra:
         assert not any(m.id == m2.id for m in results)
 
     def test_from_cvss_with_variant_id(self, app, vuln, variant):
-        """from_cvss() with variant_id parameter creates scoped metrics."""
+        """from_cvss() scopes custom-origin metrics to the given variant."""
         from src.models.cvss import CVSS
         cvss = CVSS(
             version="3.1",
@@ -777,10 +777,27 @@ class TestMetricsModelExtra:
             base_score=7.5,
             exploitability_score=3.9,
             impact_score=3.6,
+            origin="custom",
         )
         Metrics._seen = set()
         m = Metrics.from_cvss(cvss, vuln.id, variant_id=variant.id)
         assert m.variant_id == variant.id
+        assert m.vulnerability_id == vuln.id
+
+    def test_from_cvss_scanner_origin_is_global(self, app, vuln, variant):
+        """from_cvss() forces scanner-origin metrics to variant_id NULL."""
+        from src.models.cvss import CVSS
+        cvss = CVSS(
+            version="3.1",
+            vector_string="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:L",
+            author="NVD",
+            base_score=7.6,
+            exploitability_score=3.9,
+            impact_score=3.6,
+        )
+        Metrics._seen = set()
+        m = Metrics.from_cvss(cvss, vuln.id, variant_id=variant.id)
+        assert m.variant_id is None
         assert m.vulnerability_id == vuln.id
 
     def test_get_by_id_with_string_uuid(self, app, metrics):
@@ -808,8 +825,10 @@ class TestMetricsModelExtra:
             exploitability_score=0.0,
             impact_score=0.0,
         )
-        # Clear _seen so from_cvss attempts the INSERT path
-        Metrics._seen.discard((vuln.id, cvss.version, float(cvss.base_score)))
+        # Clear _seen so from_cvss attempts the INSERT path. The dedup key must
+        # match from_cvss exactly: (vuln_id, variant_id, version, score). Scanner
+        # origin (the default here) is stored globally, so variant_id is None.
+        Metrics._seen.discard((vuln.id.upper(), None, cvss.version, float(cvss.base_score)))
         # Mock session.flush() to raise IntegrityError, forcing the SELECT fallback
         with mock_patch.object(_db.session, "flush", side_effect=IntegrityError("stmt", {}, None)):
             result = Metrics.from_cvss(cvss, vuln.id)
