@@ -14,6 +14,7 @@ import os
 import re
 import threading
 import time
+import urllib.error
 
 from flask import jsonify, request
 
@@ -286,6 +287,7 @@ def init_app(app):
             with app.app_context():
                 now = datetime.datetime.now(datetime.timezone.utc)
                 done = 0
+                failed = 0
                 try:
                     for ghsa_id in ghsa_ids:
                         if GHSAProgressTracker.is_cancelled():
@@ -309,8 +311,19 @@ def init_app(app):
                                         ghsa_fetched_at=now,
                                         commit=False,
                                     )
+                        except urllib.error.HTTPError as exc:
+                            if exc.code in (403, 429):
+                                _safe_commit("bulk GHSA refresh rate-limited")
+                                GHSAProgressTracker.error(
+                                    f"GitHub rate limit reached after {done} IDs (HTTP {exc.code})."
+                                    " Set GITHUB_TOKEN env var to increase quota."
+                                )
+                                return
+                            print(f"[bulk GHSA refresh] error for {ghsa_id}: {exc}", flush=True)
+                            failed += 1
                         except Exception as exc:
                             print(f"[bulk GHSA refresh] error for {ghsa_id}: {exc}", flush=True)
+                            failed += 1
 
                         done += 1
                         GHSAProgressTracker.update(
@@ -323,7 +336,12 @@ def init_app(app):
                             time.sleep(_GHSA_SLEEP_INTERVAL)
 
                     _safe_commit("bulk GHSA refresh final")
-                    GHSAProgressTracker.complete()
+                    if failed:
+                        GHSAProgressTracker.complete(
+                            f"GHSA refresh complete ({total} IDs, {failed} failed)"
+                        )
+                    else:
+                        GHSAProgressTracker.complete()
                 except Exception as exc:
                     print(f"[bulk GHSA refresh] unhandled error: {exc}", flush=True)
                     GHSAProgressTracker.error(str(exc)[:200])
