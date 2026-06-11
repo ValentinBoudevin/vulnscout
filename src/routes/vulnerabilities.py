@@ -1092,11 +1092,11 @@ def init_app(app):
 
         now = datetime.datetime.now(datetime.timezone.utc)
         try:
-            publish_date_dt = datetime.datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+            publish_date = datetime.date.fromisoformat(published_at[:10])
         except (ValueError, AttributeError):
             return jsonify({"error": "GitHub Advisory Database returned an unparseable date"}), 503
         rec.update_record(
-            publish_date=publish_date_dt,
+            publish_date=publish_date,
             ghsa_fetched_at=now,
             commit=False,
         )
