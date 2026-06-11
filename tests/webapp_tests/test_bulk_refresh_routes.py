@@ -1157,3 +1157,83 @@ class TestConcurrentBulkGhsaRefresh:
 
         results.sort()
         assert results == [202, 409], f"Expected [202, 409], got {results}"
+
+
+# ---------------------------------------------------------------------------
+# Single GHSA refresh — /api/vulnerabilities/<ghsa_id>/ghsa-refresh
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def ghsa_vuln(app, existing_ghsa_id):
+    """Seed a GHSA vulnerability into the test DB and return its ID."""
+    from src.extensions import db
+    from src.models.vulnerability import Vulnerability
+    with app.app_context():
+        Vulnerability.create_record(id=existing_ghsa_id, description="GHSA test advisory")
+        db.session.commit()
+    return existing_ghsa_id
+
+
+class TestSingleGhsaRefreshEndpoint:
+
+    def test_returns_200_and_stamps_ghsa_fetched_at(self, client, ghsa_vuln):
+        with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value="2023-05-01T00:00:00Z"):
+            resp = client.post(f"/api/vulnerabilities/{ghsa_vuln}/ghsa-refresh")
+        assert resp.status_code == 200
+        vuln = resp.get_json()["vulnerabilities"][0]
+        assert vuln["id"] == ghsa_vuln
+        assert vuln["ghsa_fetched_at"] is not None
+
+    def test_publish_date_stored_as_date_not_datetime(self, client, ghsa_vuln, app):
+        """publish_date must be a date (not datetime) — guards the type-mismatch fix."""
+        import datetime
+        with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value="2023-05-01T12:34:56Z"):
+            resp = client.post(f"/api/vulnerabilities/{ghsa_vuln}/ghsa-refresh")
+        assert resp.status_code == 200
+        from src.extensions import db
+        from src.models.vulnerability import Vulnerability
+        with app.app_context():
+            rec = db.session.get(Vulnerability, ghsa_vuln)
+            assert isinstance(rec.publish_date, datetime.date)
+            assert not isinstance(rec.publish_date, datetime.datetime)
+            assert rec.publish_date == datetime.date(2023, 5, 1)
+
+    def test_returns_404_for_unknown_ghsa_id(self, client):
+        with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value="2023-05-01T00:00:00Z"):
+            resp = client.post("/api/vulnerabilities/GHSA-0000-0000-0000/ghsa-refresh")
+        assert resp.status_code == 404
+
+    def test_returns_400_for_non_ghsa_id(self, client):
+        resp = client.post("/api/vulnerabilities/CVE-2020-35492/ghsa-refresh")
+        assert resp.status_code == 400
+
+    def test_returns_503_when_api_returns_none(self, client, ghsa_vuln):
+        with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value=None):
+            resp = client.post(f"/api/vulnerabilities/{ghsa_vuln}/ghsa-refresh")
+        assert resp.status_code == 503
+
+    def test_returns_404_when_github_api_returns_404(self, client, ghsa_vuln):
+        import urllib.error
+        http_404 = urllib.error.HTTPError(url=None, code=404, msg="Not Found", hdrs=None, fp=None)
+        with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published",
+                   side_effect=http_404):
+            resp = client.post(f"/api/vulnerabilities/{ghsa_vuln}/ghsa-refresh")
+        assert resp.status_code == 404
+        assert "not found" in resp.get_json()["error"].lower()
+
+    def test_returns_503_on_network_error(self, client, ghsa_vuln):
+        import urllib.error
+        with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published",
+                   side_effect=urllib.error.URLError("connection refused")):
+            resp = client.post(f"/api/vulnerabilities/{ghsa_vuln}/ghsa-refresh")
+        assert resp.status_code == 503
+
+    def test_returns_503_on_unparseable_date(self, client, ghsa_vuln):
+        with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value="not-a-date"):
+            resp = client.post(f"/api/vulnerabilities/{ghsa_vuln}/ghsa-refresh")
+        assert resp.status_code == 503

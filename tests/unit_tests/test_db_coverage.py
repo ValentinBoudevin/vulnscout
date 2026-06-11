@@ -1199,26 +1199,28 @@ class TestVulnerabilitiesController:
         assert result == "2024-03-01T00:00:00Z"
 
     def test_fetch_ghsa_published_http_error(self):
-        """_fetch_ghsa_published returns None on HTTPError (line 283)."""
+        """_fetch_ghsa_published re-raises HTTPError so callers can discriminate status codes."""
         import urllib.error
+        import pytest
         from unittest.mock import patch as mock_patch
         from src.controllers.vulnerabilities import VulnerabilitiesController
 
         err = urllib.error.HTTPError("url", 404, "Not Found", {}, None)
         with mock_patch("urllib.request.urlopen", side_effect=err):
-            result = VulnerabilitiesController._fetch_ghsa_published("GHSA-xxxx")
-        assert result is None
+            with pytest.raises(urllib.error.HTTPError):
+                VulnerabilitiesController._fetch_ghsa_published("GHSA-xxxx")
 
     def test_fetch_ghsa_published_url_error(self):
-        """_fetch_ghsa_published returns None on URLError (line 285)."""
+        """_fetch_ghsa_published re-raises URLError so callers can distinguish network failures."""
         import urllib.error
+        import pytest
         from unittest.mock import patch as mock_patch
         from src.controllers.vulnerabilities import VulnerabilitiesController
 
         err = urllib.error.URLError("timeout")
         with mock_patch("urllib.request.urlopen", side_effect=err):
-            result = VulnerabilitiesController._fetch_ghsa_published("GHSA-xxxx")
-        assert result is None
+            with pytest.raises(urllib.error.URLError):
+                VulnerabilitiesController._fetch_ghsa_published("GHSA-xxxx")
 
     def test_fetch_ghsa_published_generic_error(self):
         """_fetch_ghsa_published returns None on generic Exception (line 286)."""

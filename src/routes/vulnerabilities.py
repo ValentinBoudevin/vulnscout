@@ -5,6 +5,7 @@ import datetime
 import os
 import dataclasses
 import typing
+import urllib.error
 
 from flask import jsonify, request
 from sqlalchemy import func, select
@@ -1086,9 +1087,16 @@ def init_app(app):
         if rec is None:
             return jsonify({"error": "GHSA advisory not found"}), 404
 
-        published_at = VulnerabilitiesController._fetch_ghsa_published(ghsa_id_upper)
+        try:
+            published_at = VulnerabilitiesController._fetch_ghsa_published(ghsa_id_upper)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return jsonify({"error": "Advisory not found in GitHub Advisory Database"}), 404
+            return jsonify({"error": f"GitHub Advisory Database returned HTTP {e.code}"}), 502
+        except urllib.error.URLError:
+            return jsonify({"error": "Failed to reach GitHub Advisory Database"}), 503
         if published_at is None:
-            return jsonify({"error": "GitHub Advisory Database returned no data for this advisory"}), 503
+            return jsonify({"error": "GitHub Advisory Database returned no published date"}), 503
 
         now = datetime.datetime.now(datetime.timezone.utc)
         try:

@@ -409,10 +409,8 @@ class VulnerabilitiesController:
             with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode("utf-8"))
                 return data.get("published_at")
-        except urllib.error.HTTPError as e:
-            print(f"Error for {vuln_id}: {e.code}")
-        except urllib.error.URLError as e:
-            print(f"Error for {vuln_id}: {e.reason}")
+        except (urllib.error.HTTPError, urllib.error.URLError):
+            raise
         except Exception as e:
             print(f"Error for {vuln_id}: {e}")
         return None
