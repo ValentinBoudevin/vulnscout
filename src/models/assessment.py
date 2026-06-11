@@ -3,7 +3,7 @@
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 from sqlalchemy import orm
 from sqlalchemy.orm import Mapped, relationship, joinedload
 from ..extensions import db, Base
@@ -219,7 +219,7 @@ class Assessment(Base):
     # Validation / mutation helpers
     # ==================================================================
 
-    def add_package(self, package: "Any") -> bool:
+    def add_package(self, package: str | Package) -> bool:
         """Add a package to the transient package list.
 
         *package* can be a ``'name@version'`` string or a :class:`Package` instance.
@@ -571,7 +571,11 @@ class Assessment(Base):
         ).scalars().unique().all())
 
     @staticmethod
-    def from_vuln_assessment(assess: "Any", finding_id: "Any" = None, variant_id: "Any" = None) -> "Assessment":
+    def from_vuln_assessment(
+        assess: "Assessment",
+        finding_id: "uuid.UUID | None" = None,
+        variant_id: "uuid.UUID | None" = None,
+    ) -> "Assessment":
         """Create or update an ``Assessment`` DB record from an Assessment DTO.
 
         Does not commit — callers are expected to be inside batch_session()
@@ -734,7 +738,7 @@ class Assessment(Base):
         impact_statement: Optional[str] = None,
         workaround: Optional[str] = None,
         responses: Optional[list[str]] = None,
-        **_kwargs: Any,
+        **_kwargs: object,
     ) -> "Assessment":
         """Update fields in place, persist the change and return ``self``."""
         if status is not None:

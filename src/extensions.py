@@ -1,9 +1,9 @@
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Session
 from sqlalchemy import event
 from contextlib import contextmanager
-from typing import Any, Generator
+from typing import Generator
 import threading
 
 
@@ -107,7 +107,7 @@ _write_lock_state = threading.local()
 _write_serialization_initialized = False
 
 
-def setup_write_serialization(session_factory: Any) -> None:
+def setup_write_serialization(session_factory: object) -> None:
     """Register SQLAlchemy session events that serialise SQLite writes.
 
     Call once after ``db.init_app(app)`` when the engine is SQLite.  The
@@ -119,13 +119,13 @@ def setup_write_serialization(session_factory: Any) -> None:
         return
     _write_serialization_initialized = True
 
-    def _release_lock(*_args: Any, **_kwargs: Any) -> None:
+    def _release_lock(*_args: object, **_kwargs: object) -> None:
         if getattr(_write_lock_state, "held", False):
             _write_lock_state.held = False
             _db_write_lock.release()
 
     @event.listens_for(session_factory, "before_flush")
-    def _before_flush(session: Any, flush_context: Any, instances: Any) -> None:
+    def _before_flush(session: Session, flush_context: object, instances: object) -> None:  # type: ignore[assignment]
         # Only acquire if there are actual pending writes.
         if not (session.new or session.dirty or session.deleted):
             return
@@ -134,16 +134,16 @@ def setup_write_serialization(session_factory: Any) -> None:
             _write_lock_state.held = True
 
     @event.listens_for(session_factory, "after_commit")
-    def _after_commit(session: Any) -> None:
+    def _after_commit(session: Session) -> None:  # type: ignore[assignment]
         _release_lock()
 
     @event.listens_for(session_factory, "after_soft_rollback")
-    def _after_soft_rollback(session: Any, previous_transaction: Any) -> None:
+    def _after_soft_rollback(session: Session, previous_transaction: object) -> None:  # type: ignore[assignment]
         _release_lock()
 
 
 @contextmanager
-def batch_session() -> Generator[Any, None, None]:
+def batch_session() -> Generator[object, None, None]:
     """Context manager that defers all ``db.session.commit()`` calls to a single
     commit at the end of the block.  Inside the block every ``commit()`` is
     silently replaced by ``flush()`` so that auto-generated PKs are available
@@ -175,7 +175,7 @@ def batch_session() -> Generator[Any, None, None]:
 
     session.commit = _deferred_commit  # type: ignore[assignment]
     try:
-        yield session
+        yield session  # type: ignore[misc]
         original_commit()  # single real commit
     except Exception:
         try:

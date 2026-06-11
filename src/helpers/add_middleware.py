@@ -1,10 +1,10 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar, cast
 
 from flask import Flask
-from flask.typing import RouteCallable, ResponseReturnValue
+from flask.typing import ResponseReturnValue
 from functools import wraps
 
 # custom definition for @app.middleware. Use it as you would @app.route
@@ -12,6 +12,7 @@ from functools import wraps
 # If you return None, the request will continue to the next middleware or route
 
 MiddlewareCallable = Callable[..., ResponseReturnValue | None]
+RouteFunc = TypeVar("RouteFunc", bound=Callable[..., Any])
 
 
 class FlaskWithMiddleware(Flask):
@@ -26,8 +27,8 @@ class FlaskWithMiddleware(Flask):
             return func
         return middleware_decorator
 
-    def route(self, rule: str, **options: Any) -> Callable[[RouteCallable], RouteCallable]:
-        def route_decorator(func: RouteCallable) -> RouteCallable:
+    def route(self, rule: str, **options: Any) -> Callable[[RouteFunc], RouteFunc]:
+        def route_decorator(func: RouteFunc) -> RouteFunc:
             enabled_middlewares = [
                 middleware for path_prefix, middleware in self.middlewares if
                 rule.lstrip("/").startswith(path_prefix)
@@ -40,5 +41,5 @@ class FlaskWithMiddleware(Flask):
                     if result is not None:
                         return result
                 return func(*args, **kwargs)
-            return super(FlaskWithMiddleware, self).route(rule, **options)(wrapper)
+            return cast(RouteFunc, super(FlaskWithMiddleware, self).route(rule, **options)(wrapper))
         return route_decorator

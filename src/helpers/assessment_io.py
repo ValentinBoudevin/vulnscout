@@ -21,13 +21,15 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..models.variant import Variant as _Variant  # noqa: F401
+    from ..models.assessment import Assessment as _Assessment  # noqa: F401
+    from ..models.vulnerability import Vulnerability as _Vulnerability  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
 # Export helpers
 # ---------------------------------------------------------------------------
 
-def _get_vuln_info(vuln_id: str, vuln_cache: dict[str, Any]) -> dict[str, Any]:
+def _get_vuln_info(vuln_id: str, vuln_cache: "dict[str, _Vulnerability | None]") -> "dict[str, str | list[str]]":
     """Return a dict with description, aliases and url for *vuln_id*.
 
     Uses *vuln_cache* (mutated in-place) to avoid repeated DB lookups.
@@ -62,10 +64,10 @@ def sanitize_variant_name(name: str) -> str:
 
 
 def build_openvex_doc(
-    assessments: list[Any],
+    assessments: "list[_Assessment]",
     author: str,
     now_iso: str | None = None,
-    vuln_cache: dict[str, Any] | None = None,
+    vuln_cache: "dict[str, _Vulnerability | None] | None" = None,
 ) -> dict[str, Any]:
     """Build a single OpenVEX document dict from a list of assessments.
 
@@ -142,7 +144,7 @@ def build_openvex_doc(
 
 
 def build_openvex_archive(
-    handmade_assessments: list[Any],
+    handmade_assessments: "list[_Assessment]",
     variant_names: dict[str, str],
     author: str,
     now_iso: str | None = None,
@@ -173,9 +175,9 @@ def build_openvex_archive(
     if now_iso is None:
         now_iso = _dt.now(_tz.utc).isoformat()
 
-    vuln_cache: dict[str, Any] = {}
+    vuln_cache: "dict[str, _Vulnerability | None]" = {}
 
-    by_variant: dict[str | None, list[Any]] = defaultdict(list)
+    by_variant: "dict[str | None, list[_Assessment]]" = defaultdict(list)
     for assess in handmade_assessments:
         vid = str(assess.variant_id) if assess.variant_id else None
         by_variant[vid].append(assess)
@@ -210,7 +212,7 @@ def is_openvex_doc(doc: object) -> bool:
 
 
 def import_statements(
-    statements: list[Any],
+    statements: list[dict[str, Any]],
     variant_id: "_uuid.UUID",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
     """Persist a list of OpenVEX statement dicts as DB assessments.
@@ -326,7 +328,7 @@ def import_statements(
     return created, errors, skipped
 
 
-def build_variant_by_name_map(project_id: "_uuid.UUID | None" = None) -> dict[str, Any]:
+def build_variant_by_name_map(project_id: "_uuid.UUID | None" = None) -> "dict[str, _Variant]":
     """Return a ``{name: Variant, sanitised_name: Variant}`` lookup.
 
     Parameters
@@ -339,7 +341,7 @@ def build_variant_by_name_map(project_id: "_uuid.UUID | None" = None) -> dict[st
     from ..models.variant import Variant as DBVariant
 
     variants = DBVariant.get_by_project(project_id) if project_id else DBVariant.get_all()
-    variant_by_name: dict[str, Any] = {}
+    variant_by_name: "dict[str, _Variant]" = {}
     for v in variants:
         sanitised = sanitize_variant_name(v.name)
         variant_by_name[sanitised] = v
@@ -349,7 +351,7 @@ def build_variant_by_name_map(project_id: "_uuid.UUID | None" = None) -> dict[st
 
 def import_archive_bytes(
     file_bytes: bytes,
-    variant_by_name: dict[str, Any],
+    variant_by_name: "dict[str, _Variant]",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
     """Import OpenVEX assessments from a tar.gz archive (as raw bytes).
 
@@ -408,7 +410,7 @@ def import_archive_bytes(
 
 def import_directory(
     dir_path: str,
-    variant_by_name: dict[str, Any],
+    variant_by_name: "dict[str, _Variant]",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
     """Import OpenVEX assessments from a directory of JSON files.
 
@@ -622,7 +624,7 @@ def build_custom_data_export(
 
 def import_custom_data(
     data: dict[str, Any],
-    variant_by_name: dict[str, Any],
+    variant_by_name: "dict[str, _Variant]",
     variant_id: "_uuid.UUID | None" = None,
 ) -> dict[str, Any]:
     """Import a custom-data JSON document containing assessments, CVSS and
