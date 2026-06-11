@@ -44,8 +44,8 @@ class FastSPDX ():
             ref_type = _get_field(external_ref, ["referenceType"])
             if ref_type == "purl":
                 purl = _get_field(external_ref, ["referenceLocator"])
-                assert isinstance(purl, str)
-                package.add_purl(purl)
+                if isinstance(purl, str):
+                    package.add_purl(purl)
             elif ref_type == "cpe23Type":
                 cpe = _get_field(external_ref, ["referenceLocator"])
                 if isinstance(cpe, str):
