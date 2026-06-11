@@ -32,6 +32,7 @@ function useRefreshProgressEffect(
     prevStartedAt: React.MutableRefObject<string | null>,
     setSourceBanner: (state: SourceBanner) => void,
     onRefreshComplete?: () => void,
+    noun: string = 'entries',
 ) {
     useEffect(() => {
         const inProgress = progress?.in_progress ?? false;
@@ -53,10 +54,10 @@ function useRefreshProgressEffect(
             if (phase === 'cancelled') {
                 const current = progress?.current ?? 0;
                 const total = progress?.total ?? 0;
-                setSourceBanner({ message: `${label} refresh cancelled${current > 0 ? ` (${current}/${total} CVEs)` : ''}`, type: 'error' });
+                setSourceBanner({ message: `${label} refresh cancelled${current > 0 ? ` (${current}/${total} ${noun})` : ''}`, type: 'error' });
             } else {
                 const total = progress?.total ?? 0;
-                setSourceBanner({ message: `${label} refresh complete${total > 0 ? ` (${total} CVEs)` : ''}`, type: 'success' });
+                setSourceBanner({ message: `${label} refresh complete${total > 0 ? ` (${total} ${noun})` : ''}`, type: 'success' });
             }
         }
         if (progress !== null) {
@@ -419,9 +420,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     }, [filterLabel, filterValue]);
 
     // Update per-source banners with live progress; reload data when each refresh completes
-    useRefreshProgressEffect(nvdProgress, 'NVD', prevNvdInProgress, prevNvdPhase, prevNvdStartedAt, setNvdBanner, onRefreshComplete);
-    useRefreshProgressEffect(epssProgress, 'EPSS', prevEpssInProgress, prevEpssPhase, prevEpssStartedAt, setEpssBanner, onRefreshComplete);
-    useRefreshProgressEffect(ghsaProgress, 'GHSA', prevGhsaInProgress, prevGhsaPhase, prevGhsaStartedAt, setGhsaBanner, onRefreshComplete);
+    useRefreshProgressEffect(nvdProgress, 'NVD', prevNvdInProgress, prevNvdPhase, prevNvdStartedAt, setNvdBanner, onRefreshComplete, 'CVEs');
+    useRefreshProgressEffect(epssProgress, 'EPSS', prevEpssInProgress, prevEpssPhase, prevEpssStartedAt, setEpssBanner, onRefreshComplete, 'CVEs');
+    useRefreshProgressEffect(ghsaProgress, 'GHSA', prevGhsaInProgress, prevGhsaPhase, prevGhsaStartedAt, setGhsaBanner, onRefreshComplete, 'advisories');
 
     // Fetch NVD progress on mount and periodically
     useEffect(() => {
