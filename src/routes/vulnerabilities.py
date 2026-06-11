@@ -5,6 +5,7 @@ import datetime
 import os
 import dataclasses
 import typing
+import re
 import urllib.error
 
 from flask import jsonify, request
@@ -43,6 +44,7 @@ from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
 
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
+_GHSA_RE = re.compile(r'^GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$')
 
 
 def _sbom_pkg_filter(pkg_ids):
@@ -1081,8 +1083,8 @@ def init_app(app):
     @app.route('/api/vulnerabilities/<ghsa_id>/ghsa-refresh', methods=['POST'])
     def refresh_single_ghsa(ghsa_id):
         ghsa_id_upper = ghsa_id.upper()
-        if not ghsa_id_upper.startswith('GHSA-'):
-            return jsonify({"error": "Only GHSA identifiers are supported by this endpoint"}), 400
+        if not _GHSA_RE.match(ghsa_id_upper):
+            return jsonify({"error": "Only valid GHSA identifiers (GHSA-xxxx-xxxx-xxxx) are supported"}), 400
         rec = db.session.get(Vulnerability, ghsa_id_upper)
         if rec is None:
             return jsonify({"error": "GHSA advisory not found"}), 404

@@ -1237,3 +1237,103 @@ class TestSingleGhsaRefreshEndpoint:
                    return_value="not-a-date"):
             resp = client.post(f"/api/vulnerabilities/{ghsa_vuln}/ghsa-refresh")
         assert resp.status_code == 503
+
+    def test_returns_400_for_malformed_ghsa_id(self, client):
+        """Regex rejects IDs with wrong segment length even if GHSA-prefixed."""
+        resp = client.post("/api/vulnerabilities/GHSA-tooshort/ghsa-refresh")
+        assert resp.status_code == 400
+
+    def test_returns_400_for_ghsa_id_with_invalid_chars(self, client):
+        """Regex rejects GHSA IDs containing characters outside [A-Z0-9]."""
+        resp = client.post("/api/vulnerabilities/GHSA-xx!!-xxxx-xxxx/ghsa-refresh")
+        assert resp.status_code == 400
+
+
+class TestBulkGhsaRefreshFailedCounter:
+    """Guards the failed-counter logic and 403/429 abort in _run()."""
+
+    def _capture_target(self, client, ghsa_ids):
+        captured = {}
+
+        def fake_thread(target=None, **kwargs):
+            captured["target"] = target
+            return MagicMock()
+
+        with patch("src.routes.bulk_refresh.threading.Thread", side_effect=fake_thread):
+            resp = client.post(
+                "/api/vulnerabilities/bulk-ghsa-refresh",
+                json={"ghsa_ids": ghsa_ids},
+            )
+        assert resp.status_code == 202
+        return captured["target"]
+
+    def test_complete_includes_failed_count_when_errors_occur(self, client):
+        """complete() receives a message mentioning 'failed' when per-ID errors happen."""
+        target = self._capture_target(client, ["GHSA-AAAA-BBBB-CCCC", "GHSA-R7JW-VC2X-4GBH"])
+
+        def fake_fetch(ghsa_id):
+            if ghsa_id == "GHSA-AAAA-BBBB-CCCC":
+                raise RuntimeError("network error")
+            return None
+
+        with patch("src.routes.bulk_refresh.VulnerabilitiesController._fetch_ghsa_published",
+                   side_effect=fake_fetch), \
+             patch("src.routes.bulk_refresh.db"), \
+             patch("src.routes.bulk_refresh.time.sleep"), \
+             patch("src.routes.bulk_refresh.GHSAProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            target()
+
+        MockTracker.complete.assert_called_once()
+        call_args = MockTracker.complete.call_args
+        msg = call_args[0][0] if call_args[0] else call_args[1].get("message", "")
+        assert "failed" in msg.lower()
+
+    def test_complete_called_without_message_when_no_errors(self, client):
+        """complete() called with no message when all IDs succeed."""
+        target = self._capture_target(client, ["GHSA-R7JW-VC2X-4GBH"])
+
+        with patch("src.routes.bulk_refresh.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value=None), \
+             patch("src.routes.bulk_refresh.db"), \
+             patch("src.routes.bulk_refresh.time.sleep"), \
+             patch("src.routes.bulk_refresh.GHSAProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            target()
+
+        MockTracker.complete.assert_called_once_with()
+
+    def test_run_aborts_and_calls_error_on_403(self, client):
+        """HTTP 403 from GitHub triggers GHSAProgressTracker.error() and stops the loop."""
+        import urllib.error
+        target = self._capture_target(client, ["GHSA-AAAA-BBBB-CCCC", "GHSA-R7JW-VC2X-4GBH"])
+        http_403 = urllib.error.HTTPError(url=None, code=403, msg="Forbidden", hdrs=None, fp=None)
+
+        with patch("src.routes.bulk_refresh.VulnerabilitiesController._fetch_ghsa_published",
+                   side_effect=http_403), \
+             patch("src.routes.bulk_refresh.db"), \
+             patch("src.routes.bulk_refresh.time.sleep"), \
+             patch("src.routes.bulk_refresh.GHSAProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            target()
+
+        MockTracker.error.assert_called_once()
+        assert "GITHUB_TOKEN" in MockTracker.error.call_args[0][0]
+        MockTracker.complete.assert_not_called()
+
+    def test_run_aborts_and_calls_error_on_429(self, client):
+        """HTTP 429 from GitHub triggers GHSAProgressTracker.error() and stops the loop."""
+        import urllib.error
+        target = self._capture_target(client, ["GHSA-AAAA-BBBB-CCCC", "GHSA-R7JW-VC2X-4GBH"])
+        http_429 = urllib.error.HTTPError(url=None, code=429, msg="Too Many Requests", hdrs=None, fp=None)
+
+        with patch("src.routes.bulk_refresh.VulnerabilitiesController._fetch_ghsa_published",
+                   side_effect=http_429), \
+             patch("src.routes.bulk_refresh.db"), \
+             patch("src.routes.bulk_refresh.time.sleep"), \
+             patch("src.routes.bulk_refresh.GHSAProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            target()
+
+        MockTracker.error.assert_called_once()
+        MockTracker.complete.assert_not_called()
