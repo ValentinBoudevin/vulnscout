@@ -2,7 +2,36 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import re
-from typing import Any, Optional
+from typing import Optional, TypedDict
+
+
+class NvdCpeMatch(TypedDict, total=False):
+    """A single cpeMatch entry from an NVD configuration node"""
+    criteria: str
+    vulnerable: bool
+    versionStartIncluding: str
+    versionStartExcluding: str
+    versionEndIncluding: str
+    versionEndExcluding: str
+
+
+class NvdConfigNode(TypedDict, total=False):
+    """A configuration node from an NVD CVE, possibly nested"""
+    operator: str
+    negate: bool
+    cpeMatch: list[NvdCpeMatch]
+    nodes: list["NvdConfigNode"]
+
+
+class NvdCve(TypedDict, total=False):
+    """The cve object of an NVD vulnerability"""
+    configurations: list[NvdConfigNode]
+
+
+class NvdResults(TypedDict, total=False):
+    """An NVD API result, either a full response or a single vulnerability"""
+    vulnerabilities: list["NvdResults"]
+    cve: NvdCve
 
 
 class FixSolution:
@@ -50,7 +79,7 @@ class FixsScrapper:
                 return parts[4], parts[5]
         return None
 
-    def _search_in_nvd_node(self, node: dict[str, Any], negate: bool = False) -> None:
+    def _search_in_nvd_node(self, node: NvdConfigNode, negate: bool = False) -> None:
         """
         Generate a list of FixSolution from a NVD node
         Internal use only
@@ -112,7 +141,7 @@ class FixsScrapper:
                         artifact.vulnerables.append(f"= {pkg_version}")
                 self.solutions.append(artifact)
 
-    def search_in_nvd(self, nvd_results: dict[str, Any]) -> None:
+    def search_in_nvd(self, nvd_results: NvdResults) -> None:
         """
         Generate a list of FixSolution from a result from NVD API
         """
