@@ -1248,6 +1248,17 @@ class TestSingleGhsaRefreshEndpoint:
         resp = client.post("/api/vulnerabilities/GHSA-xx!!-xxxx-xxxx/ghsa-refresh")
         assert resp.status_code == 400
 
+    def test_response_includes_texts_key(self, client, ghsa_vuln):
+        """Regression: single GHSA refresh must return 'texts' so the frontend
+        does not overwrite the existing description with an empty array."""
+        with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value="2023-05-01T00:00:00Z"):
+            resp = client.post(f"/api/vulnerabilities/{ghsa_vuln}/ghsa-refresh")
+        assert resp.status_code == 200
+        vuln = resp.get_json()["vulnerabilities"][0]
+        assert "texts" in vuln
+        assert isinstance(vuln["texts"], list)
+
 
 class TestBulkGhsaRefreshFailedCounter:
     """Guards the failed-counter logic and 403/429 abort in _run()."""

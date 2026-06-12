@@ -1123,4 +1123,8 @@ def init_app(app):
                 if rec.severity_max_score is None or score > rec.severity_max_score:
                     rec.severity_max_score = score
 
-        return jsonify({"vulnerabilities": [rec.to_dict()]}), 200
+        data = rec.to_dict()
+        vuln_texts = fetch_vulnerabilities_texts([ghsa_id_upper], variant_ids=None)
+        data["texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[ghsa_id_upper]))
+
+        return jsonify({"vulnerabilities": [data]}), 200
