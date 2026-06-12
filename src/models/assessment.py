@@ -335,6 +335,8 @@ class Assessment(Base):
         return False
 
     def set_workaround(self, workaround: str, timestamp: Optional[str] = None) -> None:
+        """Set the workaround text. The timestamp argument is accepted for compatibility but not stored."""
+
         self.workaround = workaround
 
     # ==================================================================
@@ -738,7 +740,6 @@ class Assessment(Base):
         impact_statement: Optional[str] = None,
         workaround: Optional[str] = None,
         responses: Optional[list[str]] = None,
-        **_kwargs: object,
     ) -> "Assessment":
         """Update fields in place, persist the change and return ``self``."""
         if status is not None:

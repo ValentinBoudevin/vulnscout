@@ -20,9 +20,9 @@ from datetime import datetime as _dt, timezone as _tz
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..models.variant import Variant as _Variant  # noqa: F401
-    from ..models.assessment import Assessment as _Assessment  # noqa: F401
-    from ..models.vulnerability import Vulnerability as _Vulnerability  # noqa: F401
+    from ..models.variant import Variant as _Variant
+    from ..models.assessment import Assessment as _Assessment
+    from ..models.vulnerability import Vulnerability as _Vulnerability
 
 
 # ---------------------------------------------------------------------------
