@@ -1368,3 +1368,90 @@ def test_import_custom_data_cvss_sets_origin_from_import(client):
     assert resp.status_code == 200
     result = json.loads(resp.data)
     assert result["cvss_imported"] >= 1
+
+class TestFetchVulnerabilitiesTexts:
+    """Regression tests for src.routes._scan_queries.fetch_vulnerabilities_texts.
+
+    A user hit an AssertionError (`assert text.packages`) when an observation
+    that carries a package matched an existing text whose ``packages`` list was
+    still ``None`` (e.g. the vulnerability ``description`` text, or an
+    observation first seen without a package).
+    """
+
+    VULNERABILITY_ID = "CVE-2020-35492"
+    SBOM_DOC_ID = uuid.UUID("44444444-4444-4444-4444-444444444444")
+
+    def test_observation_matching_description_text_with_package(self, app):
+        """An observation with key='description' + a package must not crash."""
+        from src.extensions import db
+        from src.models import SBOMObservation
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.routes._scan_queries import fetch_vulnerabilities_texts
+
+        with app.app_context():
+            description = db.session.get(Vulnerability, self.VULNERABILITY_ID).description
+            pkg = Package.find_or_create("cairo", "1.16.0", [], [], "")
+            db.session.add(SBOMObservation(
+                vulnerability_id=self.VULNERABILITY_ID,
+                sbom_document_id=self.SBOM_DOC_ID,
+                key="description",
+                description=description,
+                package_id=pkg.id,
+            ))
+            db.session.commit()
+
+            texts = fetch_vulnerabilities_texts(
+                [self.VULNERABILITY_ID], include_packages=True
+            )
+
+        entries = texts[self.VULNERABILITY_ID]
+        description_entries = [
+            t for t in entries
+            if t.title == "description" and t.content == description
+        ]
+        assert len(description_entries) == 1
+        assert description_entries[0].packages == ["cairo"]
+
+    def test_observation_without_then_with_package(self, app):
+        """Same key/content, one observation without a package, one with one.
+
+        The packageless observation creates a text whose ``packages`` is None;
+        the second observation (carrying a package) must enrich it in place
+        rather than raise.
+        """
+        from src.extensions import db
+        from src.models import SBOMObservation
+        from src.models.package import Package
+        from src.routes._scan_queries import fetch_vulnerabilities_texts
+
+        with app.app_context():
+            pkg = Package.find_or_create("cairo", "1.16.0", [], [], "")
+            db.session.add_all([
+                SBOMObservation(
+                    vulnerability_id=self.VULNERABILITY_ID,
+                    sbom_document_id=self.SBOM_DOC_ID,
+                    key="shared key",
+                    description="shared content",
+                    package_id=None,
+                ),
+                SBOMObservation(
+                    vulnerability_id=self.VULNERABILITY_ID,
+                    sbom_document_id=self.SBOM_DOC_ID,
+                    key="shared key",
+                    description="shared content",
+                    package_id=pkg.id,
+                ),
+            ])
+            db.session.commit()
+
+            texts = fetch_vulnerabilities_texts(
+                [self.VULNERABILITY_ID], include_packages=True
+            )
+
+        shared = [
+            t for t in texts[self.VULNERABILITY_ID]
+            if t.title == "shared key" and t.content == "shared content"
+        ]
+        assert len(shared) == 1
+        assert shared[0].packages == ["cairo"]

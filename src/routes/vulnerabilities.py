@@ -271,11 +271,11 @@ def _populate_found_by(
             non_dedicated = doc_formats - _DEDICATED_SCANNER_FORMATS
             chosen = non_dedicated if non_dedicated else doc_formats
             for fmt in chosen:
-                assert isinstance(fmt, str)
+                if not isinstance(fmt, str):
+                    continue
                 mapped = _FORMAT_TO_FOUND_BY.get(fmt, fmt)
                 found_by_map.setdefault(vuln_id, set()).add(mapped)
-        elif scan_source is not None:
-            assert isinstance(scan_source, str)
+        elif isinstance(scan_source, str):
             mapped = _TOOL_SOURCE_TO_FOUND_BY.get(scan_source, scan_source)
             found_by_map.setdefault(vuln_id, set()).add(mapped)
 
