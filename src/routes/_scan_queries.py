@@ -542,8 +542,10 @@ def fetch_vulnerabilities_texts(
             found = False
             for text in texts:
                 if text.title == obs_key and text.content == obs_desc:
-                    assert text.packages
-                    text.packages.append(pkg)
+                    if text.packages is None:
+                        text.packages = []
+                    if pkg not in text.packages:
+                        text.packages.append(pkg)
                     found = True
                     break
             if not found:

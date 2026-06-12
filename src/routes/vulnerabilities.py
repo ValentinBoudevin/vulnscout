@@ -271,11 +271,11 @@ def _populate_found_by(
             non_dedicated = doc_formats - _DEDICATED_SCANNER_FORMATS
             chosen = non_dedicated if non_dedicated else doc_formats
             for fmt in chosen:
-                assert isinstance(fmt, str)
+                if not isinstance(fmt, str):
+                    continue
                 mapped = _FORMAT_TO_FOUND_BY.get(fmt, fmt)
                 found_by_map.setdefault(vuln_id, set()).add(mapped)
-        elif scan_source is not None:
-            assert isinstance(scan_source, str)
+        elif isinstance(scan_source, str):
             mapped = _TOOL_SOURCE_TO_FOUND_BY.get(scan_source, scan_source)
             found_by_map.setdefault(vuln_id, set()).add(mapped)
 
@@ -310,7 +310,7 @@ def init_app(app):
             _scope_project = None
             opts = (
                 selectinload(Vulnerability.findings).selectinload(Finding.package),
-                selectinload(Vulnerability.findings).selectinload(Finding.time_estimate),
+                selectinload(Vulnerability.findings).selectinload(Finding.time_estimates),
                 selectinload(Vulnerability.metrics),
             )
 
@@ -385,7 +385,7 @@ def init_app(app):
                     select(Vulnerability)
                     .options(
                         selectinload(Vulnerability.findings).selectinload(Finding.package),
-                        selectinload(Vulnerability.findings).selectinload(Finding.time_estimate),
+                        selectinload(Vulnerability.findings).selectinload(Finding.time_estimates),
                         selectinload(Vulnerability.metrics),
                     )
                     .join(Finding, Vulnerability.id == Finding.vulnerability_id)
@@ -491,9 +491,11 @@ def init_app(app):
                 _custom_metric_keys: dict[str, set] = {}
                 for m in metric_rows:
                     if m.variant_id is not None:
-                        # Dedupe identical custom metrics across the project's
-                        # variants so the same score isn't listed once per variant.
+                        # Keep one custom metric per variant so each variant's
+                        # score gets its own gauge, while still collapsing exact
+                        # duplicates within the same variant.
                         key = (
+                            m.variant_id,
                             m.version,
                             float(m.score) if m.score is not None else None,
                             m.vector,
@@ -725,6 +727,49 @@ def init_app(app):
         response["texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[id]))
 
         return response
+
+    @app.get('/api/vulnerabilities/<id>/variant-snapshots')
+    def get_vuln_variant_snapshots(id):
+        """Return variant-scoped effort and custom CVSS for every variant that
+        observes this vulnerability, in a single response.
+
+        Replaces the previous per-variant N+1 fetch performed by the modal.
+        """
+        record = Vulnerability.get_by_id(id)
+        if not record:
+            return "Not found", 404
+
+        variant_uuids = _variant_ids_for_vulnerability(record.id)
+
+        project_id = request.args.get("project_id")
+        if project_id:
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+            allowed = set(db.session.execute(
+                db.select(Variant.id).where(Variant.project_id == project_uuid)
+            ).scalars().all())
+            variant_uuids = [v for v in variant_uuids if v in allowed]
+
+        snapshots = []
+        for variant_uuid in variant_uuids:
+            if variant_uuid is None:
+                continue
+            overrides = _variant_scoped_metrics_and_effort_overrides([record], variant_uuid)
+            scoped = overrides.get(str(record.id))
+            if scoped is None:
+                continue
+            custom_cvss = [
+                m.to_dict() for m in scoped.cvss
+                if (m.origin or "scanner") == "custom"
+            ]
+            snapshots.append({
+                "variant_id": str(variant_uuid),
+                "effort": scoped.effort.to_dict(),
+                "custom_cvss": custom_cvss,
+            })
+
+        return jsonify(snapshots)
 
     @app.patch('/api/vulnerabilities/<id>')
     def patch_vuln(id):

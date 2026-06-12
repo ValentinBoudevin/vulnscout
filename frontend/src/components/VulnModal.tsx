@@ -1,6 +1,6 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
-import { asVulnerability, buildStatusSummary } from "../handlers/vulnerabilities";
+import Vulnerabilities, { asCVSS, buildStatusSummary } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import { asAssessment } from "../handlers/assessments";
 import { escape } from "lodash-es";
@@ -142,50 +142,68 @@ type VariantScopedSnapshot = {
             return;
         }
 
+        const variantNameById = new Map(availableVariants.map(v => [v.id, v.name]));
+
         (async () => {
-            const snapshots = await Promise.all(availableVariants.map(async (variant): Promise<VariantScopedSnapshot | null> => {
-                try {
-                    const response = await fetch(
-                        import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}?variant_id=${encodeURIComponent(variant.id)}`,
-                        { mode: 'cors' }
-                    );
-                    if (!response.ok) return null;
-                    const raw = await response.json();
-                    const vulnData = asVulnerability(raw);
-                    if (Array.isArray(vulnData)) return null;
-                    const customCvss = Array.isArray(vulnData?.severity?.cvss)
-                        ? vulnData.severity.cvss.filter(score => score.origin === 'custom')
-                        : [];
-
-                    const optimisticDuration = vulnData?.effort?.optimistic;
-                    const likelyDuration = vulnData?.effort?.likely;
-                    const pessimisticDuration = vulnData?.effort?.pessimistic;
-                    const hasEffort = [optimisticDuration, likelyDuration, pessimisticDuration].some((duration) => {
-                        return typeof duration?.total_seconds === 'number' && duration.total_seconds > 0;
-                    });
-                    return {
-                        variantId: variant.id,
-                        variantName: variant.name,
-                        hasEffort,
-                        effort: {
-                            optimistic: typeof optimisticDuration?.formatHumanShort === 'function' && optimisticDuration.total_seconds > 0 ? optimisticDuration.formatHumanShort() : undefined,
-                            likely: typeof likelyDuration?.formatHumanShort === 'function' && likelyDuration.total_seconds > 0 ? likelyDuration.formatHumanShort() : undefined,
-                            pessimistic: typeof pessimisticDuration?.formatHumanShort === 'function' && pessimisticDuration.total_seconds > 0 ? pessimisticDuration.formatHumanShort() : undefined,
-                        },
-                        customCvss,
-                    };
-                } catch {
-                    return null;
+            try {
+                const url = new URL(
+                    import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/variant-snapshots`,
+                    window.location.href
+                );
+                if (projectId) {
+                    url.searchParams.set('project_id', projectId);
                 }
-            }));
+                const response = await fetch(url.toString(), { mode: 'cors' });
+                if (!response.ok) {
+                    if (!cancelled) setVariantSnapshots([]);
+                    return;
+                }
+                const data = await response.json();
+                if (!Array.isArray(data)) {
+                    if (!cancelled) setVariantSnapshots([]);
+                    return;
+                }
 
-            if (!cancelled) {
-                setVariantSnapshots(snapshots.filter((s): s is VariantScopedSnapshot => s !== null));
+                const snapshots = data
+                    .filter((entry: any) => variantNameById.has(entry?.variant_id))
+                    .map((entry: any): VariantScopedSnapshot => {
+                        const customCvss: CVSS[] = Array.isArray(entry?.custom_cvss)
+                            ? entry.custom_cvss.flatMap(asCVSS)
+                            : [];
+
+                        const optimisticDuration = typeof entry?.effort?.optimistic === 'string'
+                            ? new Iso8601Duration(entry.effort.optimistic) : undefined;
+                        const likelyDuration = typeof entry?.effort?.likely === 'string'
+                            ? new Iso8601Duration(entry.effort.likely) : undefined;
+                        const pessimisticDuration = typeof entry?.effort?.pessimistic === 'string'
+                            ? new Iso8601Duration(entry.effort.pessimistic) : undefined;
+                        const hasEffort = [optimisticDuration, likelyDuration, pessimisticDuration].some((duration) => {
+                            return typeof duration?.total_seconds === 'number' && duration.total_seconds > 0;
+                        });
+
+                        return {
+                            variantId: entry.variant_id,
+                            variantName: variantNameById.get(entry.variant_id) ?? entry.variant_id,
+                            hasEffort,
+                            effort: {
+                                optimistic: optimisticDuration && optimisticDuration.total_seconds > 0 ? optimisticDuration.formatHumanShort() : undefined,
+                                likely: likelyDuration && likelyDuration.total_seconds > 0 ? likelyDuration.formatHumanShort() : undefined,
+                                pessimistic: pessimisticDuration && pessimisticDuration.total_seconds > 0 ? pessimisticDuration.formatHumanShort() : undefined,
+                            },
+                            customCvss,
+                        };
+                    });
+
+                if (!cancelled) {
+                    setVariantSnapshots(snapshots);
+                }
+            } catch {
+                if (!cancelled) setVariantSnapshots([]);
             }
         })();
 
         return () => { cancelled = true; };
-    }, [variantId, availableVariants, vuln.id, snapshotVersion]);
+    }, [variantId, availableVariants, vuln.id, projectId, snapshotVersion]);
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
@@ -812,10 +830,24 @@ type VariantScopedSnapshot = {
                 : data?.severity?.cvss;
 
             if (Array.isArray(updatedSeverity) && variantId) {
-                // Only update the local vuln object when viewing a specific variant.
-                // In all-variants mode the snapshot refresh below handles the display.
-                vuln.severity.cvss = updatedSeverity;
-                patchVuln(vuln.id, vuln);
+                // Only use the response severity directly when viewing a specific
+                // variant: the PATCH response is already variant-scoped.
+                const updatedVuln = { ...vuln, severity: { ...vuln.severity, cvss: updatedSeverity } };
+                patchVuln(vuln.id, updatedVuln);
+            } else if (!variantId) {
+                // All-variants mode: the PATCH response is variant-scoped, so it
+                // can't populate the union gauge view. Re-fetch the vulnerability
+                // in the current (project) scope so the CVSS gauges reflect the new
+                // custom score immediately, mirroring a page reload.
+                try {
+                    const refreshedCvss = await Vulnerabilities.fetchScopedCvss(vuln.id, projectId);
+                    if (refreshedCvss) {
+                        const updatedVuln = { ...vuln, severity: { ...vuln.severity, cvss: refreshedCvss } };
+                        patchVuln(vuln.id, updatedVuln);
+                    }
+                } catch (e) {
+                    console.error("Failed to refresh vulnerability after CVSS save:", e);
+                }
             }
 
             // Refresh per-variant snapshots immediately so the panel reflects the
@@ -1119,7 +1151,7 @@ type VariantScopedSnapshot = {
                                     {vuln.severity.cvss.map((cvss) => (
                                     <div
                                         key={encodeURIComponent(
-                                        `${cvss.author}-${cvss.version}-${cvss.base_score}`
+                                        `${cvss.variant_id ?? 'global'}-${cvss.author}-${cvss.version}-${cvss.base_score}`
                                         )}
                                         className="bg-gray-800 p-2 rounded-xl min-w-[216px]"
                                     >
