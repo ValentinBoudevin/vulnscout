@@ -108,10 +108,12 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     const ghsaInProgress = ghsaProgress?.in_progress ?? false;
     const selectedGhsaIds = selectedVulns.filter(id => id.toUpperCase().startsWith('GHSA-'));
     const hasGhsaIds = selectedGhsaIds.length > 0;
+    const selectedCveIds = selectedVulns.filter(id => id.toUpperCase().startsWith('CVE-'));
+    const hasCveIds = selectedCveIds.length > 0;
 
     // Number of selected targets that are not currently refreshing (actionable)
-    const actionableRefreshCount = (selectedRefreshTypes.has('nvd') && !nvdInProgress ? 1 : 0)
-        + (selectedRefreshTypes.has('epss') && !epssInProgress ? 1 : 0)
+    const actionableRefreshCount = (selectedRefreshTypes.has('nvd') && !nvdInProgress && hasCveIds ? 1 : 0)
+        + (selectedRefreshTypes.has('epss') && !epssInProgress && hasCveIds ? 1 : 0)
         + (selectedRefreshTypes.has('ghsa') && !ghsaInProgress && hasGhsaIds ? 1 : 0);
 
     const allSelectedRefreshing = selectedRefreshTypes.size === 0 || actionableRefreshCount === 0;
@@ -119,17 +121,17 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     function handleRefresh() {
         hideBanner();
         const promises: Promise<void>[] = [];
-        if (selectedRefreshTypes.has('nvd') && !nvdInProgress) {
+        if (selectedRefreshTypes.has('nvd') && !nvdInProgress && hasCveIds) {
             promises.push(
-                BulkNvdRefreshHandler.trigger(selectedVulns).then(res => {
+                BulkNvdRefreshHandler.trigger(selectedCveIds).then(res => {
                     if (res) triggerBanner(`NVD refresh started for ${res.total} CVE(s)`, 'success', 'nvd');
                     else triggerBanner('Failed to start NVD refresh', 'error', 'nvd');
                 }).catch(() => triggerBanner('Failed to start NVD refresh', 'error', 'nvd'))
             );
         }
-        if (selectedRefreshTypes.has('epss') && !epssInProgress) {
+        if (selectedRefreshTypes.has('epss') && !epssInProgress && hasCveIds) {
             promises.push(
-                BulkEpssRefreshHandler.trigger(selectedVulns).then(res => {
+                BulkEpssRefreshHandler.trigger(selectedCveIds).then(res => {
                     if (res) triggerBanner(`EPSS refresh started for ${res.total} CVE(s)`, 'success', 'epss');
                     else triggerBanner('Failed to start EPSS refresh', 'error', 'epss');
                 }).catch(() => triggerBanner('Failed to start EPSS refresh', 'error', 'epss'))
@@ -469,10 +471,13 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                                     aria-label="NVD"
                                                     checked={selectedRefreshTypes.has('nvd')}
                                                     onChange={() => toggleRefreshType('nvd')}
-                                                    className="rounded accent-cyan-500"
+                                                    disabled={!hasCveIds}
+                                                    className="rounded accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
                                                 />
                                             )}
-                                            NVD
+                                            <span className={!hasCveIds && !nvdInProgress ? 'opacity-40' : ''}>
+                                                NVD {!hasCveIds && !nvdInProgress && <span className="text-xs text-neutral-400">(no CVE  selected)</span>}
+                                            </span>
                                         </div>
                                         {nvdInProgress && (
                                             <button
@@ -502,10 +507,13 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                                     aria-label="EPSS"
                                                     checked={selectedRefreshTypes.has('epss')}
                                                     onChange={() => toggleRefreshType('epss')}
-                                                    className="rounded accent-cyan-500"
+                                                    disabled={!hasCveIds}
+                                                    className="rounded accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
                                                 />
                                             )}
-                                            EPSS
+                                            <span className={!hasCveIds && !epssInProgress ? 'opacity-40' : ''}>
+                                                EPSS {!hasCveIds && !epssInProgress && <span className="text-xs text-neutral-400">(no CVE selected)</span>}
+                                            </span>
                                         </div>
                                         {epssInProgress && (
                                             <button
