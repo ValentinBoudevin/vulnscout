@@ -273,7 +273,7 @@ describe('Vulnerability Table', () => {
         const exploit_header = await screen.getByRole('columnheader', {name: /EPSS score/i});
         const packages_header = await screen.getByRole('columnheader', {name: /SBOM Affected/i});
         const status_header = await screen.getByRole('columnheader', {name: /status/i});
-        const last_updated_header = await screen.getByRole('columnheader', {name: /last updated/i});
+        const last_updated_header = await screen.getByRole('columnheader', {name: /last assessed/i});
 
         // ASSERT - Default visible columns
         expect(id_header).toBeInTheDocument();
@@ -1193,7 +1193,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnWithDifferentDates} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const lastUpdatedHeader = await screen.getByRole('columnheader', {name: /last updated/i});
+        const lastUpdatedHeader = await screen.getByRole('columnheader', {name: /last assessed/i});
 
         // ACT - Sort by last updated (first click: descending - newest first, then older, then no assessments)
         await user.click(lastUpdatedHeader);
@@ -1255,7 +1255,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnWithMixedDates} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const lastUpdatedHeader = await screen.getByRole('columnheader', {name: /last updated/i});
+        const lastUpdatedHeader = await screen.getByRole('columnheader', {name: /last assessed/i});
 
         // ACT - Sort descending (newest first) - should only need one click
         await user.click(lastUpdatedHeader);

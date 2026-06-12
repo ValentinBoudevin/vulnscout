@@ -362,7 +362,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [generalBanner, setGeneralBanner] = useState<SourceBanner>(null);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
-        'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated'
+        'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed'
     ]);
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
@@ -580,7 +580,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         'severity': 'Attack Vector',
         'simplified_status': 'Status',
         'effort.likely': 'Estimated Effort',
-        'assessments': 'Last Updated',
+        'assessments': 'Last Assessed',
         'published': 'Published Date',
         'first_scan_date': 'First Scan Date',
         'nvd_fetched_at': 'NVD Fetched',
@@ -779,7 +779,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             }),
             columnHelper.accessor('assessments', {
             id: 'assessments',
-            header: () => <div className="flex items-center justify-center">Last Updated</div>,
+            header: () => <div className="flex items-center justify-center">Last Assessed</div>,
             cell: info => {
                 const assessments = info.getValue();
                 if (!assessments || assessments.length === 0) {
@@ -1172,7 +1172,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setPublishedDateFrom('');
         setPublishedDateTo('');
         setSelectedRows({});
-        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated']);
+        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed']);
         setShowCustomSeverityFilter(false);
         setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
         setShowCustomEpssFilter(false);
@@ -1331,7 +1331,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     'Attack Vector',
                     'Status',
                     'Estimated Effort',
-                    'Last Updated',
+                    'Last Assessed',
                     'Published Date',
                     'First Scan Date',
                     'NVD Fetched',
