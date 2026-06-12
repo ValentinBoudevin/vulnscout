@@ -114,6 +114,12 @@ describe("BulkEpssRefreshHandler.trigger", () => {
         const result = await BulkEpssRefreshHandler.trigger(["CVE-2024-0001"]);
         expect(result).toBeNull();
     });
+
+    it("returns null when fetch rejects", async () => {
+        mockFetch.mockRejectedValueOnce(new Error("network error"));
+        const result = await BulkEpssRefreshHandler.trigger(["CVE-2024-0001"]);
+        expect(result).toBeNull();
+    });
 });
 
 const makeOkCancelResponse = (body: CancelRefreshResponse) => ({
@@ -150,6 +156,16 @@ describe("BulkNvdRefreshCancelHandler.trigger", () => {
         const result = await BulkNvdRefreshCancelHandler.trigger();
         expect(result).toBeNull();
     });
+
+    it("returns null when json() throws (malformed response body)", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => { throw new Error("bad json"); },
+        } as unknown as Response);
+        const result = await BulkNvdRefreshCancelHandler.trigger();
+        expect(result).toBeNull();
+    });
 });
 
 describe("BulkEpssRefreshCancelHandler.trigger", () => {
@@ -177,6 +193,16 @@ describe("BulkEpssRefreshCancelHandler.trigger", () => {
 
     it("returns null when fetch rejects", async () => {
         mockFetch.mockRejectedValueOnce(new Error("network error"));
+        const result = await BulkEpssRefreshCancelHandler.trigger();
+        expect(result).toBeNull();
+    });
+
+    it("returns null when json() throws (malformed response body)", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => { throw new Error("bad json"); },
+        } as unknown as Response);
         const result = await BulkEpssRefreshCancelHandler.trigger();
         expect(result).toBeNull();
     });
@@ -218,6 +244,21 @@ describe("GHSAProgressHandler (smoke)", () => {
         const { default: GHSAProgressHandler } = await import("../../src/handlers/ghsa_progress");
         const pct = GHSAProgressHandler.getProgressPercentage({ in_progress: false, phase: "idle", current: 0, total: 0, message: "" });
         expect(pct).toBe(0);
+    });
+
+    it("getProgress applies ?? fallbacks when response fields are missing", async () => {
+        const { default: GHSAProgressHandler } = await import("../../src/handlers/ghsa_progress");
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => ({}),
+        } as Response);
+        const progress = await GHSAProgressHandler.getProgress();
+        expect(progress.in_progress).toBe(false);
+        expect(progress.phase).toBe("idle");
+        expect(progress.current).toBe(0);
+        expect(progress.total).toBe(0);
+        expect(progress.message).toBe("");
     });
 });
 
@@ -298,6 +339,16 @@ describe("BulkGhsaRefreshCancelHandler.trigger", () => {
 
     it("returns null when fetch rejects", async () => {
         mockFetch.mockRejectedValueOnce(new Error("network error"));
+        const result = await BulkGhsaRefreshCancelHandler.trigger();
+        expect(result).toBeNull();
+    });
+
+    it("returns null when json() throws (malformed response body)", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => { throw new Error("bad json"); },
+        } as unknown as Response);
         const result = await BulkGhsaRefreshCancelHandler.trigger();
         expect(result).toBeNull();
     });
