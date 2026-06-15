@@ -3,6 +3,8 @@
 
 from datetime import datetime, timezone
 from typing import Optional
+
+from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
 from ..models.finding import Finding
 from ..helpers.verbose import verbose
 from ..models.time_estimate import TimeEstimate
@@ -26,10 +28,10 @@ class TimeEstimates:
       are persisted to the :class:`~src.models.time_estimate.TimeEstimate` table.
     """
 
-    def __init__(self, controllers):
-        self.packagesCtrl = controllers["packages"]
-        self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
-        self.assessmentsCtrl = controllers["assessments"]
+    def __init__(self, controllers: ControllersCache):
+        self.packagesCtrl: PackagesController = controllers.packages
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
+        self.assessmentsCtrl: AssessmentsController = controllers.assessments
 
     # ------------------------------------------------------------------
     # Helpers

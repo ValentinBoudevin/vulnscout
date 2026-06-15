@@ -8,9 +8,7 @@
 from ..views.spdx import SPDX
 from ..views.fast_spdx import FastSPDX
 from ..views.fast_spdx3 import FastSPDX3
-from ..controllers.packages import PackagesController
-from ..controllers.vulnerabilities import VulnerabilitiesController
-from ..controllers.assessments import AssessmentsController
+from ..controllers import ControllersCache
 from ..helpers.verbose import verbose
 from ..helpers.env_vars import get_bool_env
 import glob
@@ -21,7 +19,7 @@ INPUT_SPDX_FOLDER = "/scan/tmp/spdx"
 OUTPUT_SPDX_FILE = "/scan/outputs/sbom.spdx.json"
 
 
-def read_inputs(controllers):
+def read_inputs(controllers: ControllersCache):
     """Read from folder."""
     use_fastspdx = False
     if get_bool_env('IGNORE_PARSING_ERRORS'):
@@ -54,7 +52,7 @@ def read_inputs(controllers):
                 print(f"Ignored: Error parsing SPDX file: {file} {e}")
 
 
-def output_results(controllers):
+def output_results(controllers: ControllersCache):
     """Output the results to files."""
     spdx = SPDX(controllers)
 
@@ -64,15 +62,8 @@ def output_results(controllers):
 
 
 def main():
-    pkg_ctrl = PackagesController()
-    pkg_ctrl._preload_cache()
-    vuln_ctrl = VulnerabilitiesController(pkg_ctrl)
-    assess_ctrl = AssessmentsController(pkg_ctrl, vuln_ctrl)
-    controllers = {
-        "packages": pkg_ctrl,
-        "vulnerabilities": vuln_ctrl,
-        "assessments": assess_ctrl
-    }
+    controllers = ControllersCache()
+    controllers.packages._preload_cache()
 
     read_inputs(controllers)
     output_results(controllers)

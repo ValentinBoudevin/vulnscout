@@ -3,6 +3,8 @@
 
 from ..models.package import Package
 from ..helpers.verbose import verbose
+from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
+
 from spdx_tools.spdx.parser.parse_anything import parse_file
 from spdx_tools.spdx.parser.error import SPDXParsingError
 from spdx_tools.spdx.parser.jsonlikedict.json_like_dict_parser import JsonLikeDictParser
@@ -54,12 +56,12 @@ class SPDX:
     Also support output to SPDX SBOM format.
     """
 
-    def __init__(self, controllers):
-        self.packagesCtrl = controllers["packages"]
-        self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
-        self.assessmentsCtrl = controllers["assessments"]
-        self.ref_dict = {}
-        self.pkg_to_ref = {}
+    def __init__(self, controllers: ControllersCache):
+        self.packagesCtrl: PackagesController = controllers.packages
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
+        self.assessmentsCtrl: AssessmentsController = controllers.assessments
+        self.ref_dict: dict[str, str] = {}
+        self.pkg_to_ref: dict[str, str] = {}
 
     def load_from_dict(self, spdx: dict):
         """Read data from SPDX json parsed format."""

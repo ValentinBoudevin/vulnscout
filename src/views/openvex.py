@@ -4,7 +4,7 @@
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.assessment import Assessment
-from ..controllers import PackagesController, VulnerabilitiesController, AssessmentsController
+from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
 from ..helpers.verbose import verbose
 from uuid_extensions import uuid7
 from datetime import datetime, timezone
@@ -18,10 +18,10 @@ class OpenVex:
     Support reading, parsing and writing from/to JSON format.
     """
 
-    def __init__(self, controllers):
-        self.packagesCtrl: PackagesController = controllers["packages"]
-        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
-        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
+    def __init__(self, controllers: ControllersCache):
+        self.packagesCtrl: PackagesController = controllers.packages
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
+        self.assessmentsCtrl: AssessmentsController = controllers.assessments
 
     def parse_package_section(self, product: dict) -> Optional[Package]:
         pkg = None

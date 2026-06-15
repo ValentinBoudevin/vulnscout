@@ -6,7 +6,7 @@ from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.cvss import CVSS
 from ..models.assessment import Assessment
-from ..controllers import PackagesController, VulnerabilitiesController, AssessmentsController
+from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
 from ..helpers.datetime_utils import normalize_timestamp_for_sort
 from cyclonedx.model.bom import Bom
 from cyclonedx.output.json import JsonV1Dot4, JsonV1Dot5, JsonV1Dot6
@@ -25,11 +25,11 @@ class CycloneDx:
     Also support output to CycloneDx SBOM format.
     """
 
-    def __init__(self, controllers):
-        self.packagesCtrl: PackagesController = controllers["packages"]
-        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
-        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
-        self.ref_dict = {}
+    def __init__(self, controllers: ControllersCache):
+        self.packagesCtrl: PackagesController = controllers.packages
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
+        self.assessmentsCtrl: AssessmentsController = controllers.assessments
+        self.ref_dict: dict = {}  # TODO exact type
 
     _SEVERITY_MAP = {
         "low": cyclonedx.model.vulnerability.VulnerabilitySeverity.LOW,

@@ -11,13 +11,13 @@ import threading
 from flask import jsonify, request
 from sqlalchemy.exc import OperationalError
 
-from ..controllers.projects import ProjectController
-from ..controllers.variants import VariantController
-from ..controllers.scans import ScanController
-from ..controllers.sbom_documents import SBOMDocumentController
-from ..controllers.packages import PackagesController
-from ..controllers.vulnerabilities import VulnerabilitiesController
-from ..controllers.assessments import AssessmentsController
+from ..controllers import (
+    ControllersCache,
+    ProjectController,
+    VariantController,
+    ScanController,
+    SBOMDocumentController,
+)
 from ..extensions import db, batch_session
 from ..models.scan import Scan as ScanModel
 from ..helpers.verbose import verbose
@@ -90,15 +90,10 @@ def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id
 
             from ..bin.cmd_process import read_inputs, post_treatment, populate_observations
 
-            pkgCtrl = PackagesController()
-            vulnCtrl = VulnerabilitiesController(pkgCtrl)
-            assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
+            controllers = ControllersCache()
+            vulnCtrl = controllers.vulnerabilities
+            assessCtrl = controllers.assessments
             assessCtrl.current_variant_id = variant_id
-            controllers = {
-                "packages": pkgCtrl,
-                "vulnerabilities": vulnCtrl,
-                "assessments": assessCtrl,
-            }
 
             with batch_session():
                 vulnCtrl.use_savepoints = False

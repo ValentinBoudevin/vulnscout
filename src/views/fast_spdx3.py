@@ -7,9 +7,7 @@ import re
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability, CVSS
 from ..models.assessment import Assessment
-from ..controllers.vulnerabilities import VulnerabilitiesController
-from ..controllers.packages import PackagesController
-from ..controllers.assessments import AssessmentsController
+from ..controllers import ControllersCache, VulnerabilitiesController, PackagesController, AssessmentsController
 
 
 class FastSPDX3:
@@ -42,16 +40,16 @@ class FastSPDX3:
         'security_CvssV4VulnAssessmentRelationship',
     }
 
-    def __init__(self, controllers: Dict[str, Any]):
+    def __init__(self, controllers: ControllersCache):
         """
         Initialize the FastSPDX3 parser with controllers for packages, vulnerabilities, and assessments.
 
         Args:
             controllers: Dictionary containing controllers for packages, vulnerabilities, and assessments
         """
-        self.packagesCtrl: PackagesController = controllers["packages"]
-        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
-        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
+        self.packagesCtrl: PackagesController = controllers.packages
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
+        self.assessmentsCtrl: AssessmentsController = controllers.assessments
         self.uri_to_package: Dict[str, str] = {}
 
     def find_spdx_version(self, spdx: Dict[str, Any]) -> Optional[str]:
