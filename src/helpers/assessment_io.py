@@ -655,9 +655,9 @@ def import_custom_data(
     from ..models.scan import Scan
     from ..models.observation import Observation
     from .vuln_helpers import (
-        _validate_effort,
-        _validate_and_apply_cvss,
-        _apply_effort,
+        validate_effort,
+        validate_and_apply_cvss,
+        apply_effort,
     )
 
     result: dict[str, Any] = {
@@ -823,8 +823,12 @@ def import_custom_data(
 
             cvss_failed = False
             for target_variant_id in target_variant_ids:
-                err = _validate_and_apply_cvss(cvss_data, record.id, target_variant_id,
-                                               log_prefix="import-custom-data")
+                err = validate_and_apply_cvss(
+                    cvss_data,
+                    record.id,
+                    target_variant_id,
+                    log_prefix="import-custom-data",
+                )
                 if err:
                     result["errors"].append({"vuln_id": vuln_id, "error": err})
                     cvss_failed = True
@@ -853,7 +857,7 @@ def import_custom_data(
                 "likely": t.get("likely"),
                 "pessimistic": t.get("pessimistic"),
             }
-            opt, lik, pes, err = _validate_effort(eff)
+            effort, err = validate_effort(eff)
             if err:
                 result["errors"].append({"vuln_id": vuln_id, "error": err})
                 continue
@@ -877,10 +881,9 @@ def import_custom_data(
                 if not target_variant_ids:
                     target_variant_ids = [None]
 
-            assert opt is not None and lik is not None and pes is not None
+            assert effort is not None
             for target_variant_id in target_variant_ids:
-                _apply_effort(record, target_variant_id, opt, lik, pes,
-                              log_prefix="import-custom-data")
+                apply_effort(record, target_variant_id, effort, log_prefix="import-custom-data")
             result["time_estimates_imported"] += 1
 
     if not result["assessments_imported"] and not result["cvss_imported"] and not result["time_estimates_imported"]:
