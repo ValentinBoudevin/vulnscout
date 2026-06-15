@@ -1,13 +1,16 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from typing import Optional
+import typing
 import uuid
 
 from ..models import Assessment, Package, Finding
 from ..helpers.verbose import verbose
 from ..extensions import db
 from ._base import to_dict_with_fallback
+
+if typing.TYPE_CHECKING:
+    from ..controllers import PackagesController
 
 
 def _persist_assessment_to_db(
@@ -64,14 +67,13 @@ class AssessmentsController:
     Assessments can be added, removed, retrieved and exported or imported as dictionaries.
     """
 
-    def __init__(self, pkgCtrl, vulnCtrl):
+    def __init__(self, pkgCtrl: "PackagesController"):
         """
         Take an instance of PackagesController and VulnerabilitiesController.
         They are used to resolve package and vulnerabilities by their id.
         """
-        self.packagesCtrl = pkgCtrl
-        self.vulnerabilitiesCtrl = vulnCtrl
-        self.assessments = {}
+        self.packagesCtrl: "PackagesController" = pkgCtrl
+        self.assessments: dict[str, Assessment] = {}
         self.current_variant_id: uuid.UUID | None = None
         """A dictionary of assessments, indexed by their id."""
         # Secondary indexes for O(1) lookups in hot ingestion paths.
@@ -86,7 +88,7 @@ class AssessmentsController:
         self._db_queried_pkgs: set[str] = set()
         self.use_savepoints: bool = True
 
-    def get_by_id(self, assess_id) -> Optional[Assessment]:
+    def get_by_id(self, assess_id) -> Assessment | None:
         """Return an assessment by id (str or UUID) or None if not found."""
         key = str(assess_id) if assess_id is not None else None
         if key in self.assessments:
@@ -275,14 +277,6 @@ class AssessmentsController:
             self.assessments, Assessment.get_all,
             lambda a: str(a.id), "AssessmentsController",
         )
-
-    @staticmethod
-    def from_dict(pkgCtrl, vulnCtrl, data: dict):
-        """Return a new instance of AssessmentsController from a dictionary."""
-        item = AssessmentsController(pkgCtrl, vulnCtrl)
-        for k, v in data.items():
-            item.add(Assessment.from_dict(v))
-        return item
 
     def __contains__(self, item) -> bool:
         """Check if an item (str or Assessment) is in the list of assessments."""

@@ -12,9 +12,7 @@ from ..views.openvex import OpenVex
 from ..views.yocto_vulns import YoctoVulns
 from ..views.grype_vulns import GrypeVulns
 from ..views.templates import Templates
-from ..controllers.conditions_parser import ConditionParser
-from ..controllers.scans import ScanController
-from ..controllers.sbom_documents import SBOMDocumentController
+from ..controllers import ControllersCache, ConditionParser, ScanController, SBOMDocumentController
 from ..models.sbom_document import SBOMDocument
 from ..models.sbom_package import SBOMPackage as SBOMPkg
 from ..models.scan import Scan as ScanModel
@@ -29,7 +27,7 @@ import os
 from typing import TYPE_CHECKING
 from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
-from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant, build_controllers
+from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
 
 if TYPE_CHECKING:
     from ..controllers.packages import PackagesController
@@ -49,16 +47,20 @@ def _ts_key(ts) -> str:
         return str(ts)
 
 
-def post_treatment(controllers, documents=None):
+def post_treatment(controllers: ControllersCache, documents=None):
     """Enrich vulnerabilities with EPSS scores."""
-    controllers["vulnerabilities"].fetch_epss_scores()
+    controllers.vulnerabilities.fetch_epss_scores()
 
 
-def evaluate_condition(controllers, condition):
+def evaluate_condition(
+    vulnerabilitiesCtrl: VulnerabilitiesController,
+    assessmentsCtrl: AssessmentsController,
+    condition,
+):
     """Evaluate a condition and return the list of vulnerability IDs that trigger it."""
     parser = ConditionParser()
     failed_vulns = []
-    for (vuln_id, vuln) in controllers["vulnerabilities"].vulnerabilities.items():
+    for (vuln_id, vuln) in vulnerabilitiesCtrl.vulnerabilities.items():
         data = {
             "id": vuln_id,
             "cvss": vuln.severity_max_score or vuln.severity_min_score or False,
@@ -75,7 +77,7 @@ def evaluate_condition(controllers, condition):
         }
 
         last_assessment = None
-        for assessment in controllers["assessments"].gets_by_vuln(vuln_id):
+        for assessment in assessmentsCtrl.gets_by_vuln(vuln_id):
             if last_assessment is None or _ts_key(last_assessment.timestamp) < _ts_key(assessment.timestamp):
                 last_assessment = assessment
         if last_assessment:
@@ -90,7 +92,7 @@ def evaluate_condition(controllers, condition):
     return failed_vulns
 
 
-def read_inputs(controllers, scan_id=None):
+def read_inputs(controllers: ControllersCache, scan_id=None):
     """Parse all SBOM documents registered in the DB.
 
     When *scan_id* is provided only the documents that belong to that scan
@@ -110,7 +112,7 @@ def read_inputs(controllers, scan_id=None):
     if use_fastspdx:
         verbose("merger_ci: Using FastSPDX parser")
 
-    pkgCtrl: PackagesController = controllers["packages"]
+    pkgCtrl: PackagesController = controllers.packages
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
 
     for doc in docs:
@@ -302,11 +304,11 @@ def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None
         print(f"Warning: could not populate observations table: {e}")
 
 
-def _run_main() -> dict:
+def _run_main() -> ControllersCache:
     """Core processing logic (usable both from the CLI command and directly)."""
-    controllers = build_controllers()
-    vulnCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
-    assessCtrl: AssessmentsController = controllers["assessments"]
+    controllers = ControllersCache()
+    vulnCtrl: VulnerabilitiesController = controllers.vulnerabilities
+    assessCtrl: AssessmentsController = controllers.assessments
     latest_scan = ScanModel.get_latest()
     if latest_scan:
         assessCtrl.current_variant_id = latest_scan.variant_id
@@ -345,7 +347,7 @@ def _run_main() -> dict:
     failed_vulns = []
     if match_condition:
         verbose("merger_ci: Start evaluating conditions")
-        failed_vulns = evaluate_condition(controllers, match_condition)
+        failed_vulns = evaluate_condition(controllers.vulnerabilities, controllers.assessments, match_condition)
         verbose("merger_ci: Finished evaluating conditions")
         # Cache result so flask report can reuse it without re-evaluating
         try:

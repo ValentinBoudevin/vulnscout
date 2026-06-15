@@ -5,19 +5,13 @@
 
 import pytest
 from src.views.grype_vulns import GrypeVulns
-from src.controllers.packages import PackagesController
-from src.controllers.vulnerabilities import VulnerabilitiesController
-from src.controllers.assessments import AssessmentsController
+from src.controllers import ControllersCache
 import json
 
 
 @pytest.fixture
 def grype_parser():
-    controllers = {}
-    controllers["packages"] = PackagesController()
-    controllers["vulnerabilities"] = VulnerabilitiesController(controllers["packages"])
-    controllers["assessments"] = AssessmentsController(controllers["packages"], controllers["vulnerabilities"])
-    return GrypeVulns(controllers)
+    return GrypeVulns(ControllersCache())
 
 
 def test_parse_empty_json(grype_parser):

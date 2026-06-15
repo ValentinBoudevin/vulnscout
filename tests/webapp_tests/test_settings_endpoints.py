@@ -590,7 +590,7 @@ class TestUploadContentType:
 class TestProcessSBOMBackground:
     """Test the background SBOM processing function directly."""
 
-    def test_process_sets_done_status(self, app):
+    def test_process_sets_done_status(self, app, monkeypatch):
         """Processing an SPDX SBOM file sets status to 'done'."""
         from src.routes.settings import (
             _process_sbom_background, _upload_status,
@@ -600,6 +600,8 @@ class TestProcessSBOMBackground:
         from src.models.variant import Variant
         from src.models.scan import Scan
         from src.models.sbom_document import SBOMDocument
+
+        monkeypatch.setenv("IGNORE_PARSING_ERRORS", "true")
 
         with app.app_context():
             project = Project.create("BgTestProject")

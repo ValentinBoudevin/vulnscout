@@ -7,13 +7,7 @@ import os
 import mimetypes
 import traceback
 from datetime import date
-from ..controllers.packages import PackagesController
-from ..controllers.vulnerabilities import VulnerabilitiesController
-from ..controllers.assessments import AssessmentsController
-from ..controllers.projects import ProjectController
-from ..controllers.variants import VariantController
-from ..controllers.scans import ScanController
-from ..controllers.sbom_documents import SBOMDocumentController
+from ..controllers import ControllersCache
 from ..views.templates import Templates
 from ..views.cyclonedx import CycloneDx
 from ..views.spdx import SPDX
@@ -42,28 +36,12 @@ def guess_mime_type(doc_name):
 
 def init_app(app):
 
-    def get_all_datas():
-        # Controllers are now DB-backed; gets_by_* queries DB automatically.
-        pkgCtrl = PackagesController()
-        pkgCtrl._preload_cache()
-        vulnCtrl = VulnerabilitiesController(pkgCtrl)
-        assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
-        return {
-            "packages": pkgCtrl,
-            "vulnerabilities": vulnCtrl,
-            "assessments": assessCtrl,
-            "projects": ProjectController,
-            "variants": VariantController,
-            "scans": ScanController,
-            "sbom_documents": SBOMDocumentController,
-        }
-
     @app.route('/api/documents', methods=['GET'])
     def index_docs():
-        templ = Templates({
-            "packages": [], "vulnerabilities": [], "assessments": [],
-            "projects": None, "variants": None, "scans": None, "sbom_documents": None,
-        })
+        controllers = ControllersCache()
+        controllers.vulnerabilities = None  # type: ignore
+        # to avoid pre-loading cache, TODO change that, maybe by moving list_documents somewhere else
+        templ = Templates(controllers)
         try:
             docs = templ.list_documents()
 
@@ -95,7 +73,8 @@ def init_app(app):
 
     @app.route('/api/documents/<doc_name>', methods=['GET'])
     def doc_by_name(doc_name):
-        ctrls = get_all_datas()
+        ctrls = ControllersCache()
+        ctrls.packages._preload_cache()
         templ = Templates(ctrls)
         try:
             base_mime = guess_mime_type(doc_name)

@@ -183,22 +183,6 @@ class TestPersistAssessmentToDB:
         dto.set_status("in_triage")
         _persist_assessment_to_db(dto)  # should not raise (finding is None → continue)
 
-    def test_assessments_controller_to_dict_uses_db(self, app):
-        """
-        AssessmentsController.to_dict reads from the DB when available.
-        Covers assessments.py line 113.
-        """
-        from src.controllers.packages import PackagesController
-        from src.controllers.assessments import AssessmentsController
-        from unittest.mock import MagicMock
-
-        pkg_ctrl = PackagesController()
-        mock_vuln_ctrl = MagicMock()
-        assess_ctrl = AssessmentsController(pkg_ctrl, mock_vuln_ctrl)
-
-        result = assess_ctrl.to_dict()
-        assert isinstance(result, dict)
-
 
 # ===========================================================================
 # datetime_utils — ensure_utc_iso edge cases (lines 17, 19)

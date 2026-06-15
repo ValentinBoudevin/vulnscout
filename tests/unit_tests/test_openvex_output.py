@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from src.views.openvex import OpenVex
 from src.models.package import Package
 from src.models.assessment import Assessment
+from src.controllers import ControllersCache
 
 
 def _make_pkg(name, version, supplier=""):
@@ -25,19 +26,15 @@ def _make_assessment(vuln_id, pkg):
 
 
 def _run_to_dict(pkgs, assessments):
-    pkg_ctrl = MagicMock()
-    pkg_ctrl.get = MagicMock(side_effect=lambda pid: next(
+    ctrl = ControllersCache()
+    ctrl.packages = MagicMock()
+    ctrl.packages.get = MagicMock(side_effect=lambda pid: next(
         (p for p in pkgs if p.string_id == pid), None
     ))
-    vuln_ctrl = MagicMock()
-    vuln_ctrl.get = MagicMock(return_value=None)
-    assess_ctrl = MagicMock()
-    assess_ctrl.assessments = {a.vuln_id: a for a in assessments}
-    ctrl = {
-        "packages": pkg_ctrl,
-        "vulnerabilities": vuln_ctrl,
-        "assessments": assess_ctrl,
-    }
+    ctrl.vulnerabilities = MagicMock()
+    ctrl.vulnerabilities.get = MagicMock(return_value=None)
+    ctrl.assessments = MagicMock()
+    ctrl.assessments.assessments = {a.vuln_id: a for a in assessments}
     with patch('src.views.openvex.Assessment.get_all', return_value=[]):
         view = OpenVex(ctrl)
         return view.to_dict()

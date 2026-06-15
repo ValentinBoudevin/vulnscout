@@ -8,18 +8,12 @@ import logging
 import json
 
 from src.views.yocto_vulns import YoctoVulns
-from src.controllers.packages import PackagesController
-from src.controllers.vulnerabilities import VulnerabilitiesController
-from src.controllers.assessments import AssessmentsController
+from src.controllers import ControllersCache
 
 
 @pytest.fixture
 def yocto_parser():
-    controllers = {}
-    controllers["packages"] = PackagesController()
-    controllers["vulnerabilities"] = VulnerabilitiesController(controllers["packages"])
-    controllers["assessments"] = AssessmentsController(controllers["packages"], controllers["vulnerabilities"])
-    return YoctoVulns(controllers)
+    return YoctoVulns(ControllersCache())
 
 
 def test_parse_empty_json(yocto_parser):

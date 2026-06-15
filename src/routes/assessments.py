@@ -8,9 +8,7 @@ from uuid import UUID
 from ..models import Assessment as DBAssessment, Package, Finding
 from ..models.assessment import STATUS_TO_SIMPLIFIED
 from ..views.openvex import OpenVex
-from ..controllers.packages import PackagesController
-from ..controllers.vulnerabilities import VulnerabilitiesController
-from ..controllers.assessments import AssessmentsController
+from ..controllers import ControllersCache
 from ..helpers.verbose import verbose
 from ..extensions import db, batch_session
 from ..models.vulnerability import Vulnerability as DBVuln
@@ -100,12 +98,9 @@ def init_app(app):
         try:
             import json
 
-            pkgCtrl = PackagesController()
-            pkgCtrl._preload_cache()
-            vulnCtrl = VulnerabilitiesController(pkgCtrl)
-            assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
+            ctrls = ControllersCache()
+            ctrls.packages._preload_cache()
 
-            ctrls = {"packages": pkgCtrl, "vulnerabilities": vulnCtrl, "assessments": assessCtrl}
             vex = OpenVex(ctrls)
             with open(app.config["OPENVEX_FILE"], "w") as f:
                 f.write(json.dumps(vex.to_dict(), indent=2))

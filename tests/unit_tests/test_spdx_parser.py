@@ -9,18 +9,7 @@ from unittest.mock import MagicMock
 from spdx_tools.spdx.model.actor import Actor, ActorType
 from spdx_tools.spdx.model.spdx_no_assertion import SpdxNoAssertion
 from src.views.spdx import SPDX, _normalize_spdx_dict
-from src.controllers.packages import PackagesController
-
-
-def _make_controllers():
-    pkg_ctrl = PackagesController()
-    vuln_ctrl = MagicMock()
-    assess_ctrl = MagicMock()
-    return {
-        "packages": pkg_ctrl,
-        "vulnerabilities": vuln_ctrl,
-        "assessments": assess_ctrl,
-    }
+from src.controllers import ControllersCache
 
 
 def _make_spdx_pkg(name, version, supplier=None):
@@ -44,7 +33,7 @@ def _make_sbom(packages):
 
 
 def _make_view():
-    ctrl = _make_controllers()
+    ctrl = ControllersCache()
     view = SPDX(ctrl)
     return view, ctrl
 
@@ -54,7 +43,7 @@ def test_parse_supplier_organization():
     supplier_actor = Actor(ActorType.ORGANIZATION, "Acme Corp", "contact@acme.com")
     view.sbom = _make_sbom([_make_spdx_pkg("foo", "1.0", supplier=supplier_actor)])
     view.merge_components_into_controller()
-    pkg = ctrl["packages"].get("foo@1.0::Organization: Acme Corp (contact@acme.com)")
+    pkg = ctrl.packages.get("foo@1.0::Organization: Acme Corp (contact@acme.com)")
     assert pkg is not None
     assert pkg.supplier == "Organization: Acme Corp (contact@acme.com)"
 
@@ -64,7 +53,7 @@ def test_parse_supplier_person_no_email():
     supplier_actor = Actor(ActorType.PERSON, "Jane Doe")
     view.sbom = _make_sbom([_make_spdx_pkg("foo", "1.0", supplier=supplier_actor)])
     view.merge_components_into_controller()
-    pkg = ctrl["packages"].get("foo@1.0::Person: Jane Doe")
+    pkg = ctrl.packages.get("foo@1.0::Person: Jane Doe")
     assert pkg is not None
     assert pkg.supplier == "Person: Jane Doe"
 
@@ -73,7 +62,7 @@ def test_parse_supplier_noassertion():
     view, ctrl = _make_view()
     view.sbom = _make_sbom([_make_spdx_pkg("foo", "1.0", supplier=SpdxNoAssertion())])
     view.merge_components_into_controller()
-    pkg = ctrl["packages"].get("foo@1.0")
+    pkg = ctrl.packages.get("foo@1.0")
     assert pkg is not None
     assert pkg.supplier == ""
 
@@ -82,7 +71,7 @@ def test_parse_supplier_absent():
     view, ctrl = _make_view()
     view.sbom = _make_sbom([_make_spdx_pkg("foo", "1.0", supplier=None)])
     view.merge_components_into_controller()
-    pkg = ctrl["packages"].get("foo@1.0")
+    pkg = ctrl.packages.get("foo@1.0")
     assert pkg is not None
     assert pkg.supplier == ""
 
@@ -99,9 +88,9 @@ def test_two_packages_distinct_suppliers_both_stored():
     view.merge_components_into_controller()
     key_acme = "foo@1.0::Organization: Acme Corp"
     key_bar = "foo@1.0::Organization: Bar Inc"
-    assert ctrl["packages"].get(key_acme) is not None
-    assert ctrl["packages"].get(key_bar) is not None
-    assert ctrl["packages"].get(key_acme) is not ctrl["packages"].get(key_bar)
+    assert ctrl.packages.get(key_acme) is not None
+    assert ctrl.packages.get(key_bar) is not None
+    assert ctrl.packages.get(key_acme) is not ctrl.packages.get(key_bar)
 
 
 def test_normalize_spdx_dict_trims_three_part_license_list_version():

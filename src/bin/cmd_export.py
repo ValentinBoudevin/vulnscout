@@ -4,23 +4,19 @@
 
 from __future__ import annotations
 
-from ..controllers.vulnerabilities import VulnerabilitiesController
+from ..controllers import ControllersCache, VulnerabilitiesController
 from ..views.spdx import SPDX
 from ..views.spdx3 import SPDX3
 from ..views.cyclonedx import CycloneDx
 from ..views.openvex import OpenVex
 from ..views.templates import Templates
 from .cmd_process import evaluate_condition
-from ._common import get_default_author, build_controllers
+from ._common import get_default_author
 from datetime import date as _date
 import click
 import json
 import os
-from typing import TYPE_CHECKING
 from flask.cli import with_appcontext
-
-if TYPE_CHECKING:
-    from ..controllers.packages import PackagesController
 
 
 @click.command("export")
@@ -32,7 +28,8 @@ if TYPE_CHECKING:
 @with_appcontext
 def export_command(export_format: str, output_dir: str) -> None:
     """Export the current project data as an SBOM (SPDX, CycloneDX, or OpenVEX)."""
-    ctrls = build_controllers(preload_cache=True)
+    ctrls = ControllersCache()
+    ctrls.packages._preload_cache()
     author = get_default_author()
 
     os.makedirs(output_dir, exist_ok=True)
@@ -84,27 +81,15 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
     Also honours the GENERATE_DOCUMENTS env var (comma-separated list) when
     invoked; TEMPLATE_NAME is always generated regardless.
     """
-    controllers = build_controllers()
-    vulnCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
-    pkgCtrl: PackagesController = controllers["packages"]
-    vulnCtrl = VulnerabilitiesController.from_dict(pkgCtrl, vulnCtrl.to_dict())
-    controllers["vulnerabilities"] = vulnCtrl
-
-    from ..controllers.projects import ProjectController
-    from ..controllers.variants import VariantController
-    from ..controllers.scans import ScanController
-    from ..controllers.sbom_documents import SBOMDocumentController
-    controllers.update({
-        "projects": ProjectController,
-        "variants": VariantController,
-        "scans": ScanController,
-        "sbom_documents": SBOMDocumentController,
-    })
+    controllers = ControllersCache()
+    controllers.vulnerabilities = VulnerabilitiesController.from_dict(
+        controllers.packages, controllers.vulnerabilities.to_dict()
+    )
     templ = Templates(controllers)
 
     # Reuse failed_vulns from flask process if available, otherwise evaluate now
     match_condition = os.getenv("MATCH_CONDITION", "")
-    failed_vulns: list = []
+    failed_vulns: list | None = None
     if match_condition:
         cache_path = "/tmp/vulnscout_matched_vulns.json"
         if os.path.exists(cache_path):
@@ -112,9 +97,10 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
                 with open(cache_path) as _f:
                     failed_vulns = json.load(_f)
             except Exception:
-                failed_vulns = evaluate_condition(controllers, match_condition)
-        else:
-            failed_vulns = evaluate_condition(controllers, match_condition)
+                pass  # TODO log error somewhere?
+
+        if failed_vulns is None:
+            failed_vulns = evaluate_condition(controllers.vulnerabilities, controllers.assessments, match_condition)
 
     metadata = {
         "author": get_default_author(),
@@ -123,7 +109,7 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
         "ignore_before": "1970-01-01T00:00",
         "only_epss_greater": 0.0,
         "scan_date": "unknown date",
-        "failed_vulns": failed_vulns,
+        "failed_vulns": failed_vulns or [],
         "match_condition": match_condition,
     }
 

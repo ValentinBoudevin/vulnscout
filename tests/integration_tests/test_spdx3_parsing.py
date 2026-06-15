@@ -5,18 +5,12 @@
 
 import pytest
 from src.views.fast_spdx3 import FastSPDX3
-from src.controllers.packages import PackagesController
-from src.controllers.vulnerabilities import VulnerabilitiesController
-from src.controllers.assessments import AssessmentsController
+from src.controllers import ControllersCache
 
 
 @pytest.fixture
 def spdx3_parser():
-    controllers = {}
-    controllers["packages"] = PackagesController()
-    controllers["vulnerabilities"] = VulnerabilitiesController(controllers["packages"])
-    controllers["assessments"] = AssessmentsController(controllers["packages"], controllers["vulnerabilities"])
-    return FastSPDX3(controllers)
+    return FastSPDX3(ControllersCache())
 
 
 def test_parse_empty_json(spdx3_parser):

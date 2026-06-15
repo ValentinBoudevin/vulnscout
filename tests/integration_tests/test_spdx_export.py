@@ -6,19 +6,13 @@
 import pytest
 from src.views.spdx import SPDX
 from src.models.package import Package
-from src.controllers.packages import PackagesController
-from src.controllers.vulnerabilities import VulnerabilitiesController
-from src.controllers.assessments import AssessmentsController
+from src.controllers import ControllersCache
 import json
 
 
 @pytest.fixture
 def spdx_parser():
-    controllers = {}
-    controllers["packages"] = PackagesController()
-    controllers["vulnerabilities"] = VulnerabilitiesController(controllers["packages"])
-    controllers["assessments"] = AssessmentsController(controllers["packages"], controllers["vulnerabilities"])
-    return SPDX(controllers)
+    return SPDX(ControllersCache())
 
 
 def test_export_empty_json(spdx_parser):
