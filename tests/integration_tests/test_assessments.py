@@ -138,16 +138,6 @@ def test_get_by_vuln_pkg(assessment_controller, vuln_123, vuln_456, pkg_ABC, pkg
     assert assessment_2 not in ssmt_456_XYZ
 
 
-def test_export_import_assessments(assessment_controller, pkg_controller, vuln_controller, assessment_1):
-    data = assessment_controller.to_dict()
-    new_controller = AssessmentsController.from_dict(pkg_controller, vuln_controller, data)
-    assert len(new_controller) == len(assessment_controller)
-    assert assessment_1 in assessment_controller
-    assert assessment_1 in new_controller
-    for assess in assessment_controller:
-        assert assess in new_controller
-
-
 def test_assessments_controller_current_variant_id_default(assessment_controller):
     """
     GIVEN a freshly created AssessmentsController

@@ -276,14 +276,6 @@ class AssessmentsController:
             lambda a: str(a.id), "AssessmentsController",
         )
 
-    @staticmethod
-    def from_dict(pkgCtrl, vulnCtrl, data: dict):
-        """Return a new instance of AssessmentsController from a dictionary."""
-        item = AssessmentsController(pkgCtrl, vulnCtrl)
-        for k, v in data.items():
-            item.add(Assessment.from_dict(v))
-        return item
-
     def __contains__(self, item) -> bool:
         """Check if an item (str or Assessment) is in the list of assessments."""
         if isinstance(item, str):
