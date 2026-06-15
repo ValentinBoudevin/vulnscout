@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import datetime
+import decimal
 import os
 import dataclasses
 import typing
@@ -1057,11 +1058,11 @@ def init_app(app):
             return jsonify({"error": "EPSS API returned no data for this CVE"}), 503
 
         now = datetime.datetime.now(datetime.timezone.utc)
-        rec.update_record(
-            epss_score=epss_data["score"],
-            epss_fetched_at=now,
-            commit=False,
-        )
+        new_score = decimal.Decimal(str(epss_data["score"]))
+        update_kwargs: dict = {"epss_score": new_score, "epss_fetched_at": now, "commit": False}
+        if rec.epss_score is None or rec.epss_score != new_score:
+            update_kwargs["epss_data_updated_at"] = now
+        rec.update_record(**update_kwargs)
         db.session.commit()
 
         db.session.refresh(rec)

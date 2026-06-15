@@ -91,3 +91,38 @@ def test_epss_refresh_does_not_overwrite_score_on_api_failure(app_with_scan):
         rec = db.session.get(Vulnerability, cve_id)
         assert rec is not None
         assert rec.epss_score == original_score
+
+
+def test_initial_epss_enrichment_sets_data_updated_at(app_with_scan):
+    """fetch_epss_scores() stamps epss_data_updated_at on first-time population."""
+    from decimal import Decimal
+    from unittest.mock import MagicMock
+    from src.controllers.vulnerabilities import VulnerabilitiesController
+
+    cve_id = "CVE-2020-35492"
+
+    # Reset so the controller considers it un-enriched
+    with app_with_scan.app_context():
+        rec = db.session.get(Vulnerability, cve_id)
+        rec.epss_fetched_at = None
+        rec.epss_data_updated_at = None
+        db.session.commit()
+
+    # Build a minimal controller with just the one CVE
+    with app_with_scan.app_context():
+        rec = db.session.get(Vulnerability, cve_id)
+        ctrl = VulnerabilitiesController.__new__(VulnerabilitiesController)
+        ctrl.vulnerabilities = {cve_id: rec}
+        ctrl._db_record_cache = {}
+        mock_epss = MagicMock()
+        mock_epss.api_get_epss_batch.return_value = {cve_id: {"score": 0.42, "percentile": 0.7}}
+        ctrl.epss_api = mock_epss
+
+        ctrl.fetch_epss_scores()
+        db.session.commit()
+
+    with app_with_scan.app_context():
+        rec = db.session.get(Vulnerability, cve_id)
+        assert rec.epss_data_updated_at is not None
+        assert abs(float(rec.epss_score) - 0.42) < 1e-4
+

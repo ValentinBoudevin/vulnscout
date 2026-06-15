@@ -613,6 +613,60 @@ class TestBulkEpssRefreshBackground:
 
         MockTracker.error.assert_called_once()
 
+    def test_bulk_epss_run_sets_data_updated_at_when_score_changes(self, app, client, existing_cve_id):
+        """_run() stamps epss_data_updated_at only when the score changes."""
+        from decimal import Decimal
+        from src.models.vulnerability import Vulnerability
+        from src.extensions import db
+
+        with app.app_context():
+            rec = db.session.get(Vulnerability, existing_cve_id)
+            rec.epss_score = Decimal("0.1")
+            rec.epss_data_updated_at = None
+            db.session.commit()
+
+        target = self._capture_target(client, [existing_cve_id])
+
+        with patch("src.routes.bulk_refresh.EPSS_DB") as MockEPSS, \
+             patch("src.routes.bulk_refresh.EPSSProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            MockEPSS.return_value.api_get_epss_batch.return_value = {
+                existing_cve_id: {"score": 0.9}
+            }
+            with app.app_context():
+                target()
+
+        with app.app_context():
+            rec = db.session.get(Vulnerability, existing_cve_id)
+            assert rec.epss_data_updated_at is not None
+
+    def test_bulk_epss_run_no_data_updated_at_when_score_unchanged(self, app, client, existing_cve_id):
+        """_run() does NOT stamp epss_data_updated_at when the score is the same."""
+        from decimal import Decimal
+        from src.models.vulnerability import Vulnerability
+        from src.extensions import db
+
+        with app.app_context():
+            rec = db.session.get(Vulnerability, existing_cve_id)
+            rec.epss_score = Decimal("0.5")
+            rec.epss_data_updated_at = None
+            db.session.commit()
+
+        target = self._capture_target(client, [existing_cve_id])
+
+        with patch("src.routes.bulk_refresh.EPSS_DB") as MockEPSS, \
+             patch("src.routes.bulk_refresh.EPSSProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            MockEPSS.return_value.api_get_epss_batch.return_value = {
+                existing_cve_id: {"score": 0.5}
+            }
+            with app.app_context():
+                target()
+
+        with app.app_context():
+            rec = db.session.get(Vulnerability, existing_cve_id)
+            assert rec.epss_data_updated_at is None
+
 
 # ---------------------------------------------------------------------------
 # Cancel NVD refresh — /api/vulnerabilities/cancel-nvd-refresh

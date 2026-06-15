@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import datetime
+import decimal
 import time
 import os
 import json
@@ -373,9 +374,12 @@ class VulnerabilitiesController:
                     vuln.set_epss(result['score'], result['percentile'])
                     rec = self._db_record_cache.get(cve_id) or Vulnerability.get_by_id(cve_id)
                     if rec is not None:
+                        now = datetime.datetime.utcnow()
+                        new_score = decimal.Decimal(str(result['score']))
                         rec.update_record(
-                            epss_score=result['score'],
-                            epss_fetched_at=datetime.datetime.utcnow(),
+                            epss_score=new_score,
+                            epss_fetched_at=now,
+                            epss_data_updated_at=now,
                             commit=False,
                         )
                     nb_vuln += 1
