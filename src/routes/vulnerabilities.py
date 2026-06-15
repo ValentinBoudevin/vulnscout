@@ -5,6 +5,8 @@ import datetime
 import os
 import dataclasses
 import typing
+import re
+import urllib.error
 
 from flask import jsonify, request
 from sqlalchemy import func, select
@@ -26,6 +28,7 @@ from ..extensions import db
 from ..controllers.nvd_db import NVD_DB
 from ..controllers.nvd_apply import apply_nvd_update
 from ..controllers.epss_db import EPSS_DB
+from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..helpers.active_scans import (
     active_scan_ids_for_variant,
     active_scan_ids_for_project,
@@ -41,6 +44,7 @@ from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
 
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
+_GHSA_RE = re.compile(r'^GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$')
 
 
 def _sbom_pkg_filter(pkg_ids):
@@ -1075,3 +1079,52 @@ def init_app(app):
                     rec.severity_max_score = score
 
         return jsonify({"vulnerabilities": [rec.to_dict()]}), 200
+
+    @app.route('/api/vulnerabilities/<ghsa_id>/ghsa-refresh', methods=['POST'])
+    def refresh_single_ghsa(ghsa_id):
+        ghsa_id_upper = ghsa_id.upper()
+        if not _GHSA_RE.match(ghsa_id_upper):
+            return jsonify({"error": "Only valid GHSA identifiers (GHSA-xxxx-xxxx-xxxx) are supported"}), 400
+        rec = db.session.get(Vulnerability, ghsa_id_upper)
+        if rec is None:
+            return jsonify({"error": "GHSA advisory not found"}), 404
+
+        try:
+            published_at = VulnerabilitiesController._fetch_ghsa_published(ghsa_id_upper)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return jsonify({"error": "Advisory not found in GitHub Advisory Database"}), 404
+            return jsonify({"error": f"GitHub Advisory Database returned HTTP {e.code}"}), 502
+        except urllib.error.URLError:
+            return jsonify({"error": "Failed to reach GitHub Advisory Database"}), 503
+        if published_at is None:
+            return jsonify({"error": "GitHub Advisory Database returned no published date"}), 503
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        try:
+            publish_date = datetime.date.fromisoformat(published_at[:10])
+        except (ValueError, AttributeError):
+            return jsonify({"error": "GitHub Advisory Database returned an unparseable date"}), 503
+        rec.update_record(
+            publish_date=publish_date,
+            ghsa_fetched_at=now,
+            commit=False,
+        )
+        db.session.commit()
+
+        db.session.refresh(rec)
+        rec._init_transient()
+
+        for m in (rec.metrics or []):
+            if m.score is not None:
+                score = float(m.score)
+                if rec.severity_min_score is None or score < rec.severity_min_score:
+                    rec.severity_min_score = score
+                if rec.severity_max_score is None or score > rec.severity_max_score:
+                    rec.severity_max_score = score
+
+        data = rec.to_dict()
+        vuln_texts = fetch_vulnerabilities_texts([ghsa_id_upper], variant_ids=None)
+        data["texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[ghsa_id_upper]))
+
+        return jsonify({"vulnerabilities": [data]}), 200

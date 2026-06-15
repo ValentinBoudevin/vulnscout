@@ -81,3 +81,37 @@ export class BulkEpssRefreshCancelHandler {
         }
     }
 }
+
+export class BulkGhsaRefreshHandler {
+    static async trigger(ghsaIds: string[]): Promise<BulkRefreshResponse | null> {
+        const url = `${import.meta.env.VITE_API_URL}/api/vulnerabilities/bulk-ghsa-refresh`;
+        try {
+            const response = await fetch(url, {
+                method: "POST",
+                mode: "cors",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ghsa_ids: ghsaIds }),
+            });
+            if (!response.ok) return null;
+            return response.json().catch(() => null);
+        } catch {
+            return null;
+        }
+    }
+}
+
+export class BulkGhsaRefreshCancelHandler {
+    static async trigger(): Promise<CancelRefreshResponse | null> {
+        const url = `${import.meta.env.VITE_API_URL}/api/vulnerabilities/cancel-ghsa-refresh`;
+        try {
+            const response = await fetch(url, {
+                method: "POST",
+                mode: "cors",
+            });
+            if (!response.ok) return null;
+            return response.json().catch(() => null);
+        } catch {
+            return null;
+        }
+    }
+}

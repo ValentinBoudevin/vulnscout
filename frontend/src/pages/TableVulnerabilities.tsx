@@ -19,53 +19,51 @@ import { formatPkgId } from "../helpers/pkgId";
 import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
 import EPSSProgressHandler from "../handlers/epss_progress";
+import GHSAProgressHandler from "../handlers/ghsa_progress";
+import type { GHSAProgress } from "../handlers/ghsa_progress";
 
-/**
- * Shared hook for NVD/EPSS progress banner logic.
- * Detects in-progress updates and phase transitions (completed/cancelled),
- * updates the banner accordingly, and calls onRefreshComplete when done.
- */
+type SourceBanner = { message: string; type: 'error' | 'success' } | null;
+
 function useRefreshProgressEffect(
-    progress: { in_progress: boolean; phase?: string; current: number; total: number } | null,
+    progress: { in_progress: boolean; phase?: string; current: number; total: number; started_at?: string } | null,
     label: string,
     prevInProgress: React.MutableRefObject<boolean | null>,
     prevPhase: React.MutableRefObject<string | null>,
-    setBannerMessage: (msg: string) => void,
-    setBannerType: (type: 'error' | 'success') => void,
-    setBannerVisible: (visible: boolean) => void,
+    prevStartedAt: React.MutableRefObject<string | null>,
+    setSourceBanner: (state: SourceBanner) => void,
     onRefreshComplete?: () => void,
+    noun: string = 'entries',
 ) {
     useEffect(() => {
         const inProgress = progress?.in_progress ?? false;
         const phase = progress?.phase;
+        const startedAt = progress?.started_at ?? null;
+        const freshCycle = startedAt !== null && startedAt !== prevStartedAt.current;
         const justCompleted = prevPhase.current !== null && (
             prevInProgress.current === true ||
             (prevPhase.current !== 'completed' &&
              prevPhase.current !== 'cancelled' &&
-             (phase === 'completed' || phase === 'cancelled')));
+             (phase === 'completed' || phase === 'cancelled')) ||
+            (freshCycle && (phase === 'completed' || phase === 'cancelled')));
         if (inProgress) {
             if (progress && progress.total > 0 && progress.current > 0) {
-                setBannerMessage(`${label} refresh in progress: ${progress.current}/${progress.total}`);
-                setBannerType('success');
-                setBannerVisible(true);
+                setSourceBanner({ message: `${label} ${progress.current}/${progress.total}`, type: 'success' });
             }
         } else if (justCompleted) {
             onRefreshComplete?.();
             if (phase === 'cancelled') {
                 const current = progress?.current ?? 0;
                 const total = progress?.total ?? 0;
-                setBannerMessage(`${label} refresh cancelled${current > 0 ? ` (${current}/${total} CVEs)` : ''}`);
-                setBannerType('error');
+                setSourceBanner({ message: `${label} refresh cancelled${current > 0 ? ` (${current}/${total} ${noun})` : ''}`, type: 'error' });
             } else {
                 const total = progress?.total ?? 0;
-                setBannerMessage(`${label} refresh complete${total > 0 ? ` (${total} CVEs)` : ''}`);
-                setBannerType('success');
+                setSourceBanner({ message: `${label} refresh complete${total > 0 ? ` (${total} ${noun})` : ''}`, type: 'success' });
             }
-            setBannerVisible(true);
         }
         if (progress !== null) {
             prevInProgress.current = inProgress;
             prevPhase.current = phase ?? 'idle';
+            prevStartedAt.current = startedAt;
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [progress, onRefreshComplete]);
@@ -87,7 +85,7 @@ type Props = {
     baseVariantId?: string;
     /** 'difference' or 'intersection' when compare mode is active */
     compareOperation?: string;
-    /** Called when an NVD or EPSS bulk refresh completes, so the parent can reload data */
+    /** Called when an NVD, EPSS, or GHSA bulk refresh completes, so the parent can reload data */
     onRefreshComplete?: () => void;
 };
 
@@ -356,10 +354,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [publishedDateTo, setPublishedDateTo] = useState<string>('');
     const [nvdProgress, setNvdProgress] = useState<NVDProgress | null>(null);
     const [epssProgress, setEpssProgress] = useState<EPSSProgress | null>(null);
+    const [ghsaProgress, setGhsaProgress] = useState<GHSAProgress | null>(null);
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
-    const [bannerMessage, setBannerMessage] = useState<string>('');
-    const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
-    const [bannerVisible, setBannerVisible] = useState<boolean>(false);
+    const [nvdBanner, setNvdBanner] = useState<SourceBanner>(null);
+    const [epssBanner, setEpssBanner] = useState<SourceBanner>(null);
+    const [ghsaBanner, setGhsaBanner] = useState<SourceBanner>(null);
+    const [generalBanner, setGeneralBanner] = useState<SourceBanner>(null);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
         'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated'
@@ -387,8 +387,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const moreFiltersRef = useRef<HTMLDivElement>(null);
     const prevNvdInProgress = useRef<boolean | null>(null);
     const prevNvdPhase = useRef<string | null>(null);
+    const prevNvdStartedAt = useRef<string | null>(null);
     const prevEpssInProgress = useRef<boolean | null>(null);
     const prevEpssPhase = useRef<string | null>(null);
+    const prevEpssStartedAt = useRef<string | null>(null);
+    const prevGhsaInProgress = useRef<boolean | null>(null);
+    const prevGhsaPhase = useRef<string | null>(null);
+    const prevGhsaStartedAt = useRef<string | null>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -414,19 +419,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         if (filterLabel === "Package") setSelectedPackages([filterValue]);
     }, [filterLabel, filterValue]);
 
-    // Update banner with live NVD/EPSS progress; reload data when each refresh completes
-    useRefreshProgressEffect(
-        nvdProgress, 'NVD',
-        prevNvdInProgress, prevNvdPhase,
-        setBannerMessage, setBannerType, setBannerVisible,
-        onRefreshComplete,
-    );
-    useRefreshProgressEffect(
-        epssProgress, 'EPSS',
-        prevEpssInProgress, prevEpssPhase,
-        setBannerMessage, setBannerType, setBannerVisible,
-        onRefreshComplete,
-    );
+    // Update per-source banners with live progress; reload data when each refresh completes
+    useRefreshProgressEffect(nvdProgress, 'NVD', prevNvdInProgress, prevNvdPhase, prevNvdStartedAt, setNvdBanner, onRefreshComplete, 'CVEs');
+    useRefreshProgressEffect(epssProgress, 'EPSS', prevEpssInProgress, prevEpssPhase, prevEpssStartedAt, setEpssBanner, onRefreshComplete, 'CVEs');
+    useRefreshProgressEffect(ghsaProgress, 'GHSA', prevGhsaInProgress, prevGhsaPhase, prevGhsaStartedAt, setGhsaBanner, onRefreshComplete, 'advisories');
 
     // Fetch NVD progress on mount and periodically
     useEffect(() => {
@@ -462,14 +458,38 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         return () => clearInterval(interval);
     }, []);
 
-    const triggerBanner = (message: string, type: 'error' | 'success') => {
-        setBannerMessage(message);
-        setBannerType(type);
-        setBannerVisible(true);
+    // Fetch GHSA progress on mount and periodically
+    useEffect(() => {
+        const fetchGhsaProgress = async () => {
+            try {
+                const progress = await GHSAProgressHandler.getProgress();
+                setGhsaProgress(progress);
+            } catch (error) {
+                console.error('Failed to fetch GHSA progress:', error);
+            }
+        };
+        fetchGhsaProgress();
+        const interval = setInterval(fetchGhsaProgress, 3000);
+        return () => clearInterval(interval);
+    }, []);
+
+    const activeBanners = [nvdBanner, epssBanner, ghsaBanner, generalBanner].filter((b): b is NonNullable<SourceBanner> => b !== null);
+    const bannerVisible = activeBanners.length > 0;
+    const bannerMessage = activeBanners.map(b => b.message).join(' · ');
+    const bannerType: 'error' | 'success' = activeBanners.some(b => b.type === 'error') ? 'error' : 'success';
+
+    const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa') => {
+        if (source === 'nvd') setNvdBanner({ message, type });
+        else if (source === 'epss') setEpssBanner({ message, type });
+        else if (source === 'ghsa') setGhsaBanner({ message, type });
+        else setGeneralBanner({ message, type });
     };
 
     const closeBanner = () => {
-        setBannerVisible(false);
+        setNvdBanner(null);
+        setEpssBanner(null);
+        setGhsaBanner(null);
+        setGeneralBanner(null);
     };
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -565,6 +585,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         'first_scan_date': 'First Scan Date',
         'nvd_fetched_at': 'NVD Fetched',
         'nvd_data_updated_at': 'NVD Updated',
+        'ghsa_fetched_at': 'GHSA Fetched',
         'found_by': 'Sources',
         'actions': 'Actions'
     }), []);
@@ -923,6 +944,32 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             sortingFn: (rowA, rowB) => {
                 const a = rowA.original.nvd_data_updated_at ? new Date(rowA.original.nvd_data_updated_at).getTime() : 0;
                 const b = rowB.original.nvd_data_updated_at ? new Date(rowB.original.nvd_data_updated_at).getTime() : 0;
+                return a - b;
+            },
+            size: 130
+            }),
+            columnHelper.accessor('ghsa_fetched_at', {
+            id: 'ghsa_fetched_at',
+            header: () => <div className="flex items-center justify-center">GHSA Fetched</div>,
+            cell: info => {
+                const val = info.getValue();
+                if (!val) return <div className="flex items-center justify-center h-full text-center text-gray-400">Never</div>;
+                const date = new Date(val);
+                const formattedDate = date.toLocaleDateString(undefined, {
+                    year: 'numeric',
+                    month: 'short',
+                    day: '2-digit',
+                }) + ' ' + date.toLocaleTimeString(undefined, {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    timeZoneName: 'short',
+                });
+                return <div className="flex items-center justify-center h-full text-center text-sm">{formattedDate}</div>;
+            },
+            enableSorting: true,
+            sortingFn: (rowA, rowB) => {
+                const a = rowA.original.ghsa_fetched_at ? new Date(rowA.original.ghsa_fetched_at).getTime() : 0;
+                const b = rowB.original.ghsa_fetched_at ? new Date(rowB.original.ghsa_fetched_at).getTime() : 0;
                 return a - b;
             },
             size: 130
@@ -1289,6 +1336,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     'First Scan Date',
                     'NVD Fetched',
                     'NVD Updated',
+                    'GHSA Fetched',
                     'Sources'
                 ]}
                 selected={visibleColumns}
@@ -1534,6 +1582,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             compareOperation={compareOperation}
             nvdProgress={nvdProgress}
             epssProgress={epssProgress}
+            ghsaProgress={ghsaProgress}
         />
 
         <TableGeneric

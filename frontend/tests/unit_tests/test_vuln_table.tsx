@@ -744,8 +744,8 @@ describe('Vulnerability Table', () => {
         await user.click(btn);
 
         // ASSERT
-        // 3 Variants.listByVuln calls (one per selected vulnerability) + 1 batch assessment API call
-        expect(fetchMock).toHaveBeenCalledTimes(4);
+        // 3 Variants.listByVuln calls (one per selected vulnerability) + 1 batch assessment API call + 1 GHSA progress poll on mount
+        expect(fetchMock).toHaveBeenCalledTimes(5);
     })
 
     test('select and change time estimate', async () => {
@@ -793,7 +793,8 @@ describe('Vulnerability Table', () => {
         await user.click(btn);
 
         // ASSERT
-        expect(fetchMock).toHaveBeenCalledTimes(3);
+        // 2 Variants.listByVuln + 1 batch time estimate API call + 1 GHSA progress poll on mount
+        expect(fetchMock).toHaveBeenCalledTimes(4);
     })
 
     test('show description when hovering vulnerability', async () => {
@@ -2622,6 +2623,50 @@ describe('NVD timestamp columns', () => {
             await act(async () => { await Promise.resolve(); });
 
             expect(screen.queryByText(/NVD refresh complete/i)).not.toBeInTheDocument();
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('shows EPSS completion banner when refresh completes between polls (started_at changes)', async () => {
+        jest.useFakeTimers();
+        try {
+            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+            EPSSProgressHandler.getProgress
+                .mockResolvedValueOnce({ in_progress: false, phase: 'idle', current: 0, total: 0, message: '', started_at: undefined })
+                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 50, total: 50, message: '', started_at: '2026-06-10T10:01:00Z' });
+
+            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            await act(async () => { await Promise.resolve(); });
+            await act(async () => { jest.advanceTimersByTime(5001); });
+            await act(async () => { await Promise.resolve(); });
+
+            await waitFor(() => {
+                expect(screen.getByText(/EPSS refresh complete \(50 CVEs\)/i)).toBeInTheDocument();
+            });
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('shows EPSS completion banner when phase stays completed but started_at changes (re-triggered fast refresh)', async () => {
+        jest.useFakeTimers();
+        try {
+            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+            EPSSProgressHandler.getProgress
+                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 30, total: 30, message: '', started_at: '2026-06-10T09:00:00Z' })
+                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 50, total: 50, message: '', started_at: '2026-06-10T10:01:00Z' });
+
+            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            await act(async () => { await Promise.resolve(); });
+            await act(async () => { jest.advanceTimersByTime(5001); });
+            await act(async () => { await Promise.resolve(); });
+
+            await waitFor(() => {
+                expect(screen.getByText(/EPSS refresh complete \(50 CVEs\)/i)).toBeInTheDocument();
+            });
         } finally {
             jest.useRealTimers();
         }
