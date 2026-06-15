@@ -136,11 +136,10 @@ class Assessment(Base):
     # ------------------------------------------------------------------
 
     @orm.reconstructor
-    def _init_on_load(self):
-        """Called by SQLAlchemy when reconstituting from the DB."""
+    def _init_on_load(self) -> None:
         self._init_transient()
 
-    def _init_transient(self):
+    def _init_transient(self) -> None:
         if not hasattr(self, "_vuln_id"):
             self._vuln_id = ""
         if not hasattr(self, "_packages"):
@@ -165,7 +164,7 @@ class Assessment(Base):
         return ""
 
     @vuln_id.setter
-    def vuln_id(self, value: str):
+    def vuln_id(self, value: str) -> None:
         self._vuln_id = value
 
     @property
@@ -180,7 +179,7 @@ class Assessment(Base):
         return []
 
     @packages.setter
-    def packages(self, value):
+    def packages(self, value: list[str]) -> None:
         self._packages = list(value or [])
 
     def __repr__(self) -> str:
@@ -220,7 +219,7 @@ class Assessment(Base):
     # Validation / mutation helpers
     # ==================================================================
 
-    def add_package(self, package) -> bool:
+    def add_package(self, package: str | Package) -> bool:
         """Add a package to the transient package list.
 
         *package* can be a ``'name@version'`` string or a :class:`Package` instance.
@@ -274,7 +273,7 @@ class Assessment(Base):
             return STATUS_OPENVEX_TO_CDX_VEX[self.status] == status
         return False
 
-    def set_status_notes(self, notes: str, append: bool = False):
+    def set_status_notes(self, notes: str, append: bool = False) -> None:
         if append and self.status_notes:
             if notes not in self.status_notes:
                 self.status_notes = self.status_notes + "\n" + notes
@@ -313,7 +312,7 @@ class Assessment(Base):
             return JUSTIFICATION_OPENVEX_TO_CDX_VEX[self.justification] == justification
         return False
 
-    def set_not_affected_reason(self, reason: str, append: bool = False):
+    def set_not_affected_reason(self, reason: str, append: bool = False) -> None:
         if append and self.impact_statement:
             if reason not in self.impact_statement:
                 self.impact_statement = self.impact_statement + "\n" + reason
@@ -335,8 +334,9 @@ class Assessment(Base):
             return True
         return False
 
-    def set_workaround(self, workaround: str, timestamp: Optional[str] = None):
+    def set_workaround(self, workaround: str, timestamp: Optional[str] = None) -> None:
         """Set the workaround text. The timestamp argument is accepted for compatibility but not stored."""
+
         self.workaround = workaround
 
     # ==================================================================
@@ -573,7 +573,11 @@ class Assessment(Base):
         ).scalars().unique().all())
 
     @staticmethod
-    def from_vuln_assessment(assess, finding_id=None, variant_id=None) -> "Assessment":
+    def from_vuln_assessment(
+        assess: "Assessment",
+        finding_id: "uuid.UUID | None" = None,
+        variant_id: "uuid.UUID | None" = None,
+    ) -> "Assessment":
         """Create or update an ``Assessment`` DB record from an Assessment DTO.
 
         Does not commit — callers are expected to be inside batch_session()
@@ -735,8 +739,7 @@ class Assessment(Base):
         justification: Optional[str] = None,
         impact_statement: Optional[str] = None,
         workaround: Optional[str] = None,
-        responses: Optional[list] = None,
-        **_kwargs,
+        responses: Optional[list[str]] = None,
     ) -> "Assessment":
         """Update fields in place, persist the change and return ``self``."""
         if status is not None:

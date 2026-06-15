@@ -10,11 +10,17 @@ Used by both ``routes/vulnerabilities.py`` (batch PATCH) and
 
 from __future__ import annotations
 
+import uuid
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..models.vulnerability import Vulnerability as _Vulnerability
+
 from ..models import Metrics, CVSS, Iso8601Duration
 from ..helpers.verbose import verbose
 
 
-def _parse_effort_hours(value: int | str) -> int:
+def _parse_effort_hours(value: int | str | None) -> int:
     """Parse an effort value (ISO 8601 duration string or integer hours) to whole hours."""
     if isinstance(value, int):
         return value
@@ -23,7 +29,7 @@ def _parse_effort_hours(value: int | str) -> int:
     raise ValueError(f"Invalid effort value: {value!r}")
 
 
-def _validate_effort(eff: dict):
+def _validate_effort(eff: dict[str, int | str | None]) -> tuple[int | None, int | None, int | None, str | None]:
     """Validate and parse effort dict with optimistic/likely/pessimistic keys.
 
     Returns ``(opt, lik, pes, None)`` on success or ``(None, None, None, error_string)``
@@ -43,11 +49,11 @@ def _validate_effort(eff: dict):
 
 
 def _validate_and_apply_cvss(
-    new_cvss: dict,
+    new_cvss: dict[str, str | float],
     record_id: str,
-    variant_id,
+    variant_id: uuid.UUID | None,
     log_prefix: str = "",
-):
+) -> str | None:
     """Validate CVSS payload and persist to Metrics.
 
     Returns an error string on validation failure, ``None`` on success.
@@ -67,7 +73,11 @@ def _validate_and_apply_cvss(
     return None
 
 
-def _apply_effort(record, variant_id, opt, lik, pes, log_prefix: str = ""):
+def _apply_effort(
+    record: "_Vulnerability", variant_id: uuid.UUID | None,
+    opt: int, lik: int, pes: int,
+    log_prefix: str = "",
+) -> None:
     """Persist effort values to the first finding's TimeEstimate."""
     try:
         from ..models.time_estimate import TimeEstimate

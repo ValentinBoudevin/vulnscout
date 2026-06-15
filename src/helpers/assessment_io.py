@@ -17,17 +17,19 @@ import tarfile
 import uuid as _uuid
 from collections import defaultdict
 from datetime import datetime as _dt, timezone as _tz
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..models.variant import Variant as _Variant  # noqa: F401
+    from ..models.variant import Variant as _Variant
+    from ..models.assessment import Assessment as _Assessment
+    from ..models.vulnerability import Vulnerability as _Vulnerability
 
 
 # ---------------------------------------------------------------------------
 # Export helpers
 # ---------------------------------------------------------------------------
 
-def _get_vuln_info(vuln_id: str, vuln_cache: dict) -> dict:
+def _get_vuln_info(vuln_id: str, vuln_cache: "dict[str, _Vulnerability | None]") -> "dict[str, str | list[str]]":
     """Return a dict with description, aliases and url for *vuln_id*.
 
     Uses *vuln_cache* (mutated in-place) to avoid repeated DB lookups.
@@ -62,11 +64,11 @@ def sanitize_variant_name(name: str) -> str:
 
 
 def build_openvex_doc(
-    assessments: list,
+    assessments: "list[_Assessment]",
     author: str,
     now_iso: str | None = None,
-    vuln_cache: dict | None = None,
-) -> dict:
+    vuln_cache: "dict[str, _Vulnerability | None] | None" = None,
+) -> dict[str, Any]:
     """Build a single OpenVEX document dict from a list of assessments.
 
     Parameters
@@ -142,7 +144,7 @@ def build_openvex_doc(
 
 
 def build_openvex_archive(
-    handmade_assessments: list,
+    handmade_assessments: "list[_Assessment]",
     variant_names: dict[str, str],
     author: str,
     now_iso: str | None = None,
@@ -173,9 +175,9 @@ def build_openvex_archive(
     if now_iso is None:
         now_iso = _dt.now(_tz.utc).isoformat()
 
-    vuln_cache: dict = {}
+    vuln_cache: "dict[str, _Vulnerability | None]" = {}
 
-    by_variant: dict[str | None, list] = defaultdict(list)
+    by_variant: "dict[str | None, list[_Assessment]]" = defaultdict(list)
     for assess in handmade_assessments:
         vid = str(assess.variant_id) if assess.variant_id else None
         by_variant[vid].append(assess)
@@ -210,9 +212,9 @@ def is_openvex_doc(doc: object) -> bool:
 
 
 def import_statements(
-    statements: list,
-    variant_id,
-) -> tuple[list[dict], list[dict], int]:
+    statements: list[dict[str, Any]],
+    variant_id: "_uuid.UUID",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
     """Persist a list of OpenVEX statement dicts as DB assessments.
 
     Parameters
@@ -236,8 +238,8 @@ def import_statements(
     from ..models.package import Package
     from ..models.finding import Finding
 
-    created: list[dict] = []
-    errors: list[dict] = []
+    created: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
     skipped = 0
 
     for stmt in statements:
@@ -326,7 +328,7 @@ def import_statements(
     return created, errors, skipped
 
 
-def build_variant_by_name_map(project_id: "_uuid.UUID | None" = None) -> dict:
+def build_variant_by_name_map(project_id: "_uuid.UUID | None" = None) -> "dict[str, _Variant]":
     """Return a ``{name: Variant, sanitised_name: Variant}`` lookup.
 
     Parameters
@@ -339,7 +341,7 @@ def build_variant_by_name_map(project_id: "_uuid.UUID | None" = None) -> dict:
     from ..models.variant import Variant as DBVariant
 
     variants = DBVariant.get_by_project(project_id) if project_id else DBVariant.get_all()
-    variant_by_name: dict = {}
+    variant_by_name: "dict[str, _Variant]" = {}
     for v in variants:
         sanitised = sanitize_variant_name(v.name)
         variant_by_name[sanitised] = v
@@ -349,16 +351,16 @@ def build_variant_by_name_map(project_id: "_uuid.UUID | None" = None) -> dict:
 
 def import_archive_bytes(
     file_bytes: bytes,
-    variant_by_name: dict,
-) -> tuple[list[dict], list[dict], int, int]:
+    variant_by_name: "dict[str, _Variant]",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
     """Import OpenVEX assessments from a tar.gz archive (as raw bytes).
 
     Returns
     -------
     (created, errors, skipped, variant_files_found)
     """
-    total_created: list[dict] = []
-    total_errors: list[dict] = []
+    total_created: list[dict[str, Any]] = []
+    total_errors: list[dict[str, Any]] = []
     total_skipped = 0
     variant_files_found = 0
 
@@ -408,8 +410,8 @@ def import_archive_bytes(
 
 def import_directory(
     dir_path: str,
-    variant_by_name: dict,
-) -> tuple[list[dict], list[dict], int, int]:
+    variant_by_name: "dict[str, _Variant]",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
     """Import OpenVEX assessments from a directory of JSON files.
 
     Each ``.json`` file is matched to a variant by its filename (sans
@@ -419,8 +421,8 @@ def import_directory(
     -------
     (created, errors, skipped, variant_files_found)
     """
-    total_created: list[dict] = []
-    total_errors: list[dict] = []
+    total_created: list[dict[str, Any]] = []
+    total_errors: list[dict[str, Any]] = []
     total_skipped = 0
     variant_files_found = 0
 
@@ -467,8 +469,8 @@ def import_directory(
 # ---------------------------------------------------------------------------
 
 def build_custom_data_export(
-    variant_ids: list | None = None,
-) -> dict:
+    variant_ids: list[_uuid.UUID] | None = None,
+) -> dict[str, Any]:
     """Build a custom-data export dict containing assessments, CVSS and time
     estimates for the given variant(s).
 
@@ -621,10 +623,10 @@ def build_custom_data_export(
 # ---------------------------------------------------------------------------
 
 def import_custom_data(
-    data: dict,
-    variant_by_name: dict,
+    data: dict[str, Any],
+    variant_by_name: "dict[str, _Variant]",
     variant_id: "_uuid.UUID | None" = None,
-) -> dict:
+) -> dict[str, Any]:
     """Import a custom-data JSON document containing assessments, CVSS and
     time estimates.
 
@@ -658,7 +660,7 @@ def import_custom_data(
         _apply_effort,
     )
 
-    result: dict = {
+    result: dict[str, Any] = {
         "status": "success",
         "assessments_imported": 0,
         "assessments_skipped": 0,
@@ -875,6 +877,7 @@ def import_custom_data(
                 if not target_variant_ids:
                     target_variant_ids = [None]
 
+            assert opt is not None and lik is not None and pes is not None
             for target_variant_id in target_variant_ids:
                 _apply_effort(record, target_variant_id, opt, lik, pes,
                               log_prefix="import-custom-data")

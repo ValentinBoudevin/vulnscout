@@ -3,8 +3,16 @@
 
 import typing
 import uuid
+from typing import Any, Callable, Iterable, Protocol
 
 T = typing.TypeVar("T")
+K = typing.TypeVar("K")
+V = typing.TypeVar("V", bound="_HasToDict")
+
+
+class _HasToDict(Protocol):
+    def to_dict(self) -> dict[str, Any]:
+        ...
 
 
 def ensure_uuid(value: uuid.UUID | str) -> uuid.UUID:
@@ -49,7 +57,12 @@ def validate_non_empty(value: str, field_name: str) -> str:
     return value
 
 
-def to_dict_with_fallback(cache: dict, db_get_all, key_fn, label: str) -> dict:
+def to_dict_with_fallback(
+    cache: dict[K, V],
+    db_get_all: Callable[[], Iterable[V]],
+    key_fn: Callable[[V], K],
+    label: str,
+) -> dict[K, dict[str, Any]]:
     """Return a ``{key: dict}`` mapping preferring *cache* when populated.
 
     Falls back to *db_get_all* (a callable returning an iterable of model
