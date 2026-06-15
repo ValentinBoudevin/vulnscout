@@ -2346,8 +2346,8 @@ describe('More Filters dropdown', () => {
     });
 });
 
-describe('NVD timestamp columns', () => {
-    const makeVuln = (id: string, nvd_fetched_at?: string, nvd_data_updated_at?: string): Vulnerability => ({
+describe('Data timestamp columns (Fetched / Updated)', () => {
+    const makeVuln = (id: string, data_fetched_at?: string, data_updated_at?: string): Vulnerability => ({
         id,
         aliases: [],
         related_vulnerabilities: [],
@@ -2369,8 +2369,8 @@ describe('NVD timestamp columns', () => {
         simplified_status: 'Pending Assessment',
         assessments: [],
         variants: [],
-        nvd_fetched_at,
-        nvd_data_updated_at,
+        data_fetched_at,
+        data_updated_at,
     });
 
     const enableColumn = async (user: ReturnType<typeof userEvent.setup>, name: string) => {
@@ -2380,43 +2380,43 @@ describe('NVD timestamp columns', () => {
         await user.click(checkbox);
     };
 
-    test('NVD Fetched column is hidden by default and can be enabled', async () => {
+    test('Fetched column is hidden by default and can be enabled', async () => {
         render(<TableVulnerabilities vulnerabilities={[makeVuln('CVE-2024-0001', '2024-01-15T10:00:00Z')]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        expect(screen.queryByRole('columnheader', { name: /nvd fetched/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('columnheader', { name: /^last fetched$/i })).not.toBeInTheDocument();
 
-        await enableColumn(user, 'NVD Fetched');
+        await enableColumn(user, 'Last Fetched');
 
         await waitFor(() => {
-            expect(screen.getByRole('columnheader', { name: /nvd fetched/i })).toBeInTheDocument();
+            expect(screen.getByRole('columnheader', { name: /^last fetched$/i })).toBeInTheDocument();
         });
     });
 
-    test('NVD Fetched shows formatted date when value is present', async () => {
+    test('Fetched shows formatted date when value is present', async () => {
         render(<TableVulnerabilities vulnerabilities={[makeVuln('CVE-2024-0001', '2024-01-15T10:00:00Z')]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await enableColumn(user, 'NVD Fetched');
+        await enableColumn(user, 'Last Fetched');
 
         await waitFor(() => {
             expect(screen.queryByText('Never')).not.toBeInTheDocument();
-            expect(screen.getByRole('columnheader', { name: /nvd fetched/i })).toBeInTheDocument();
+            expect(screen.getByRole('columnheader', { name: /^last fetched$/i })).toBeInTheDocument();
         });
     });
 
-    test('NVD Fetched shows "Never" when value is absent', async () => {
+    test('Fetched shows "Never" when value is absent', async () => {
         render(<TableVulnerabilities vulnerabilities={[makeVuln('CVE-2024-0001', undefined)]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await enableColumn(user, 'NVD Fetched');
+        await enableColumn(user, 'Last Fetched');
 
         await waitFor(() => {
             expect(screen.getByText('Never')).toBeInTheDocument();
         });
     });
 
-    test('NVD Fetched column sorts by fetch time', async () => {
+    test('Fetched column sorts by fetch time', async () => {
         const vulns = [
             makeVuln('CVE-EARLIER', '2023-03-01T00:00:00Z'),
             makeVuln('CVE-LATER', '2024-09-01T00:00:00Z'),
@@ -2424,9 +2424,9 @@ describe('NVD timestamp columns', () => {
         render(<TableVulnerabilities vulnerabilities={vulns} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await enableColumn(user, 'NVD Fetched');
+        await enableColumn(user, 'Last Fetched');
 
-        const header = screen.getByRole('columnheader', { name: /nvd fetched/i });
+        const header = screen.getByRole('columnheader', { name: /^last fetched$/i });
         await user.click(header);
         await waitFor(() => {
             const html = document.body.innerHTML;
@@ -2440,43 +2440,43 @@ describe('NVD timestamp columns', () => {
         });
     });
 
-    test('NVD Updated column is hidden by default and can be enabled', async () => {
+    test('Updated column is hidden by default and can be enabled', async () => {
         render(<TableVulnerabilities vulnerabilities={[makeVuln('CVE-2024-0001', undefined, '2024-03-10T12:00:00Z')]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        expect(screen.queryByRole('columnheader', { name: /nvd updated/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('columnheader', { name: /^last updated$/i })).not.toBeInTheDocument();
 
-        await enableColumn(user, 'NVD Updated');
+        await enableColumn(user, 'Last Updated');
 
         await waitFor(() => {
-            expect(screen.getByRole('columnheader', { name: /nvd updated/i })).toBeInTheDocument();
+            expect(screen.getByRole('columnheader', { name: /^last updated$/i })).toBeInTheDocument();
         });
     });
 
-    test('NVD Updated shows formatted date when value is present', async () => {
+    test('Updated shows formatted date when value is present', async () => {
         render(<TableVulnerabilities vulnerabilities={[makeVuln('CVE-2024-0001', undefined, '2024-03-10T12:00:00Z')]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await enableColumn(user, 'NVD Updated');
+        await enableColumn(user, 'Last Updated');
 
         await waitFor(() => {
             expect(screen.queryByText('Never')).not.toBeInTheDocument();
-            expect(screen.getByRole('columnheader', { name: /nvd updated/i })).toBeInTheDocument();
+            expect(screen.getByRole('columnheader', { name: /^last updated$/i })).toBeInTheDocument();
         });
     });
 
-    test('NVD Updated shows "Never" when value is absent', async () => {
+    test('Updated shows "Never" when value is absent', async () => {
         render(<TableVulnerabilities vulnerabilities={[makeVuln('CVE-2024-0001', undefined, undefined)]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await enableColumn(user, 'NVD Updated');
+        await enableColumn(user, 'Last Updated');
 
         await waitFor(() => {
             expect(screen.getByText('Never')).toBeInTheDocument();
         });
     });
 
-    test('NVD Updated column sorts by update time', async () => {
+    test('Updated column sorts by update time', async () => {
         const vulns = [
             makeVuln('CVE-EARLIER', undefined, '2023-03-01T00:00:00Z'),
             makeVuln('CVE-LATER', undefined, '2024-09-01T00:00:00Z'),
@@ -2484,9 +2484,9 @@ describe('NVD timestamp columns', () => {
         render(<TableVulnerabilities vulnerabilities={vulns} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await enableColumn(user, 'NVD Updated');
+        await enableColumn(user, 'Last Updated');
 
-        const header = screen.getByRole('columnheader', { name: /nvd updated/i });
+        const header = screen.getByRole('columnheader', { name: /^last updated$/i });
         await user.click(header);
         await waitFor(() => {
             const html = document.body.innerHTML;
