@@ -10,19 +10,18 @@ import os
 
 
 @pytest.fixture
-def setup(tmp_path):
-    os.environ["INPUT_SPDX_FOLDER"] = str(os.path.join(os.path.dirname(__file__), "data"))
-    os.environ["OUTPUT_SPDX_FILE"] = str(tmp_path / "output.spdx.json")
+def setup(tmp_path, monkeypatch):
+    monkeypatch.setenv("INPUT_SPDX_FOLDER", str(os.path.join(os.path.dirname(__file__), "data")))
+    monkeypatch.setenv("OUTPUT_SPDX_FILE", str(tmp_path / "output.spdx.json"))
 
 
 def test_merge_files_default(setup):
-    os.environ["IGNORE_PARSING_ERRORS"] = 'false'
     with pytest.raises(Exception):
         main()
 
 
-def test_merge_files_with_ignore_errors(setup):
-    os.environ["IGNORE_PARSING_ERRORS"] = 'true'
+def test_merge_files_with_ignore_errors(setup, monkeypatch):
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", 'true')
     main()
     with open(os.environ["OUTPUT_SPDX_FILE"], 'r') as f:
         data = f.read()
@@ -33,7 +32,7 @@ def test_merge_files_with_ignore_errors(setup):
         assert "SPDX-2.3" in data
 
 
-def test_merge_spdx3_file(tmp_path):
+def test_merge_spdx3_file(tmp_path, monkeypatch):
     """read_inputs() uses FastSPDX3 when the document looks like SPDX 3.0 (line 43)."""
     spdx3_doc = {
         "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
@@ -53,8 +52,7 @@ def test_merge_spdx3_file(tmp_path):
     }
     spdx3_file = tmp_path / "sbom.spdx.json"
     spdx3_file.write_text(json.dumps(spdx3_doc))
-    os.environ["INPUT_SPDX_FOLDER"] = str(tmp_path)
-    os.environ["IGNORE_PARSING_ERRORS"] = 'false'
+    monkeypatch.setenv("INPUT_SPDX_FOLDER", str(tmp_path))
 
     from src.controllers.packages import PackagesController
     from src.controllers.vulnerabilities import VulnerabilitiesController
@@ -71,7 +69,7 @@ def test_merge_spdx3_file(tmp_path):
     assert "testpkg@1.0.0" in controllers["packages"].to_dict()
 
 
-def test_merge_fastspdx_fallback(tmp_path):
+def test_merge_fastspdx_fallback(tmp_path, monkeypatch):
     """read_inputs() uses FastSPDX when IGNORE_PARSING_ERRORS=true and not SPDX3 (lines 47-48)."""
     # A valid SPDX 2.3 file that would work with fast parser
     spdx23_doc = {
@@ -93,8 +91,8 @@ def test_merge_fastspdx_fallback(tmp_path):
     }
     spdx_file = tmp_path / "sbom.spdx.json"
     spdx_file.write_text(json.dumps(spdx23_doc))
-    os.environ["INPUT_SPDX_FOLDER"] = str(tmp_path)
-    os.environ["IGNORE_PARSING_ERRORS"] = 'true'  # triggers use_fastspdx=True
+    monkeypatch.setenv("INPUT_SPDX_FOLDER", str(tmp_path))
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", 'true')
 
     from src.controllers.packages import PackagesController
     from src.controllers.vulnerabilities import VulnerabilitiesController
