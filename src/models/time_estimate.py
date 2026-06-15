@@ -2,8 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
-from typing import Optional
+import typing
+
+from sqlalchemy.orm import Mapped, relationship, mapped_column
+from sqlalchemy import ForeignKey
+
 from ..extensions import db, Base
+
+if typing.TYPE_CHECKING:
+    from ..models import Finding, Variant
 
 
 class TimeEstimate(Base):
@@ -11,15 +18,15 @@ class TimeEstimate(Base):
 
     __tablename__ = "time_estimates"
 
-    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=True, index=True)
-    variant_id = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True, index=True)
-    optimistic = db.Column(db.Integer, nullable=True)
-    likely = db.Column(db.Integer, nullable=True)
-    pessimistic = db.Column(db.Integer, nullable=True)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    finding_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("findings.id"), index=True)
+    variant_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("variants.id"), index=True)
+    optimistic: Mapped[int | None] = mapped_column()
+    likely: Mapped[int | None] = mapped_column()
+    pessimistic: Mapped[int | None] = mapped_column()
 
-    finding = db.relationship("Finding", back_populates="time_estimates")
-    variant = db.relationship("Variant", back_populates="time_estimates")
+    finding: Mapped["Finding"] = relationship(back_populates="time_estimates")
+    variant: Mapped["Variant"] = relationship(back_populates="time_estimates")
 
     def __repr__(self) -> str:
         return (
@@ -33,11 +40,11 @@ class TimeEstimate(Base):
 
     @staticmethod
     def create(
-        finding_id: Optional[uuid.UUID | str] = None,
-        variant_id: Optional[uuid.UUID | str] = None,
-        optimistic: Optional[int] = None,
-        likely: Optional[int] = None,
-        pessimistic: Optional[int] = None,
+        finding_id: uuid.UUID | str | None = None,
+        variant_id: uuid.UUID | str | None = None,
+        optimistic: int | None = None,
+        likely: int | None = None,
+        pessimistic: int | None = None,
     ) -> "TimeEstimate":
         """Create a new time estimate, persist it and return it."""
         if isinstance(finding_id, str):
@@ -56,7 +63,7 @@ class TimeEstimate(Base):
         return estimate
 
     @staticmethod
-    def get_by_id(estimate_id: uuid.UUID | str) -> Optional["TimeEstimate"]:
+    def get_by_id(estimate_id: uuid.UUID | str) -> "TimeEstimate | None":
         """Return the time estimate matching *estimate_id*, or ``None``."""
         if isinstance(estimate_id, str):
             estimate_id = uuid.UUID(estimate_id)
@@ -84,7 +91,7 @@ class TimeEstimate(Base):
     def get_by_finding_and_variant(
         finding_id: uuid.UUID | str,
         variant_id: uuid.UUID | str,
-    ) -> Optional["TimeEstimate"]:
+    ) -> "TimeEstimate | None":
         """Return a time estimate matching both *finding_id* and *variant_id*, or ``None``."""
         if isinstance(finding_id, str):
             finding_id = uuid.UUID(finding_id)
@@ -99,9 +106,9 @@ class TimeEstimate(Base):
 
     def update(
         self,
-        optimistic: Optional[int] = None,
-        likely: Optional[int] = None,
-        pessimistic: Optional[int] = None,
+        optimistic: int | None = None,
+        likely: int | None = None,
+        pessimistic: int | None = None,
     ) -> "TimeEstimate":
         """Update fields in place, persist the change and return ``self``."""
         if optimistic is not None:
