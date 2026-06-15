@@ -1120,6 +1120,58 @@ class TestBulkGhsaRefreshBackground:
 
         MockTracker.error.assert_called_once()
 
+    def test_bulk_ghsa_run_sets_data_updated_at_when_date_changes(self, app, client, ghsa_vuln):
+        """_run() stamps ghsa_data_updated_at when publish_date actually changes."""
+        import datetime as dt
+        from src.models.vulnerability import Vulnerability
+        from src.extensions import db
+
+        with app.app_context():
+            rec = db.session.get(Vulnerability, ghsa_vuln)
+            rec.publish_date = dt.date(2020, 1, 1)
+            rec.ghsa_data_updated_at = None
+            db.session.commit()
+
+        target = self._capture_target(client, [ghsa_vuln])
+
+        with patch("src.routes.bulk_refresh.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value="2023-06-15T00:00:00Z"), \
+             patch("src.routes.bulk_refresh.GHSAProgressTracker") as MockTracker, \
+             patch("src.routes.bulk_refresh.time.sleep"):
+            MockTracker.is_cancelled.return_value = False
+            with app.app_context():
+                target()
+
+        with app.app_context():
+            rec = db.session.get(Vulnerability, ghsa_vuln)
+            assert rec.ghsa_data_updated_at is not None
+
+    def test_bulk_ghsa_run_no_data_updated_at_when_date_unchanged(self, app, client, ghsa_vuln):
+        """_run() does NOT stamp ghsa_data_updated_at when publish_date is same."""
+        import datetime as dt
+        from src.models.vulnerability import Vulnerability
+        from src.extensions import db
+
+        with app.app_context():
+            rec = db.session.get(Vulnerability, ghsa_vuln)
+            rec.publish_date = dt.date(2023, 5, 1)
+            rec.ghsa_data_updated_at = None
+            db.session.commit()
+
+        target = self._capture_target(client, [ghsa_vuln])
+
+        with patch("src.routes.bulk_refresh.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value="2023-05-01T00:00:00Z"), \
+             patch("src.routes.bulk_refresh.GHSAProgressTracker") as MockTracker, \
+             patch("src.routes.bulk_refresh.time.sleep"):
+            MockTracker.is_cancelled.return_value = False
+            with app.app_context():
+                target()
+
+        with app.app_context():
+            rec = db.session.get(Vulnerability, ghsa_vuln)
+            assert rec.ghsa_data_updated_at is None
+
 
 class TestCancelGhsaRefreshEndpoint:
 
@@ -1237,7 +1289,7 @@ class TestSingleGhsaRefreshEndpoint:
         assert resp.status_code == 200
         vuln = resp.get_json()["vulnerabilities"][0]
         assert vuln["id"] == ghsa_vuln
-        assert vuln["ghsa_fetched_at"] is not None
+        assert vuln["data_fetched_at"] is not None
 
     def test_publish_date_stored_as_date_not_datetime(self, client, ghsa_vuln, app):
         """publish_date must be a date (not datetime) — guards the type-mismatch fix."""
@@ -1312,6 +1364,46 @@ class TestSingleGhsaRefreshEndpoint:
         vuln = resp.get_json()["vulnerabilities"][0]
         assert "texts" in vuln
         assert isinstance(vuln["texts"], list)
+
+    def test_ghsa_refresh_sets_data_updated_at_when_date_changes(self, app, client, ghsa_vuln):
+        """ghsa_data_updated_at is stamped when the publish_date changes."""
+        import datetime as dt
+        from src.models.vulnerability import Vulnerability
+        from src.extensions import db
+        with app.app_context():
+            rec = db.session.get(Vulnerability, ghsa_vuln)
+            rec.publish_date = dt.date(2020, 1, 1)
+            rec.ghsa_data_updated_at = None
+            db.session.commit()
+
+        with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value="2023-06-15T00:00:00Z"):
+            resp = client.post(f"/api/vulnerabilities/{ghsa_vuln}/ghsa-refresh")
+        assert resp.status_code == 200
+
+        with app.app_context():
+            rec = db.session.get(Vulnerability, ghsa_vuln)
+            assert rec.ghsa_data_updated_at is not None
+
+    def test_ghsa_refresh_no_data_updated_at_when_date_unchanged(self, app, client, ghsa_vuln):
+        """ghsa_data_updated_at is NOT stamped when the publish_date stays the same."""
+        import datetime as dt
+        from src.models.vulnerability import Vulnerability
+        from src.extensions import db
+        with app.app_context():
+            rec = db.session.get(Vulnerability, ghsa_vuln)
+            rec.publish_date = dt.date(2023, 5, 1)
+            rec.ghsa_data_updated_at = None
+            db.session.commit()
+
+        with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published",
+                   return_value="2023-05-01T00:00:00Z"):
+            resp = client.post(f"/api/vulnerabilities/{ghsa_vuln}/ghsa-refresh")
+        assert resp.status_code == 200
+
+        with app.app_context():
+            rec = db.session.get(Vulnerability, ghsa_vuln)
+            assert rec.ghsa_data_updated_at is None
 
 
 class TestBulkGhsaRefreshFailedCounter:

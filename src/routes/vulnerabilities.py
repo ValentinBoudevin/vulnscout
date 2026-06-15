@@ -1106,11 +1106,14 @@ def init_app(app):
             publish_date = datetime.date.fromisoformat(published_at[:10])
         except (ValueError, AttributeError):
             return jsonify({"error": "GitHub Advisory Database returned an unparseable date"}), 503
-        rec.update_record(
-            publish_date=publish_date,
-            ghsa_fetched_at=now,
-            commit=False,
-        )
+        update_kwargs: dict = {
+            "publish_date": publish_date,
+            "ghsa_fetched_at": now,
+            "commit": False,
+        }
+        if rec.publish_date != publish_date:
+            update_kwargs["ghsa_data_updated_at"] = now
+        rec.update_record(**update_kwargs)
         db.session.commit()
 
         db.session.refresh(rec)

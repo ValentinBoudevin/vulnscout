@@ -311,11 +311,15 @@ def init_app(app):
                                         )
                                     except ValueError:
                                         publish_date = None
-                                    rec.update_record(
-                                        publish_date=publish_date,
-                                        ghsa_fetched_at=now,
-                                        commit=False,
-                                    )
+                                    gk: dict = {
+                                        "ghsa_fetched_at": now,
+                                        "commit": False,
+                                    }
+                                    if publish_date is not None:
+                                        gk["publish_date"] = publish_date
+                                        if rec.publish_date != publish_date:
+                                            gk["ghsa_data_updated_at"] = now
+                                    rec.update_record(**gk)
                         except urllib.error.HTTPError as exc:
                             if exc.code in (403, 429):
                                 _safe_commit("bulk GHSA refresh rate-limited")

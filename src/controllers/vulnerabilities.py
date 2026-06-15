@@ -538,6 +538,7 @@ class VulnerabilitiesController:
                                 patch_url=vuln.patch_url,
                                 nvd_last_modified=vuln.nvd_last_modified,
                                 nvd_fetched_at=datetime.datetime.utcnow(),
+                                nvd_data_updated_at=datetime.datetime.utcnow(),
                                 commit=False,
                             )
                     except Exception as e:
@@ -571,6 +572,7 @@ class VulnerabilitiesController:
                                     rec.update_record(
                                         publish_date=publish_date,
                                         ghsa_fetched_at=datetime.datetime.utcnow(),
+                                        ghsa_data_updated_at=datetime.datetime.utcnow(),
                                         commit=False,
                                     )
                             except Exception as e:
