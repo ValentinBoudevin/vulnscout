@@ -598,7 +598,7 @@ class Assessment(Base):
             existing.finding_id = finding_id or existing.finding_id
             existing.variant_id = variant_id or existing.variant_id
             existing.status = assess.status or existing.status
-            existing.simplified_status = STATUS_TO_SIMPLIFIED.get(existing.status, existing.simplified_status)
+            existing.simplified_status = STATUS_TO_SIMPLIFIED.get(existing.status or "", existing.simplified_status)
             existing.status_notes = assess.status_notes or existing.status_notes
             existing.justification = assess.justification or existing.justification
             existing.impact_statement = assess.impact_statement or existing.impact_statement

@@ -251,7 +251,8 @@ class CycloneDx:
 
             for assessment in self.assessmentsCtrl.gets_by_vuln(vulnerability.id):
                 if (assessment.is_compatible_status(assess.status)
-                   and assessment.is_compatible_justification(assess.justification)):
+                   and assessment.is_compatible_justification(assess.justification)
+                   and assess.status_notes is not None):
 
                     similar_status_notes = False
 

@@ -147,7 +147,7 @@ class VulnerabilitiesController:
                 for m in (rec.metrics or []):
                     try:
                         _cvss = CVSS(
-                            m.version,
+                            m.version or "",
                             m.vector or "",
                             m.author or "unknown",
                             float(m.score) if m.score is not None else 0.0,
