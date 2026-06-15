@@ -4,8 +4,10 @@
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
-from sqlalchemy import orm
-from sqlalchemy.orm import Mapped, relationship, joinedload
+
+from sqlalchemy import orm, Text, DateTime, JSON, ForeignKey
+from sqlalchemy.orm import Mapped, relationship, joinedload, mapped_column
+
 from ..extensions import db, Base
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.verbose import verbose
@@ -109,27 +111,25 @@ class Assessment(Base):
     """
 
     __tablename__ = "assessments"
-
-    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    source = db.Column(db.String, nullable=True)
-    origin = db.Column(db.String, nullable=True)
-    status = db.Column(db.String, nullable=True)
-    simplified_status = db.Column(db.String, nullable=True)
-    status_notes = db.Column(db.Text, nullable=True)
-    justification = db.Column(db.Text, nullable=True)
-    impact_statement = db.Column(db.Text, nullable=True)
-    workaround = db.Column(db.Text, nullable=True)
-    timestamp: Mapped[datetime] = db.Column(
-        db.DateTime(timezone=True),
-        nullable=False,
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    source: Mapped[str | None] = mapped_column()
+    origin: Mapped[str | None] = mapped_column()
+    status: Mapped[str | None] = mapped_column()
+    simplified_status: Mapped[str | None] = mapped_column()
+    status_notes: Mapped[str | None] = mapped_column(Text)
+    justification: Mapped[str | None] = mapped_column(Text)
+    impact_statement: Mapped[str | None] = mapped_column(Text)
+    workaround: Mapped[str | None] = mapped_column(Text)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
-    responses = db.Column(db.JSON, nullable=True)
-    finding_id: Mapped[uuid.UUID | None] = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=True, index=True)
-    variant_id: Mapped[uuid.UUID | None] = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True, index=True)
+    responses: Mapped[list[str] | None] = mapped_column(JSON)
+    finding_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("findings.id"), index=True)
+    variant_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("variants.id"), index=True)
 
-    finding: Mapped["Finding | None"] = relationship("Finding", back_populates="assessments")
-    variant: Mapped["Variant | None"] = relationship("Variant", back_populates="assessments")
+    finding: Mapped["Finding | None"] = relationship(back_populates="assessments")
+    variant: Mapped["Variant | None"] = relationship(back_populates="assessments")
 
     # ------------------------------------------------------------------
     # Transient attributes (initialised by _init_transient)
@@ -598,7 +598,7 @@ class Assessment(Base):
             existing.finding_id = finding_id or existing.finding_id
             existing.variant_id = variant_id or existing.variant_id
             existing.status = assess.status or existing.status
-            existing.simplified_status = STATUS_TO_SIMPLIFIED.get(existing.status, existing.simplified_status)
+            existing.simplified_status = STATUS_TO_SIMPLIFIED.get(existing.status or "", existing.simplified_status)
             existing.status_notes = assess.status_notes or existing.status_notes
             existing.justification = assess.justification or existing.justification
             existing.impact_statement = assess.impact_statement or existing.impact_statement

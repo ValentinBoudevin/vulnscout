@@ -2,11 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
+from decimal import Decimal
 from typing import Optional, TYPE_CHECKING, cast
+
+from sqlalchemy import ForeignKey, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from ..extensions import db, Base
 
 if TYPE_CHECKING:
-    from .cvss import CVSS
+    from ..models import CVSS, Vulnerability, Variant
 
 
 class Metrics(Base):
@@ -14,17 +19,17 @@ class Metrics(Base):
 
     __tablename__ = "metrics"
 
-    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    vulnerability_id = db.Column(db.String(50), db.ForeignKey("vulnerabilities.id"), nullable=False, index=True)
-    variant_id = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True, index=True)
-    version = db.Column(db.String, nullable=True)
-    score = db.Column(db.Numeric, nullable=True)
-    vector = db.Column(db.Text, nullable=True)
-    author = db.Column(db.String, nullable=True)
-    origin = db.Column(db.String, nullable=True)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    vulnerability_id: Mapped[str] = mapped_column(ForeignKey("vulnerabilities.id"), index=True)
+    variant_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("variants.id"), index=True)
+    version: Mapped[str | None] = mapped_column()
+    score: Mapped[Decimal | None] = mapped_column()
+    vector: Mapped[str | None] = mapped_column(Text)
+    author: Mapped[str | None] = mapped_column()
+    origin: Mapped[str | None] = mapped_column()
 
-    vulnerability = db.relationship("Vulnerability", back_populates="metrics")
-    variant = db.relationship("Variant", back_populates="metrics")
+    vulnerability: Mapped["Vulnerability"] = relationship(back_populates="metrics")
+    variant: Mapped["Variant | None"] = relationship(back_populates="metrics")
 
     def __repr__(self) -> str:
         return (
@@ -104,7 +109,7 @@ class Metrics(Base):
         if version is not None:
             self.version = version
         if score is not None:
-            self.score = score
+            self.score = Decimal(score)
         if vector is not None:
             self.vector = vector
         if author is not None:

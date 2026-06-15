@@ -11,13 +11,19 @@ Used by both ``routes/vulnerabilities.py`` (batch PATCH) and
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from ..models.vulnerability import Vulnerability as _Vulnerability
 
 from ..models import Metrics, CVSS, Iso8601Duration
 from ..helpers.verbose import verbose
+
+
+class Effort(NamedTuple):
+    optimistic: int | None
+    likely: int | None
+    pessimistic: int | None
 
 
 def _parse_effort_hours(value: int | str | None) -> int:
@@ -29,26 +35,25 @@ def _parse_effort_hours(value: int | str | None) -> int:
     raise ValueError(f"Invalid effort value: {value!r}")
 
 
-def _validate_effort(eff: dict[str, int | str | None]) -> tuple[int | None, int | None, int | None, str | None]:
+def validate_effort(eff: dict[str, int | str | None]) -> tuple[Effort, None] | tuple[None, str]:
     """Validate and parse effort dict with optimistic/likely/pessimistic keys.
 
-    Returns ``(opt, lik, pes, None)`` on success or ``(None, None, None, error_string)``
-    on failure.
+    Returns ``(effort, None)`` on success or ``(None, error_string) on failure.
     """
     if not all(k in eff for k in ("optimistic", "likely", "pessimistic")):
-        return None, None, None, "Invalid effort values"
+        return None, "Invalid effort values"
     try:
         opt = _parse_effort_hours(eff["optimistic"])
         lik = _parse_effort_hours(eff["likely"])
         pes = _parse_effort_hours(eff["pessimistic"])
     except (ValueError, TypeError):
-        return None, None, None, "Invalid effort values"
+        return None, "Invalid effort values"
     if not (opt <= lik <= pes):
-        return None, None, None, "Invalid effort values"
-    return opt, lik, pes, None
+        return None, "Invalid effort values"
+    return Effort(opt, lik, pes), None
 
 
-def _validate_and_apply_cvss(
+def validate_and_apply_cvss(
     new_cvss: dict[str, str | float],
     record_id: str,
     variant_id: uuid.UUID | None,
@@ -73,9 +78,9 @@ def _validate_and_apply_cvss(
     return None
 
 
-def _apply_effort(
+def apply_effort(
     record: "_Vulnerability", variant_id: uuid.UUID | None,
-    opt: int, lik: int, pes: int,
+    effort: Effort,
     log_prefix: str = "",
 ) -> None:
     """Persist effort values to the first finding's TimeEstimate."""
@@ -90,11 +95,11 @@ def _apply_effort(
                     None,
                 )
             if existing is not None:
-                existing.update(optimistic=opt, likely=lik, pessimistic=pes)
+                existing.update(*effort)
             else:
                 TimeEstimate.create(
                     finding_id=finding.id, variant_id=variant_id,
-                    optimistic=opt, likely=lik, pessimistic=pes
+                    optimistic=effort.optimistic, likely=effort.likely, pessimistic=effort.pessimistic
                 )
             break
     except Exception as e:

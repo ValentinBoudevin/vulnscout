@@ -764,7 +764,7 @@ def init_app(app):
             justification=mem_assess.justification,
             impact_statement=mem_assess.impact_statement,
             workaround=getattr(mem_assess, "workaround", None),
-            responses=list(mem_assess.responses),
+            responses=list(mem_assess.responses or []),
         )
         _save_openvex()
         return {"status": "success", "assessment": existing.to_dict()}, 200

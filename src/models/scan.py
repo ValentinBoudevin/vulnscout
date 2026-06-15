@@ -9,7 +9,8 @@ from ..extensions import db, Base
 from ..helpers.datetime_utils import ensure_utc_iso
 from .variant import Variant
 
-from sqlalchemy.orm import Mapped
+from sqlalchemy import ForeignKey, Text, DateTime
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if typing.TYPE_CHECKING:
     # avoid circular imports, https://stackoverflow.com/a/79601366
@@ -22,29 +23,25 @@ class Scan(Base):
 
     __tablename__ = "scans"
 
-    id: Mapped[uuid.UUID] = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    description: Mapped[str | None] = db.Column(db.Text, nullable=True)
-    scan_type: Mapped[str | None] = db.Column(db.String, nullable=True, default="sbom")  # 'sbom' or 'tool'
-    scan_source: Mapped[str | None] = db.Column(db.String, nullable=True)  # 'grype', 'nvd', 'osv', or None
-    timestamp: Mapped[datetime] = db.Column(
-        db.DateTime(timezone=True),
-        nullable=False,
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    description: Mapped[str | None] = mapped_column(Text)
+    scan_type: Mapped[str | None] = mapped_column(default="sbom")  # 'sbom' or 'tool'
+    scan_source: Mapped[str | None] = mapped_column()  # 'grype', 'nvd', 'osv', or None
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
-    variant_id: Mapped[uuid.UUID] = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=False, index=True)
+    variant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("variants.id"), index=True)
 
     # Flask-SQLAlchemy has typing issues, see https://github.com/pallets-eco/flask-sqlalchemy/issues/1318
-    variant: Mapped[Variant] = db.relationship(  # type: ignore
-        "Variant",
+    variant: Mapped[Variant] = relationship(
         back_populates="scans"
     )
-    sbom_documents: Mapped[list["SBOMDocument"]] = db.relationship(  # type: ignore
-        "SBOMDocument",
+    sbom_documents: Mapped[list["SBOMDocument"]] = relationship(
         back_populates="scan",
         cascade="all, delete-orphan"
     )
-    observations: Mapped[list["Observation"]] = db.relationship(  # type: ignore
-        "Observation",
+    observations: Mapped[list["Observation"]] = relationship(
         back_populates="scan",
         cascade="all, delete-orphan"
     )
