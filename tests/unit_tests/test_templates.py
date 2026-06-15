@@ -9,19 +9,19 @@ from src.views.templates import Templates, TemplatesExtensions
 from src.models.package import Package
 from src.models.vulnerability import Vulnerability
 from src.models.assessment import Assessment
-from src.controllers.packages import PackagesController
-from src.controllers.vulnerabilities import VulnerabilitiesController
-from src.controllers.assessments import AssessmentsController
+from src.controllers import ControllersCache
 
 
 @pytest.fixture
 def templates_instance(tmp_path):
     with patch('src.controllers.vulnerabilities.EPSS_DB') as mock_epss:
         mock_epss.return_value = MagicMock()
-        controllers = {}
-        controllers["packages"] = PackagesController()
-        controllers["vulnerabilities"] = VulnerabilitiesController(controllers["packages"])
-        controllers["assessments"] = AssessmentsController(controllers["packages"], controllers["vulnerabilities"])
+        controllers = ControllersCache()
+        _ = controllers.vulnerabilities  # pre-load cache with mocked epss DB
+        controllers.project = None
+        controllers.variant = None
+        controllers.scan = None
+        controllers.sbom_document = None
         yield Templates(controllers)
 
 

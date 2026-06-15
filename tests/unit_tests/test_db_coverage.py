@@ -452,16 +452,13 @@ class TestAssessmentFromVulnAssessment:
 
 class TestTimeEstimatesDB:
     def _make_controllers(self):
-        from src.controllers.packages import PackagesController
-        from src.controllers.vulnerabilities import VulnerabilitiesController
-        from src.controllers.assessments import AssessmentsController
+        from src.controllers import ControllersCache
         from unittest.mock import patch, MagicMock
-        pkg = PackagesController()
+        controllers = ControllersCache()
         with patch("src.controllers.vulnerabilities.EPSS_DB") as mock_epss:
             mock_epss.return_value = MagicMock()
-            vuln = VulnerabilitiesController(pkg)
-        assess = AssessmentsController(pkg, vuln)
-        return {"packages": pkg, "vulnerabilities": vuln, "assessments": assess}
+            _ = controllers.packages  # in order to pre-load data with mocked epss DB
+        return controllers
 
     def test_iso_to_hours_valid(self, app):
         from src.views.time_estimates import TimeEstimates
@@ -934,8 +931,7 @@ class TestAssessmentsController:
         """remove(None) should return False immediately (line 216)."""
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
-        from unittest.mock import MagicMock
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         assert ctrl.remove(None) is False
 
     def test_remove_existing_assessment(self, app):
@@ -943,8 +939,7 @@ class TestAssessmentsController:
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
         from src.models.assessment import Assessment
-        from unittest.mock import MagicMock
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         a = Assessment.new_dto("CVE-2099-REM", ["pkg@1.0"])
         ctrl.add(a)
         removed = ctrl.remove(str(a.id))
@@ -955,16 +950,14 @@ class TestAssessmentsController:
         """__contains__ with a string key covers line 261."""
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
-        from unittest.mock import MagicMock
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         assert ("nonexistent-uuid" in ctrl) is False
 
     def test_gets_by_pkg_db_path(self, app):
         """gets_by_pkg queries the DB when no in-memory match (lines 127-132 in assessments)."""
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
-        from unittest.mock import MagicMock
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         result = ctrl.gets_by_pkg("pkg@1.0")
         assert isinstance(result, list)
 
@@ -976,7 +969,6 @@ class TestAssessmentsController:
         from src.models.assessment import Assessment as DBAssessment
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
-        from unittest.mock import MagicMock
 
         v = Vulnerability.create_record("CVE-2099-VPAIR")
         p = Package.create("vpair-lib", "1.0")
@@ -984,7 +976,7 @@ class TestAssessmentsController:
         # Create a persisted assessment linked to the finding
         DBAssessment.create(status="affected", finding_id=f.id)
 
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         result = ctrl.gets_by_vuln_pkg(v.id, p.string_id)
         assert len(result) >= 1
 
@@ -996,14 +988,13 @@ class TestAssessmentsController:
         from src.models.assessment import Assessment as DBAssessment
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
-        from unittest.mock import MagicMock
 
         v = Vulnerability.create_record("CVE-2099-PKG2")
         p = Package.create("pkgctl2-test", "1.0")
         f = Finding.create(p.id, v.id)
         DBAssessment.create(status="affected", finding_id=f.id)
 
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         result = ctrl.gets_by_pkg(p.string_id)
         assert len(result) >= 1
 
@@ -1015,14 +1006,13 @@ class TestAssessmentsController:
         from src.models.assessment import Assessment as DBAssessment
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
-        from unittest.mock import MagicMock
 
         v = Vulnerability.create_record("CVE-2099-TODICT2")
         p = Package.create("todictpkg", "1.0")
         f = Finding.create(p.id, v.id)
         DBAssessment.create(status="not_affected", finding_id=f.id)
 
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         # ctrl.assessments is empty (not pre-loaded from DB), so to_dict queries DB
         result = ctrl.to_dict()
         assert isinstance(result, dict)
@@ -1030,11 +1020,11 @@ class TestAssessmentsController:
 
     def test_to_dict_db_exception(self, app):
         """to_dict() returns {} when DB raises (lines 246-248)."""
-        from unittest.mock import patch as mock_patch, MagicMock
+        from unittest.mock import patch as mock_patch
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
 
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         with mock_patch("src.models.assessment.Assessment.get_all", side_effect=RuntimeError("fail")):
             result = ctrl.to_dict()
         assert result == {}
@@ -1044,9 +1034,8 @@ class TestAssessmentsController:
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
         from src.models.assessment import Assessment
-        from unittest.mock import MagicMock
 
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         a = Assessment.new_dto("CVE-2099-VUERR", ["pkg@1.0"])
         ctrl.add(a)
         key = str(a.id)
@@ -1060,9 +1049,8 @@ class TestAssessmentsController:
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
         from src.models.assessment import Assessment
-        from unittest.mock import MagicMock
 
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         a = Assessment.new_dto("CVE-2099-VPERR", ["pkg@1.0"])
         ctrl.add(a)
         key = str(a.id)

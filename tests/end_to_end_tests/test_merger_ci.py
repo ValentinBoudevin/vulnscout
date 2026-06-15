@@ -89,9 +89,9 @@ def cli_runner(app) -> FlaskCliRunner:
 def test_running_script(app):
     ctrls = _run_main()
 
-    out_pkg = ctrls["packages"].to_dict()
-    out_vuln = ctrls["vulnerabilities"].to_dict()
-    out_assessment = ctrls["assessments"].to_dict()
+    out_pkg = ctrls.packages.to_dict()
+    out_vuln = ctrls.vulnerabilities.to_dict()
+    out_assessment = ctrls.assessments.to_dict()
 
     assert "cairo@1.16.0" in out_pkg
     assert "busybox@1.35.0" in out_pkg
@@ -154,7 +154,7 @@ def test_spdx_output_completeness(app):
     # merger_ci no longer writes SPDX output files — verify in-memory state
     ctrls = _run_main()
 
-    out_pkg = ctrls["packages"].to_dict()
+    out_pkg = ctrls.packages.to_dict()
     assert len(out_pkg) >= 6
     assert "linux@6.8.0-40-generic" in out_pkg
     assert "cairo@1.16.0" in out_pkg
@@ -212,7 +212,7 @@ def test_expiration_vulnerabilities(app, init_files):
 
     ctrls = _run_main()
 
-    out_assessment = ctrls["assessments"].to_dict()
+    out_assessment = ctrls.assessments.to_dict()
     found_expiration = False
 
     for assess_id, assessment in out_assessment.items():
@@ -309,10 +309,9 @@ def test_ts_key_fallback_to_str():
 def test_post_treatment():
     """post_treatment calls fetch_epss_scores (lines 60-63)."""
     from unittest.mock import MagicMock
-    mock_vuln_ctrl = MagicMock()
-    controllers = {"vulnerabilities": mock_vuln_ctrl}
-    post_treatment(controllers, [])
-    mock_vuln_ctrl.fetch_epss_scores.assert_called_once()
+    mock_controllers = MagicMock()
+    post_treatment(mock_controllers, [])
+    mock_controllers.vulnerabilities.fetch_epss_scores.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -423,20 +422,6 @@ def test_report_command_with_match_condition_cache(app, tmp_path, monkeypatch):
             os.remove(cache_path)
         except OSError:
             pass
-
-
-# ---------------------------------------------------------------------------
-# main() — entry-point (lines 530, 534)
-# ---------------------------------------------------------------------------
-
-def test_main_entry_point(app):
-    """main() delegates to _run_main() and returns the controllers dict (lines 530, 534)."""
-    with app.app_context():
-        result = main()
-    assert isinstance(result, dict)
-    assert "packages" in result
-    assert "vulnerabilities" in result
-    assert "assessments" in result
 
 
 # ---------------------------------------------------------------------------

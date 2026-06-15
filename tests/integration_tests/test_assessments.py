@@ -67,8 +67,8 @@ def assessment_3(vuln_456, pkg_ABC):
 
 
 @pytest.fixture
-def assessment_controller(pkg_controller, vuln_controller, assessment_1, assessment_3):
-    ctrl = AssessmentsController(pkg_controller, vuln_controller)
+def assessment_controller(pkg_controller, assessment_1, assessment_3):
+    ctrl = AssessmentsController(pkg_controller)
     ctrl.add(assessment_1)
     ctrl.add(assessment_3)
     return ctrl
@@ -147,14 +147,14 @@ def test_assessments_controller_current_variant_id_default(assessment_controller
     assert assessment_controller.current_variant_id is None
 
 
-def test_assessments_controller_current_variant_id_can_be_set(pkg_controller, vuln_controller):
+def test_assessments_controller_current_variant_id_can_be_set(pkg_controller):
     """
     GIVEN an AssessmentsController
     WHEN setting current_variant_id to a UUID
     THEN the attribute should reflect the new value
     """
     import uuid
-    ctrl = AssessmentsController(pkg_controller, vuln_controller)
+    ctrl = AssessmentsController(pkg_controller)
     test_id = uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
     ctrl.current_variant_id = test_id
     assert ctrl.current_variant_id == test_id

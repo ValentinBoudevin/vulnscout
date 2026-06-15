@@ -9,6 +9,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 import pytest
 
+from src.controllers import ControllersCache
 from src.views.time_estimates import TimeEstimates
 
 
@@ -18,11 +19,12 @@ from src.views.time_estimates import TimeEstimates
 
 def _make_controllers(vulns=None):
     """Return a minimal controllers dict with a mock vulnerabilities controller."""
-    vuln_ctrl = MagicMock()
-    vuln_ctrl.vulnerabilities = vulns or {}
-    pkg_ctrl = MagicMock()
-    assess_ctrl = MagicMock()
-    return {"packages": pkg_ctrl, "vulnerabilities": vuln_ctrl, "assessments": assess_ctrl}
+    controllers = ControllersCache()
+    controllers.vulnerabilities = MagicMock()
+    controllers.vulnerabilities.vulnerabilities = vulns or {}
+    controllers.packages = MagicMock()
+    controllers.assessments = MagicMock()
+    return controllers
 
 
 def _make_vuln(opt=None, like=None, pess=None):
@@ -30,19 +32,6 @@ def _make_vuln(opt=None, like=None, pess=None):
     vuln.id = str(uuid.uuid4())
     vuln.effort = {"optimistic": opt, "likely": like, "pessimistic": pess}
     return vuln
-
-
-# ---------------------------------------------------------------------------
-# __init__
-# ---------------------------------------------------------------------------
-
-class TestInit:
-    def test_controllers_assigned(self):
-        controllers = _make_controllers()
-        te = TimeEstimates(controllers)
-        assert te.packagesCtrl is controllers["packages"]
-        assert te.vulnerabilitiesCtrl is controllers["vulnerabilities"]
-        assert te.assessmentsCtrl is controllers["assessments"]
 
 
 # ---------------------------------------------------------------------------
@@ -138,18 +127,18 @@ class TestLoadFromDict:
     def test_legacy_format_sets_effort(self):
         vuln = _make_vuln()
         ctrl = _make_controllers()
-        ctrl["vulnerabilities"].get.return_value = vuln
+        ctrl.vulnerabilities.get.return_value = vuln
         te = TimeEstimates(ctrl)
         with patch.object(te, "_persist_db_estimate"):
             te.load_from_dict({"tasks": {"CVE-2099-1": {
                 "optimistic": "PT1H", "likely": "PT2H", "pessimistic": "PT3H"
             }}})
         vuln.set_effort.assert_called_once_with("PT1H", "PT2H", "PT3H")
-        ctrl["vulnerabilities"].add.assert_called_once_with(vuln)
+        ctrl.vulnerabilities.add.assert_called_once_with(vuln)
 
     def test_legacy_format_vuln_not_found_skipped(self):
         ctrl = _make_controllers()
-        ctrl["vulnerabilities"].get.return_value = None
+        ctrl.vulnerabilities.get.return_value = None
         te = TimeEstimates(ctrl)
         # Must not raise
         te.load_from_dict({"tasks": {"UNKNOWN-CVE": {"optimistic": "PT1H", "likely": "PT2H", "pessimistic": "PT3H"}}})
@@ -158,7 +147,7 @@ class TestLoadFromDict:
         """When ISO hours can be converted and Finding.get_by_vulnerability works, persist is called."""
         vuln = _make_vuln()
         ctrl = _make_controllers()
-        ctrl["vulnerabilities"].get.return_value = vuln
+        ctrl.vulnerabilities.get.return_value = vuln
         te = TimeEstimates(ctrl)
         finding = MagicMock()
         finding.id = uuid.uuid4()
@@ -173,7 +162,7 @@ class TestLoadFromDict:
         """If ISO conversion fails for any field, persist is NOT called."""
         vuln = _make_vuln()
         ctrl = _make_controllers()
-        ctrl["vulnerabilities"].get.return_value = vuln
+        ctrl.vulnerabilities.get.return_value = vuln
         te = TimeEstimates(ctrl)
         with patch.object(te, "_persist_db_estimate") as mock_persist:
             te.load_from_dict({"tasks": {"CVE-2099-1": {

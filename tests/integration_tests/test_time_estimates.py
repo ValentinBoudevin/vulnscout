@@ -6,19 +6,13 @@
 import pytest
 from src.views.time_estimates import TimeEstimates
 from src.models.vulnerability import Vulnerability
-from src.controllers.packages import PackagesController
-from src.controllers.vulnerabilities import VulnerabilitiesController
-from src.controllers.assessments import AssessmentsController
+from src.controllers import ControllersCache
 import json
 
 
 @pytest.fixture
 def time_estimates_parser():
-    controllers = {}
-    controllers["packages"] = PackagesController()
-    controllers["vulnerabilities"] = VulnerabilitiesController(controllers["packages"])
-    controllers["assessments"] = AssessmentsController(controllers["packages"], controllers["vulnerabilities"])
-    return TimeEstimates(controllers)
+    return TimeEstimates(ControllersCache())
 
 
 @pytest.fixture

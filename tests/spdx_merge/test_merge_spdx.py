@@ -54,19 +54,11 @@ def test_merge_spdx3_file(tmp_path, monkeypatch):
     spdx3_file.write_text(json.dumps(spdx3_doc))
     monkeypatch.setenv("INPUT_SPDX_FOLDER", str(tmp_path))
 
-    from src.controllers.packages import PackagesController
-    from src.controllers.vulnerabilities import VulnerabilitiesController
-    from src.controllers.assessments import AssessmentsController
-    pkg_ctrl = PackagesController()
-    vuln_ctrl = VulnerabilitiesController(pkg_ctrl)
-    controllers = {
-        "packages": pkg_ctrl,
-        "vulnerabilities": vuln_ctrl,
-        "assessments": AssessmentsController(pkg_ctrl, vuln_ctrl),
-    }
+    from src.controllers import ControllersCache
+    controllers = ControllersCache()
     read_inputs(controllers)
     # FastSPDX3 parsed the file — testpkg should be in the controller
-    assert "testpkg@1.0.0" in controllers["packages"].to_dict()
+    assert "testpkg@1.0.0" in controllers.packages.to_dict()
 
 
 def test_merge_fastspdx_fallback(tmp_path, monkeypatch):
@@ -94,16 +86,8 @@ def test_merge_fastspdx_fallback(tmp_path, monkeypatch):
     monkeypatch.setenv("INPUT_SPDX_FOLDER", str(tmp_path))
     monkeypatch.setenv("IGNORE_PARSING_ERRORS", 'true')
 
-    from src.controllers.packages import PackagesController
-    from src.controllers.vulnerabilities import VulnerabilitiesController
-    from src.controllers.assessments import AssessmentsController
-    pkg_ctrl = PackagesController()
-    vuln_ctrl = VulnerabilitiesController(pkg_ctrl)
-    controllers = {
-        "packages": pkg_ctrl,
-        "vulnerabilities": vuln_ctrl,
-        "assessments": AssessmentsController(pkg_ctrl, vuln_ctrl),
-    }
+    from src.controllers import ControllersCache
+    controllers = ControllersCache()
     read_inputs(controllers)
     # FastSPDX parsed the package
-    assert "fastspdx-pkg@2.0.0" in controllers["packages"].to_dict()
+    assert "fastspdx-pkg@2.0.0" in controllers.packages.to_dict()
