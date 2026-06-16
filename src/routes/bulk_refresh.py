@@ -10,6 +10,7 @@ singletons, which are already polled by /api/nvd/progress and /api/epss/progress
 """
 
 import datetime
+import decimal
 import os
 import re
 import threading
@@ -218,11 +219,15 @@ def init_app(app):
                                 try:
                                     rec = db.session.get(Vulnerability, cve_id)
                                     if rec is not None:
-                                        rec.update_record(
-                                            epss_score=result["score"],
-                                            epss_fetched_at=now,
-                                            commit=False,
-                                        )
+                                        new_score = decimal.Decimal(str(result["score"]))
+                                        ek: dict = {
+                                            "epss_score": new_score,
+                                            "epss_fetched_at": now,
+                                            "commit": False,
+                                        }
+                                        if rec.epss_score is None or rec.epss_score != new_score:
+                                            ek["epss_data_updated_at"] = now
+                                        rec.update_record(**ek)
                                 except Exception as exc:
                                     print(
                                         f"[bulk EPSS refresh] error updating {cve_id}: {exc}",
@@ -306,11 +311,15 @@ def init_app(app):
                                         )
                                     except ValueError:
                                         publish_date = None
-                                    rec.update_record(
-                                        publish_date=publish_date,
-                                        ghsa_fetched_at=now,
-                                        commit=False,
-                                    )
+                                    gk: dict = {
+                                        "ghsa_fetched_at": now,
+                                        "commit": False,
+                                    }
+                                    if publish_date is not None:
+                                        gk["publish_date"] = publish_date
+                                        if rec.publish_date != publish_date:
+                                            gk["ghsa_data_updated_at"] = now
+                                    rec.update_record(**gk)
                         except urllib.error.HTTPError as exc:
                             if exc.code in (403, 429):
                                 _safe_commit("bulk GHSA refresh rate-limited")

@@ -362,7 +362,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [generalBanner, setGeneralBanner] = useState<SourceBanner>(null);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
-        'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated'
+        'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed'
     ]);
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
@@ -580,12 +580,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         'severity': 'Attack Vector',
         'simplified_status': 'Status',
         'effort.likely': 'Estimated Effort',
-        'assessments': 'Last Updated',
+        'assessments': 'Last Assessed',
         'published': 'Published Date',
         'first_scan_date': 'First Scan Date',
-        'nvd_fetched_at': 'NVD Fetched',
-        'nvd_data_updated_at': 'NVD Updated',
-        'ghsa_fetched_at': 'GHSA Fetched',
+        'data_fetched_at': 'Last Fetched',
+        'data_updated_at': 'Last Updated',
         'found_by': 'Sources',
         'actions': 'Actions'
     }), []);
@@ -779,7 +778,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             }),
             columnHelper.accessor('assessments', {
             id: 'assessments',
-            header: () => <div className="flex items-center justify-center">Last Updated</div>,
+            header: () => <div className="flex items-center justify-center">Last Assessed</div>,
             cell: info => {
                 const assessments = info.getValue();
                 if (!assessments || assessments.length === 0) {
@@ -896,9 +895,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             },
             size: 110
             }),
-            columnHelper.accessor('nvd_fetched_at', {
-            id: 'nvd_fetched_at',
-            header: () => <div className="flex items-center justify-center">NVD Fetched</div>,
+            columnHelper.accessor('data_fetched_at', {
+            id: 'data_fetched_at',
+            header: () => <div className="flex items-center justify-center">Last Fetched</div>,
             cell: info => {
                 const val = info.getValue();
                 if (!val) return <div className="flex items-center justify-center h-full text-center text-gray-400">Never</div>;
@@ -916,15 +915,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             },
             enableSorting: true,
             sortingFn: (rowA, rowB) => {
-                const a = rowA.original.nvd_fetched_at ? new Date(rowA.original.nvd_fetched_at).getTime() : 0;
-                const b = rowB.original.nvd_fetched_at ? new Date(rowB.original.nvd_fetched_at).getTime() : 0;
+                const a = rowA.original.data_fetched_at ? new Date(rowA.original.data_fetched_at).getTime() : 0;
+                const b = rowB.original.data_fetched_at ? new Date(rowB.original.data_fetched_at).getTime() : 0;
                 return a - b;
             },
             size: 130
             }),
-            columnHelper.accessor('nvd_data_updated_at', {
-            id: 'nvd_data_updated_at',
-            header: () => <div className="flex items-center justify-center">NVD Updated</div>,
+            columnHelper.accessor('data_updated_at', {
+            id: 'data_updated_at',
+            header: () => <div className="flex items-center justify-center">Last Updated</div>,
             cell: info => {
                 const val = info.getValue();
                 if (!val) return <div className="flex items-center justify-center h-full text-center text-gray-400">Never</div>;
@@ -942,34 +941,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             },
             enableSorting: true,
             sortingFn: (rowA, rowB) => {
-                const a = rowA.original.nvd_data_updated_at ? new Date(rowA.original.nvd_data_updated_at).getTime() : 0;
-                const b = rowB.original.nvd_data_updated_at ? new Date(rowB.original.nvd_data_updated_at).getTime() : 0;
-                return a - b;
-            },
-            size: 130
-            }),
-            columnHelper.accessor('ghsa_fetched_at', {
-            id: 'ghsa_fetched_at',
-            header: () => <div className="flex items-center justify-center">GHSA Fetched</div>,
-            cell: info => {
-                const val = info.getValue();
-                if (!val) return <div className="flex items-center justify-center h-full text-center text-gray-400">Never</div>;
-                const date = new Date(val);
-                const formattedDate = date.toLocaleDateString(undefined, {
-                    year: 'numeric',
-                    month: 'short',
-                    day: '2-digit',
-                }) + ' ' + date.toLocaleTimeString(undefined, {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    timeZoneName: 'short',
-                });
-                return <div className="flex items-center justify-center h-full text-center text-sm">{formattedDate}</div>;
-            },
-            enableSorting: true,
-            sortingFn: (rowA, rowB) => {
-                const a = rowA.original.ghsa_fetched_at ? new Date(rowA.original.ghsa_fetched_at).getTime() : 0;
-                const b = rowB.original.ghsa_fetched_at ? new Date(rowB.original.ghsa_fetched_at).getTime() : 0;
+                const a = rowA.original.data_updated_at ? new Date(rowA.original.data_updated_at).getTime() : 0;
+                const b = rowB.original.data_updated_at ? new Date(rowB.original.data_updated_at).getTime() : 0;
                 return a - b;
             },
             size: 130
@@ -1172,7 +1145,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setPublishedDateFrom('');
         setPublishedDateTo('');
         setSelectedRows({});
-        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated']);
+        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed']);
         setShowCustomSeverityFilter(false);
         setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
         setShowCustomEpssFilter(false);
@@ -1331,12 +1304,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     'Attack Vector',
                     'Status',
                     'Estimated Effort',
-                    'Last Updated',
+                    'Last Assessed',
                     'Published Date',
                     'First Scan Date',
-                    'NVD Fetched',
-                    'NVD Updated',
-                    'GHSA Fetched',
+                    'Last Fetched',
+                    'Last Updated',
                     'Sources'
                 ]}
                 selected={visibleColumns}
