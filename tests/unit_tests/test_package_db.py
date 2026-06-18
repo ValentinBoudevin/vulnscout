@@ -118,3 +118,41 @@ def test_active_package_ids_for_scans_returns_empty_for_non_sbom_scan(app):
 def test_active_package_ids_for_scans_returns_empty_for_empty_input(app):
     from src.helpers.active_scans import active_package_ids_for_scans
     assert active_package_ids_for_scans([]) == set()
+
+
+def test_find_or_create_openembedded_collapses_into_blank_supplier(app):
+    """An OpenEmbedded supplier resolves to the same row as the blank one."""
+    pkg_oe = Package.find_or_create("busybox", "1.36.1", supplier="OpenEmbedded ()")
+    _db.session.flush()
+    pkg_blank = Package.find_or_create("busybox", "1.36.1")
+    assert pkg_oe.supplier == ""
+    assert pkg_oe.id == pkg_blank.id
+
+
+def test_exists_normalizes_openembedded_supplier(app):
+    """exists() must match the cleaned (blank) row for an OpenEmbedded query."""
+    Package.find_or_create("busybox", "1.36.1")
+    _db.session.flush()
+    assert Package.exists("busybox", "1.36.1", supplier="OpenEmbedded ()") is True
+
+
+def test_get_by_string_id_normalizes_openembedded_supplier(app):
+    """A string_id carrying an OpenEmbedded supplier resolves to the blank row."""
+    Package.find_or_create("busybox", "1.36.1")
+    _db.session.flush()
+    found = Package.get_by_string_id("busybox@1.36.1::OpenEmbedded ()")
+    assert found is not None
+    assert found.supplier == ""
+
+
+def test_bulk_find_or_create_collapses_openembedded_supplier(app):
+    """bulk_find_or_create() deduplicates OpenEmbedded with the blank supplier."""
+    result = Package.bulk_find_or_create([
+        {"name": "busybox", "version": "1.36.1", "supplier": "OpenEmbedded ()"},
+        {"name": "busybox", "version": "1.36.1", "supplier": ""},
+    ])
+    _db.session.flush()
+    ids = {pkg.id for pkg in result.values()}
+    assert len(ids) == 1
+    assert "busybox@1.36.1" in result
+    assert result["busybox@1.36.1"].supplier == ""

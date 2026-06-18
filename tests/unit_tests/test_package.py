@@ -361,3 +361,39 @@ def test_purl_epoch_qualifier_without_version_not_corrupted():
     no_version_purl = "pkg:deb/ubuntu/procps?epoch=2"
     pkg.add_purl(no_version_purl)
     assert "None" not in pkg.purl[0]
+
+
+@pytest.mark.parametrize("supplier", [
+    "OpenEmbedded ()",
+    "openembedded",
+    "OPENEMBEDDED",
+    "Organization: OpenEmbedded (info@openembedded.org)",
+    "OpenEmnedded ()",
+    "openemnedded",
+])
+def test_constructor_strips_openembedded_supplier(supplier):
+    """The OpenEmbedded supplier (and its OpenEmnedded typo) is dropped."""
+    pkg = Package("busybox", "1.36.1", supplier=supplier)
+    assert pkg.supplier == ""
+    assert pkg.string_id == "busybox@1.36.1"
+
+
+@pytest.mark.parametrize("supplier,expected", [
+    ("Organization: Acme Corp", "Organization: Acme Corp"),
+    ("  Acme Corp  ", "Acme Corp"),
+    ("", ""),
+    (None, ""),
+])
+def test_constructor_preserves_and_trims_other_suppliers(supplier, expected):
+    """Non-OpenEmbedded suppliers are kept (trimmed of surrounding whitespace)."""
+    pkg = Package("busybox", "1.36.1", supplier=supplier)
+    assert pkg.supplier == expected
+
+
+def test_normalize_supplier_helper_directly():
+    from src.models.package import _normalize_supplier
+    assert _normalize_supplier("OpenEmbedded ()") == ""
+    assert _normalize_supplier("prefix OpenEmbedded suffix") == ""
+    assert _normalize_supplier("OpenEmnedded ()") == ""
+    assert _normalize_supplier(None) == ""
+    assert _normalize_supplier("  Acme  ") == "Acme"
