@@ -394,6 +394,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const prevGhsaInProgress = useRef<boolean | null>(null);
     const prevGhsaPhase = useRef<string | null>(null);
     const prevGhsaStartedAt = useRef<string | null>(null);
+    const hasFetchedProgressOnce = useRef(false);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -410,6 +411,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         { syntax: '-term', description: 'NOT: exclude rows with term' },
     ];
 
+    const hasAnyGhsaVuln = useMemo(
+        () => vulnerabilities.some(v => v.id?.toUpperCase().startsWith('GHSA-')),
+        [vulnerabilities]
+    );
+
 
     useEffect(() => {
         if (!filterLabel || !filterValue) return;
@@ -424,65 +430,63 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     useRefreshProgressEffect(epssProgress, 'EPSS', prevEpssInProgress, prevEpssPhase, prevEpssStartedAt, setEpssBanner, onRefreshComplete, 'CVEs');
     useRefreshProgressEffect(ghsaProgress, 'GHSA', prevGhsaInProgress, prevGhsaPhase, prevGhsaStartedAt, setGhsaBanner, onRefreshComplete, 'advisories');
 
-    // Fetch NVD progress on mount and periodically
-    useEffect(() => {
-        const fetchNvdProgress = async () => {
-            try {
-                const progress = await NVDProgressHandler.getProgress();
-                setNvdProgress(progress);
-            } catch (error) {
-                console.error('Failed to fetch NVD progress:', error);
-            }
-        };
+    const fetchAllProgress = useCallback(async () => {
+        const shouldPollGhsa = hasAnyGhsaVuln || Boolean(ghsaProgress?.in_progress);
+        const [nvd, epss, ghsa] = await Promise.allSettled([
+            NVDProgressHandler.getProgress(),
+            EPSSProgressHandler.getProgress(),
+            shouldPollGhsa ? GHSAProgressHandler.getProgress() : Promise.resolve(null),
+        ]);
+        if (nvd.status === 'fulfilled') setNvdProgress(nvd.value);
+        else console.error('Failed to fetch NVD refresh progress:', nvd.reason);
+        if (epss.status === 'fulfilled') setEpssProgress(epss.value);
+        else console.error('Failed to fetch EPSS refresh progress:', epss.reason);
+        if (ghsa.status === 'fulfilled') setGhsaProgress(ghsa.value);
+        else console.error('Failed to fetch GHSA refresh progress:', ghsa.reason);
+    }, [hasAnyGhsaVuln, ghsaProgress?.in_progress]);
 
-        fetchNvdProgress();
-        const interval = setInterval(fetchNvdProgress, 5000); // Poll every 5 seconds
+    // Fetch once on mount so we can recover progress if a refresh was already running.
+    useEffect(() => {
+        if (!hasFetchedProgressOnce.current) {
+            hasFetchedProgressOnce.current = true;
+            void fetchAllProgress();
+        }
+    }, [fetchAllProgress]);
+
+    // Poll only while any refresh is actively running.
+    useEffect(() => {
+        const anyInProgress = Boolean(
+            nvdProgress?.in_progress || epssProgress?.in_progress || ghsaProgress?.in_progress
+        );
+        if (!anyInProgress) {
+            return;
+        }
+
+        const interval = setInterval(() => {
+            void fetchAllProgress();
+        }, 3000);
 
         return () => clearInterval(interval);
-    }, []);
-
-    // Fetch EPSS progress on mount and periodically
-    useEffect(() => {
-        const fetchEpssProgress = async () => {
-            try {
-                const progress = await EPSSProgressHandler.getProgress();
-                setEpssProgress(progress);
-            } catch (error) {
-                console.error('Failed to fetch EPSS progress:', error);
-            }
-        };
-
-        fetchEpssProgress();
-        const interval = setInterval(fetchEpssProgress, 5000); // Poll every 5 seconds
-
-        return () => clearInterval(interval);
-    }, []);
-
-    // Fetch GHSA progress on mount and periodically
-    useEffect(() => {
-        const fetchGhsaProgress = async () => {
-            try {
-                const progress = await GHSAProgressHandler.getProgress();
-                setGhsaProgress(progress);
-            } catch (error) {
-                console.error('Failed to fetch GHSA progress:', error);
-            }
-        };
-        fetchGhsaProgress();
-        const interval = setInterval(fetchGhsaProgress, 3000);
-        return () => clearInterval(interval);
-    }, []);
+    }, [nvdProgress?.in_progress, epssProgress?.in_progress, ghsaProgress?.in_progress, fetchAllProgress]);
 
     const activeBanners = [nvdBanner, epssBanner, ghsaBanner, generalBanner].filter((b): b is NonNullable<SourceBanner> => b !== null);
     const bannerVisible = activeBanners.length > 0;
     const bannerMessage = activeBanners.map(b => b.message).join(' · ');
     const bannerType: 'error' | 'success' = activeBanners.some(b => b.type === 'error') ? 'error' : 'success';
 
-    const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa') => {
+    const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa', refreshActivity?: boolean) => {
         if (source === 'nvd') setNvdBanner({ message, type });
         else if (source === 'epss') setEpssBanner({ message, type });
         else if (source === 'ghsa') setGhsaBanner({ message, type });
         else setGeneralBanner({ message, type });
+
+        // Refresh progress immediately when the caller signals a refresh has
+        // just started or been cancelled, so active polling can begin/stop
+        // without idle background polling. This relies on an explicit flag
+        // rather than parsing the user-facing banner text.
+        if (source && refreshActivity) {
+            void fetchAllProgress();
+        }
     };
 
     const closeBanner = () => {

@@ -11,10 +11,29 @@ type GHSAProgress = {
 export type { GHSAProgress };
 
 class GHSAProgressHandler {
+    private static idleProgress(): GHSAProgress {
+        return {
+            in_progress: false,
+            phase: 'idle',
+            current: 0,
+            total: 0,
+            message: '',
+        };
+    }
+
     static async getProgress(): Promise<GHSAProgress> {
         const response = await fetch(import.meta.env.VITE_API_URL + "/api/ghsa/progress", {
             mode: "cors"
         });
+
+        if (!response.ok) {
+            // The endpoint returns 200 on supported backends; a non-OK reply
+            // (e.g. 404 on an older deployment without GHSA support) is treated
+            // as idle. Polling only runs during an active refresh, so this
+            // won't spam requests.
+            return GHSAProgressHandler.idleProgress();
+        }
+
         const data = await response.json();
         return {
             in_progress: data?.in_progress ?? false,

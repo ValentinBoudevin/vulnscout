@@ -744,8 +744,9 @@ describe('Vulnerability Table', () => {
         await user.click(btn);
 
         // ASSERT
-        // 3 Variants.listByVuln calls (one per selected vulnerability) + 1 batch assessment API call + 1 GHSA progress poll on mount
-        expect(fetchMock).toHaveBeenCalledTimes(5);
+        // 3 Variants.listByVuln calls (one per selected vulnerability) + 1 batch assessment API call
+        // (no GHSA progress poll: the test data contains no GHSA- vulnerabilities)
+        expect(fetchMock).toHaveBeenCalledTimes(4);
     })
 
     test('select and change time estimate', async () => {
@@ -793,8 +794,9 @@ describe('Vulnerability Table', () => {
         await user.click(btn);
 
         // ASSERT
-        // 2 Variants.listByVuln + 1 batch time estimate API call + 1 GHSA progress poll on mount
-        expect(fetchMock).toHaveBeenCalledTimes(4);
+        // 2 Variants.listByVuln + 1 batch time estimate API call
+        // (no GHSA progress poll: the test data contains no GHSA- vulnerabilities)
+        expect(fetchMock).toHaveBeenCalledTimes(3);
     })
 
     test('show description when hovering vulnerability', async () => {
@@ -2504,8 +2506,10 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
         jest.useFakeTimers();
         try {
             const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
+            // First poll must be in-progress so the component keeps polling; the refresh then
+            // completes on the next poll (polling only runs while a refresh is active).
             NVDProgressHandler.getProgress
-                .mockResolvedValueOnce({ in_progress: false, phase: 'idle', current: 0, total: 0, message: '' })
+                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_nvd_refresh', current: 5, total: 10, message: '' })
                 .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 10, total: 10, message: '' });
 
             render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -2548,8 +2552,10 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
         jest.useFakeTimers();
         try {
             const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+            // First poll must be in-progress so the component keeps polling; the refresh then
+            // completes on the next poll (polling only runs while a refresh is active).
             EPSSProgressHandler.getProgress
-                .mockResolvedValueOnce({ in_progress: false, phase: 'idle', current: 0, total: 0, message: '' })
+                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_epss_refresh', current: 25, total: 50, message: '' })
                 .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 50, total: 50, message: '' });
 
             render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -2632,8 +2638,10 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
         jest.useFakeTimers();
         try {
             const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+            // First poll must be in-progress so the component keeps polling; the refresh then
+            // completes on the next poll with a new started_at (polling only runs while active).
             EPSSProgressHandler.getProgress
-                .mockResolvedValueOnce({ in_progress: false, phase: 'idle', current: 0, total: 0, message: '', started_at: undefined })
+                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_epss_refresh', current: 25, total: 50, message: '', started_at: '2026-06-10T10:00:00Z' })
                 .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 50, total: 50, message: '', started_at: '2026-06-10T10:01:00Z' });
 
             render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -2650,12 +2658,14 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
         }
     });
 
-    test('shows EPSS completion banner when phase stays completed but started_at changes (re-triggered fast refresh)', async () => {
+    test('shows EPSS completion banner for a re-triggered fast refresh (started_at changes)', async () => {
         jest.useFakeTimers();
         try {
             const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+            // A re-triggered refresh is in progress on the first poll (so polling continues),
+            // then completes on the next poll with a new started_at marking the fresh cycle.
             EPSSProgressHandler.getProgress
-                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 30, total: 30, message: '', started_at: '2026-06-10T09:00:00Z' })
+                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_epss_refresh', current: 10, total: 50, message: '', started_at: '2026-06-10T09:00:00Z' })
                 .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 50, total: 50, message: '', started_at: '2026-06-10T10:01:00Z' });
 
             render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
