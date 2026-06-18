@@ -259,6 +259,8 @@ class Package(Base):
 
     def to_dict(self) -> dict:
         return {
+            "id": self.string_id,
+            "package_id": str(self.id) if self.id is not None else None,
             "name": self.name,
             "version": self.version,
             "cpe": list(self.cpe or []),

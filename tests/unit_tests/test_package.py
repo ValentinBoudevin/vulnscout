@@ -251,6 +251,52 @@ def test_supplier_in_to_dict_from_dict():
     assert restored.string_id == "foo@1.0::Organization: Acme Corp"
 
 
+def test_to_dict_exposes_id_and_package_id():
+    """
+    GIVEN a Package with an explicit database UUID
+    WHEN serialising with to_dict
+    THEN check it exposes both the human-readable id (string_id) and the
+         database UUID as package_id
+    """
+    import uuid
+    pkg_uuid = uuid.UUID("12345678-1234-5678-1234-567812345678")
+    pkg = Package("foo", "1.0", supplier="Organization: Acme Corp")
+    pkg.id = pkg_uuid
+    data = pkg.to_dict()
+    assert data["id"] == pkg.string_id
+    assert data["id"] == "foo@1.0::Organization: Acme Corp"
+    assert data["package_id"] == str(pkg_uuid)
+
+
+def test_to_dict_package_id_distinguishes_same_string_id():
+    """
+    GIVEN two packages sharing the same name@version but with different UUIDs
+    WHEN serialising with to_dict
+    THEN check package_id differs so enrichment cannot conflate them
+    """
+    import uuid
+    pkg_a = Package("foo", "1.0")
+    pkg_a.id = uuid.UUID("11111111-1111-1111-1111-111111111111")
+    pkg_b = Package("foo", "1.0")
+    pkg_b.id = uuid.UUID("22222222-2222-2222-2222-222222222222")
+    data_a = pkg_a.to_dict()
+    data_b = pkg_b.to_dict()
+    assert data_a["id"] == data_b["id"]
+    assert data_a["package_id"] != data_b["package_id"]
+
+
+def test_to_dict_package_id_is_none_when_unpersisted():
+    """
+    GIVEN a Package that has not been persisted (no database id yet)
+    WHEN serialising with to_dict
+    THEN check package_id is None rather than the literal string "None"
+    """
+    pkg = Package("foo", "1.0")
+    assert pkg.id is None
+    data = pkg.to_dict()
+    assert data["package_id"] is None
+
+
 def test_sort_packages_mixed_suppliers():
     pkg_acme = Package("foo", "1.0", supplier="Organization: Acme Corp")
     pkg_bar  = Package("foo", "1.0", supplier="Organization: Bar Inc")
