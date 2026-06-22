@@ -116,6 +116,7 @@ def init_app(app):
         if pkg_ids:
             enrich_query = (
                 db.select(
+                    Package.id.label("package_id"),
                     Package.name,
                     Package.version,
                     Variant.name.label("variant_name"),
@@ -145,10 +146,11 @@ def init_app(app):
                 enrich_query = enrich_query.where(Variant.project_id == uuid.UUID(project_id))
             rows = db.session.execute(enrich_query).all()
 
-            # Build lookup: "name@version" → {variants: set, sources: set, sbom_documents: set}
+            # Build lookup by package UUID to avoid conflating similarly-named
+            # package rows (e.g. different supplier or near-identical versions).
             meta: dict = {}
             for row in rows:
-                key = f"{row.name}@{row.version}"
+                key = str(row.package_id)
                 if key not in meta:
                     meta[key] = {"variants": set(), "sources": set(), "sbom_documents": set()}
                 if row.variant_name:
@@ -159,7 +161,7 @@ def init_app(app):
                     meta[key]["sbom_documents"].add(row.doc_source_name)
 
             for p in result:
-                key = f"{p['name']}@{p['version']}"
+                key = str(p.get("package_id", ""))
                 info = meta.get(key, {})
                 p["variants"] = sorted(info.get("variants", set()))
                 p["sources"] = sorted(info.get("sources", set()))

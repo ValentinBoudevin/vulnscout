@@ -468,6 +468,30 @@ class TestPackagesFiltering:
         assert isinstance(body, dict)
         assert "cairo@1.16.0" in body
 
+    def test_packages_response_exposes_package_id(self, client_and_data):
+        """to_dict now exposes the package UUID as package_id alongside the
+        human-readable string id."""
+        client, _ = client_and_data
+        response = client.get("/api/packages?format=list")
+        assert response.status_code == 200
+        body = json.loads(response.data)
+        cairo = next(p for p in body if p["name"] == "cairo")
+        assert cairo["id"] == "cairo@1.16.0"
+        assert "package_id" in cairo
+        # package_id is a valid UUID string used as the enrichment lookup key
+        uuid.UUID(cairo["package_id"])
+
+    def test_packages_variants_keyed_by_package_uuid(self, client_and_data):
+        """Enrichment is keyed by package UUID, so cairo's variants are scoped
+        to VariantA (where its SBOMPackage lives) and not leaked elsewhere."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        response = client.get(f"/api/packages?variant_id={variant_a_id}&format=list")
+        assert response.status_code == 200
+        body = json.loads(response.data)
+        cairo = next(p for p in body if p["name"] == "cairo")
+        assert cairo["variants"] == ["VariantA"]
+
     # Compare-filtering tests:
     # VariantA has cairo@1.16.0, VariantB has no packages (via observations).
 

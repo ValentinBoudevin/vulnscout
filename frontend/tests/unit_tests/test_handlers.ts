@@ -164,6 +164,38 @@ describe('Packages', () => {
         expect(enrichedPackages[1].source).toEqual(['cve-finder']);
     });
 
+    test('enrich_with_vulns keeps variants strictly package-scoped', async () => {
+        // The package carries its own (package-scoped) variants from the
+        // /api/packages enrichment.
+        fetchMock.resetMocks();
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                json: () => Promise.resolve([
+                    { name: 'aaabbbccc', version: '1.0.0', variants: ['VariantA'] }
+                ])
+            } as Response)
+        );
+        const packages = await Packages.list();
+        expect(packages[0].variants).toEqual(['VariantA']);
+
+        // The matching vulnerability is vulnerability-scoped and references
+        // extra variants that must NOT leak into the package.
+        fetchMock.resetMocks();
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                json: () => Promise.resolve([
+                    { ...VULNERABILITIES[0], variants: ['VariantA', 'VariantB', 'OtherVariant'] }
+                ])
+            } as Response)
+        );
+        const vulnerabilities = await Vulnerabilities.list();
+
+        const enriched = Packages.enrich_with_vulns(packages, vulnerabilities);
+        expect(enriched.length).toEqual(1);
+        // variants stay package-scoped — vuln.variants are ignored
+        expect(enriched[0].variants).toEqual(['VariantA']);
+    });
+
     test('asPackage parses supplier field', async () => {
         fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
