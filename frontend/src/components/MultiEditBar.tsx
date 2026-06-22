@@ -465,12 +465,13 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                 {/* Change status */}
                 <button
                     className={[
-                        "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+                        "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-semibold transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed",
                         panelOpened === 1
-                            ? "bg-cyan-400 text-cyan-950 hover:bg-cyan-300"
-                            : "text-white bg-white/10 hover:bg-white/20 disabled:hover:bg-white/10"
+                            ? "border-cyan-300/80 bg-cyan-300 text-cyan-950 shadow-sm shadow-cyan-950/20 hover:bg-cyan-200"
+                            : "border-white/20 text-cyan-50 bg-white/10 hover:bg-white/20 hover:border-white/35 disabled:hover:bg-white/10"
                     ].join(' ')}
                     disabled={!hasSelection}
+                    aria-pressed={panelOpened === 1}
                     onClick={() => { hideBanner(); setPanelOpened(panelOpened == 1 ? 0 : 1); }}
                 >
                     <FontAwesomeIcon icon={faPenToSquare} />
@@ -480,16 +481,17 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                 {/* Change estimated time */}
                 <button
                     className={[
-                        "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+                        "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-semibold transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed",
                         panelOpened === 2
-                            ? "bg-cyan-400 text-cyan-950 hover:bg-cyan-300"
-                            : "text-white bg-white/10 hover:bg-white/20 disabled:hover:bg-white/10"
+                            ? "border-cyan-300/80 bg-cyan-300 text-cyan-950 shadow-sm shadow-cyan-950/20 hover:bg-cyan-200"
+                            : "border-white/20 text-cyan-50 bg-white/10 hover:bg-white/20 hover:border-white/35 disabled:hover:bg-white/10"
                     ].join(' ')}
                     disabled={!hasSelection}
+                    aria-pressed={panelOpened === 2}
                     onClick={() => { hideBanner(); setPanelOpened(panelOpened == 2 ? 0 : 2); }}
                 >
                     <FontAwesomeIcon icon={faClock} />
-                    Change estimated time
+                    Change time estimate
                 </button>
 
                 <div className="w-px h-6 bg-white/15 mx-1"></div>
@@ -639,48 +641,50 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                     </div>
                 </div>
 
-            <div className={[
-                'absolute z-40 p-4 bg-slate-700 shadow-md shadow-slate-400/40 top-48 left-32 w-1/2',
-                panelOpened == 1 ? 'block' : 'hidden'
-            ].join(' ')} data-testid="multi-edit-status-panel">
-                <StatusEditor
-                    onAddAssessment={(data) => addAssessment(data)}
-                    progressBar={undefined}
-                    defaultStatus={uniformStatus}
-                />
-                {(isAllVariantsMode || affectedVariantNames.length > 0) && (
-                    <div className="mt-3 pt-3 border-t border-slate-500">
-                        {isAllVariantsMode ? (
-                            <p className="text-sm font-medium text-gray-300">
-                                Will be applied to all possible variants on each CVE
-                            </p>
-                        ) : (
-                            <>
-                                <p className="text-sm font-medium text-gray-300 mb-1">
-                                    Will be applied to variant{affectedVariantNames.length > 1 ? 's' : ''}:
+            <div className="relative z-50 w-full">
+                <div className={[
+                    'absolute left-0 top-0 mt-1 z-50 w-full max-w-4xl rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-3',
+                    panelOpened == 1 ? 'block' : 'hidden'
+                ].join(' ')} data-testid="multi-edit-status-panel">
+                    <StatusEditor
+                        onAddAssessment={(data) => addAssessment(data)}
+                        progressBar={undefined}
+                        defaultStatus={uniformStatus}
+                    />
+                    {(isAllVariantsMode || affectedVariantNames.length > 0) && (
+                        <div className="mt-3 pt-3 border-t border-slate-500">
+                            {isAllVariantsMode ? (
+                                <p className="text-sm font-medium text-gray-300">
+                                    Will be applied to all possible variants on each CVE
                                 </p>
-                                <div className="flex flex-wrap gap-1">
-                                    {affectedVariantNames.map(name => (
-                                        <span key={name} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
-                                            {name}
-                                        </span>
-                                    ))}
-                                </div>
-                            </>
-                        )}
-                    </div>
-                )}
-            </div>
+                            ) : (
+                                <>
+                                    <p className="text-sm font-medium text-gray-300 mb-1">
+                                        Will be applied to variant{affectedVariantNames.length > 1 ? 's' : ''}:
+                                    </p>
+                                    <div className="flex flex-wrap gap-1">
+                                        {affectedVariantNames.map(name => (
+                                            <span key={name} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+                                                {name}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    )}
+                </div>
 
-            <div className={[
-                'absolute z-40 p-4 bg-slate-700 shadow-md shadow-slate-400/40 top-48 left-32 w-1/2',
-                panelOpened == 2 ? 'block' : 'hidden'
-            ].join(' ')} data-testid="multi-edit-time-panel">
-                <TimeEstimateEditor
-                    onSaveTimeEstimation={(data) => saveTimeEstimation(data)}
-                    progressBar={undefined}
-                    actualEstimate={{optimistic: '', likely: '', pessimistic: ''}}
-                />
+                <div className={[
+                    'absolute left-0 top-0 mt-1 z-50 w-full max-w-4xl rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-3',
+                    panelOpened == 2 ? 'block' : 'hidden'
+                ].join(' ')} data-testid="multi-edit-time-panel">
+                    <TimeEstimateEditor
+                        onSaveTimeEstimation={(data) => saveTimeEstimation(data)}
+                        progressBar={undefined}
+                        actualEstimate={{optimistic: '', likely: '', pessimistic: ''}}
+                    />
+                </div>
             </div>
     </>);
 }

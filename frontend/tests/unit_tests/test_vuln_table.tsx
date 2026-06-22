@@ -777,7 +777,7 @@ describe('Vulnerability Table', () => {
 
         await user.click(select_all)
 
-        const edit_time_btn = await screen.getByRole('button', {name: /Change estimated time/i});
+        const edit_time_btn = await screen.getByRole('button', {name: /Change time estimate/i});
         expect(edit_time_btn).toBeInTheDocument();
         await user.click(edit_time_btn);
 

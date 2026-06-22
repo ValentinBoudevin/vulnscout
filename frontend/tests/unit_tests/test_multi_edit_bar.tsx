@@ -121,7 +121,41 @@ describe('MultiEditBar', () => {
         expect(getByText('Selected vulnerabilities')).toBeInTheDocument();
         expect(getByText('Reset selection').closest('button')).toBeDisabled();
         expect(getByText('Change status').closest('button')).toBeDisabled();
-        expect(getByText('Change estimated time').closest('button')).toBeDisabled();
+        expect(getByText('Change time estimate').closest('button')).toBeDisabled();
+    });
+
+    test('renders the renamed "Change time estimate" button label', () => {
+        const props = { ...mockProps, selectedVulns: ['vuln-1'] };
+        const { getByText, queryByText } = render(<MultiEditBar {...props} />);
+        expect(getByText('Change time estimate')).toBeInTheDocument();
+        expect(queryByText('Change estimated time')).toBeNull();
+    });
+
+    test('toggle buttons expose aria-pressed reflecting the open panel', async () => {
+        const props = { ...mockProps, selectedVulns: ['vuln-1'] };
+        const { getByText } = render(<MultiEditBar {...props} />);
+
+        const statusButton = getByText('Change status').closest('button') as HTMLButtonElement;
+        const timeButton = getByText('Change time estimate').closest('button') as HTMLButtonElement;
+
+        // No panel open initially
+        expect(statusButton).toHaveAttribute('aria-pressed', 'false');
+        expect(timeButton).toHaveAttribute('aria-pressed', 'false');
+
+        // Opening the status panel sets aria-pressed only on the status button
+        await act(async () => { statusButton.click(); });
+        expect(statusButton).toHaveAttribute('aria-pressed', 'true');
+        expect(timeButton).toHaveAttribute('aria-pressed', 'false');
+
+        // Opening the time panel moves aria-pressed to the time button
+        await act(async () => { timeButton.click(); });
+        expect(statusButton).toHaveAttribute('aria-pressed', 'false');
+        expect(timeButton).toHaveAttribute('aria-pressed', 'true');
+
+        // Clicking the open button again closes the panel and clears aria-pressed
+        await act(async () => { timeButton.click(); });
+        expect(statusButton).toHaveAttribute('aria-pressed', 'false');
+        expect(timeButton).toHaveAttribute('aria-pressed', 'false');
     });
 
     test('renders with selection', () => {
@@ -236,7 +270,7 @@ describe('MultiEditBar', () => {
         };
 
         const { getByText, getByPlaceholderText } = render(<MultiEditBar {...props} />);
-        const changeTimeButton = getByText('Change estimated time');
+        const changeTimeButton = getByText('Change time estimate');
         act(() => { changeTimeButton.click(); });
 
         // TimeEstimateEditor should be visible (check by finding an input with its placeholder)
@@ -251,7 +285,7 @@ describe('MultiEditBar', () => {
         };
 
         const { getByText, getByPlaceholderText, getByTestId } = render(<MultiEditBar {...props} />);
-        await act(async () => { getByText('Change estimated time').click(); });
+        await act(async () => { getByText('Change time estimate').click(); });
 
         expect(getByPlaceholderText('shortest estimate [eg: 5h]')).toBeInTheDocument();
         expect(getByTestId('multi-edit-time-panel')).toHaveClass('block');
@@ -472,7 +506,7 @@ describe('MultiEditBar', () => {
 
         const { getByText, getByPlaceholderText } = render(<MultiEditBar {...props} />);
 
-        await act(async () => { getByText('Change estimated time').click(); });
+        await act(async () => { getByText('Change time estimate').click(); });
 
         fireEvent.input(getByPlaceholderText('shortest estimate [eg: 5h]'), { target: { value: '1h' } });
         fireEvent.input(getByPlaceholderText('balanced estimate [eg: 2d 4h, or 2.5d]'), { target: { value: '2h' } });
@@ -599,7 +633,7 @@ describe('MultiEditBar', () => {
 
         const { getByText, getByPlaceholderText } = render(<MultiEditBar {...props} />);
 
-        await act(async () => { getByText('Change estimated time').click(); });
+        await act(async () => { getByText('Change time estimate').click(); });
 
         fireEvent.input(getByPlaceholderText('shortest estimate [eg: 5h]'), { target: { value: '1h' } });
         fireEvent.input(getByPlaceholderText('balanced estimate [eg: 2d 4h, or 2.5d]'), { target: { value: '2h' } });
@@ -636,7 +670,7 @@ describe('MultiEditBar', () => {
 
         const { getByText, getByPlaceholderText } = render(<MultiEditBar {...props} />);
 
-        await act(async () => { getByText('Change estimated time').click(); });
+        await act(async () => { getByText('Change time estimate').click(); });
 
         fireEvent.input(getByPlaceholderText('shortest estimate [eg: 5h]'), { target: { value: '1h' } });
         fireEvent.input(getByPlaceholderText('balanced estimate [eg: 2d 4h, or 2.5d]'), { target: { value: '2h' } });
@@ -671,7 +705,7 @@ describe('MultiEditBar', () => {
 
         const { getByText, getByPlaceholderText } = render(<MultiEditBar {...props} />);
 
-        await act(async () => { getByText('Change estimated time').click(); });
+        await act(async () => { getByText('Change time estimate').click(); });
 
         fireEvent.input(getByPlaceholderText('shortest estimate [eg: 5h]'), { target: { value: '1h' } });
         fireEvent.input(getByPlaceholderText('balanced estimate [eg: 2d 4h, or 2.5d]'), { target: { value: '2h' } });
