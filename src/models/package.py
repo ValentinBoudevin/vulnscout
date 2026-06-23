@@ -19,6 +19,14 @@ if typing.TYPE_CHECKING:
     from ..models import SBOMObservation, SBOMPackage, Finding
 
 
+def _normalize_supplier(value: str | None) -> str:
+    """Normalize supplier values and drop OpenEmbedded/OpenEmnedded."""
+    supplier = (value or "").strip()
+    if re.search(r"openem[bn]edded", supplier, flags=re.IGNORECASE):
+        return ""
+    return supplier
+
+
 def _normalize_purl(purl: str) -> str:
     """Normalize PURL to a canonical form.
 
@@ -115,7 +123,7 @@ class Package(Base):
         self.cpe = []
         self.purl = []
         self.licences = licences or ""
-        self.supplier = supplier
+        self.supplier = _normalize_supplier(supplier)
         for c in cpes:
             self.add_cpe(c)
         for p in purls:
@@ -308,6 +316,7 @@ class Package(Base):
         supplier: str = "",
     ) -> "Package":
         """Return an existing Package for (name, version, supplier) or create a new one."""
+        supplier = _normalize_supplier(supplier)
         existing = db.session.execute(
             db.select(Package).where(
                 Package.name == name,
@@ -355,7 +364,7 @@ class Package(Base):
         if not items:
             return {}
 
-        triples = [(d["name"], d["version"], d.get("supplier", "")) for d in items]
+        triples = [(d["name"], d["version"], _normalize_supplier(d.get("supplier", ""))) for d in items]
 
         existing_rows = list(
             db.session.execute(
@@ -370,7 +379,7 @@ class Package(Base):
 
         result: dict[str, Package] = {}
         for d in items:
-            key = (d["name"], d["version"], d.get("supplier", ""))
+            key = (d["name"], d["version"], _normalize_supplier(d.get("supplier", "")))
             pkg = by_key.get(key)
             if pkg is None:
                 pkg = Package(
@@ -379,7 +388,7 @@ class Package(Base):
                     cpe=d.get("cpe", []),
                     purl=d.get("purl", []),
                     licences=d.get("licences", ""),
-                    supplier=d.get("supplier", ""),
+                    supplier=_normalize_supplier(d.get("supplier", "")),
                 )
                 db.session.add(pkg)
                 by_key[key] = pkg
@@ -398,6 +407,7 @@ class Package(Base):
     @staticmethod
     def exists(name: str, version: str, supplier: str = "") -> bool:
         """Check whether a package with (name, version, supplier) exists."""
+        supplier = _normalize_supplier(supplier)
         return db.session.query(
             db.session.query(Package).filter(
                 Package.name == name,
@@ -414,6 +424,7 @@ class Package(Base):
         supplier = ""
         if "::" in string_id:
             string_id, supplier = string_id.split("::", 1)
+        supplier = _normalize_supplier(supplier)
         name, version = string_id.split("@", 1)
         return db.session.execute(
             db.select(Package).where(
