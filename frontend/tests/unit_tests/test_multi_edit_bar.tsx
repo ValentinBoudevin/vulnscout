@@ -339,8 +339,8 @@ describe('MultiEditBar', () => {
         });
 
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('NVD refresh started for 2 CVE(s)', 'success', 'nvd');
-            expect(mockTriggerBanner).toHaveBeenCalledWith('EPSS refresh started for 2 CVE(s)', 'success', 'epss');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('NVD refresh started for 2 CVE(s)', 'success', 'nvd', true);
+            expect(mockTriggerBanner).toHaveBeenCalledWith('EPSS refresh started for 2 CVE(s)', 'success', 'epss', true);
         });
 
         expect(mockHideBanner).toHaveBeenCalledTimes(1);
@@ -1015,7 +1015,7 @@ describe('MultiEditBar', () => {
 
         await waitFor(() => {
             expect(mockCancelTrigger).toHaveBeenCalled();
-            expect(mockTriggerBanner).toHaveBeenCalledWith('NVD refresh cancellation requested', 'success', 'nvd');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('NVD refresh cancellation requested', 'success', 'nvd', true);
         });
     });
 
@@ -1041,7 +1041,7 @@ describe('MultiEditBar', () => {
 
         await waitFor(() => {
             expect(mockCancelTrigger).toHaveBeenCalled();
-            expect(mockTriggerBanner).toHaveBeenCalledWith('EPSS refresh cancellation requested', 'success', 'epss');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('EPSS refresh cancellation requested', 'success', 'epss', true);
         });
     });
 
