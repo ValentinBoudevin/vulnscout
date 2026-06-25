@@ -89,3 +89,44 @@ class TestEpssRefreshEndpoint:
                 f"/api/vulnerabilities/{existing_cve_id.lower()}/epss-refresh"
             )
         assert resp.status_code == 200
+
+    def test_epss_refresh_sets_data_updated_at_when_score_changes(self, app, client, existing_cve_id):
+        """epss_data_updated_at is stamped when the EPSS score changes."""
+        from src.models.vulnerability import Vulnerability
+        from src.extensions import db
+        # Seed a different starting score so the refresh triggers a change
+        with app.app_context():
+            rec = db.session.get(Vulnerability, existing_cve_id)
+            rec.epss_score = None
+            rec.epss_data_updated_at = None
+            db.session.commit()
+
+        with patch("src.routes.vulnerabilities.EPSS_DB") as MockEPSS:
+            MockEPSS.return_value.api_get_epss.return_value = {"score": 0.99, "percentile": 0.99}
+            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/epss-refresh")
+        assert resp.status_code == 200
+
+        with app.app_context():
+            rec = db.session.get(Vulnerability, existing_cve_id)
+            assert rec.epss_data_updated_at is not None
+
+    def test_epss_refresh_no_data_updated_at_when_score_unchanged(self, app, client, existing_cve_id):
+        """epss_data_updated_at is NOT stamped when the score is the same."""
+        from decimal import Decimal
+        from src.models.vulnerability import Vulnerability
+        from src.extensions import db
+        with app.app_context():
+            rec = db.session.get(Vulnerability, existing_cve_id)
+            rec.epss_score = Decimal("0.5")
+            rec.epss_data_updated_at = None
+            db.session.commit()
+
+        with patch("src.routes.vulnerabilities.EPSS_DB") as MockEPSS:
+            MockEPSS.return_value.api_get_epss.return_value = {"score": 0.5, "percentile": 0.8}
+            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/epss-refresh")
+        assert resp.status_code == 200
+
+        with app.app_context():
+            rec = db.session.get(Vulnerability, existing_cve_id)
+            assert rec.epss_data_updated_at is None
+

@@ -82,12 +82,12 @@ class ProgressTracker:
             self._data["message"] = message or f"{phase}: {current}/{total}"
             self._data["last_update"] = datetime.now(timezone.utc).isoformat()
 
-    def complete(self):
+    def complete(self, message: Optional[str] = None):
         """Mark the enrichment as complete."""
         with self._lock:
             self._data["in_progress"] = False
             self._data["phase"] = "completed"
-            self._data["message"] = self._completed_message
+            self._data["message"] = message if message is not None else self._completed_message
             self._data["last_update"] = datetime.now(timezone.utc).isoformat()
 
     def cancel(self):

@@ -8,19 +8,13 @@ from src.views.templates import Templates
 from src.models.package import Package
 from src.models.vulnerability import Vulnerability
 from src.models.assessment import Assessment
-from src.controllers.packages import PackagesController
-from src.controllers.vulnerabilities import VulnerabilitiesController
-from src.controllers.assessments import AssessmentsController
+from src.controllers import ControllersCache
 import os
 
 
 @pytest.fixture
 def templates_parser():
-    controllers = {}
-    controllers["packages"] = PackagesController()
-    controllers["vulnerabilities"] = VulnerabilitiesController(controllers["packages"])
-    controllers["assessments"] = AssessmentsController(controllers["packages"], controllers["vulnerabilities"])
-    return Templates(controllers)
+    return Templates(ControllersCache())
 
 
 @pytest.fixture

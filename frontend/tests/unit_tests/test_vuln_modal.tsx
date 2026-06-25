@@ -1,7 +1,7 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
+import { render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
@@ -217,7 +217,90 @@ describe('Vulnerability Modal', () => {
         alertSpy.mockRestore();
     })
 
+    /**
+     * Success-toast wording: the message must report the variants and packages
+     * actually touched by the created assessments, with correct pluralisation.
+     */
+    const submitAssessment = async (postResponse: object) => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify(postResponse)); // POST assessment
+
+        render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        const selects = await screen.getAllByRole('combobox');
+        const selectStatus = selects.find((el) => el.getAttribute('name')?.includes('new_assessment_status')) as HTMLElement;
+        await user.selectOptions(selectStatus, 'fixed');
+        const btn = await screen.getByText(/add assessment/i);
+        await user.click(btn);
+    };
+
+    test('success message reports both variants and packages', async () => {
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+        await submitAssessment({
+            status: 'success',
+            assessments: [
+                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v1', packages: ['pkgA@1.0'] },
+                { id: 'a2', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v2', packages: ['pkgB@1.0'] },
+            ],
+        });
+        expect(await screen.findByText('Successfully added assessment to 2 packages across 2 variants.')).toBeInTheDocument();
+        alertSpy.mockRestore();
+    })
+
+    test('success message uses singular wording for one variant and one package', async () => {
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+        await submitAssessment({
+            status: 'success',
+            assessments: [
+                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v1', packages: ['pkgA@1.0'] },
+            ],
+        });
+        expect(await screen.findByText('Successfully added assessment to 1 package across 1 variant.')).toBeInTheDocument();
+        alertSpy.mockRestore();
+    })
+
+    test('success message falls back to package-only when no variant touched', async () => {
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+        await submitAssessment({
+            status: 'success',
+            assessments: [
+                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', packages: ['pkgA@1.0', 'pkgB@1.0'] },
+            ],
+        });
+        expect(await screen.findByText('Successfully added assessment to 2 packages.')).toBeInTheDocument();
+        alertSpy.mockRestore();
+    })
+
+    test('success message falls back to variant-only when no package touched', async () => {
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+        await submitAssessment({
+            status: 'success',
+            assessments: [
+                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v1', packages: [] },
+            ],
+        });
+        expect(await screen.findByText('Successfully added assessment to 1 variant.')).toBeInTheDocument();
+        alertSpy.mockRestore();
+    })
+
+    test('success message falls back to a plain count with neither variant nor package', async () => {
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+        await submitAssessment({
+            status: 'success',
+            assessments: [
+                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', packages: [] },
+                { id: 'a2', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', packages: [] },
+            ],
+        });
+        expect(await screen.findByText('Successfully added 2 assessments.')).toBeInTheDocument();
+        alertSpy.mockRestore();
+    })
+
     test('help button for time estimates', async () => {
+
         // ARRANGE
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} isEditing={true} />);
 
@@ -247,6 +330,7 @@ describe('Vulnerability Modal', () => {
             }
         ])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // packages fetch (variantPackageMap effect)
         fetchMock.mockResponseOnce(JSON.stringify({
             id: vulnerability.id,
             packages: vulnerability.packages,
@@ -278,7 +362,7 @@ describe('Vulnerability Modal', () => {
         await user.click(btn);
 
         // ASSERT
-        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(fetchMock).toHaveBeenCalledTimes(4);
         expect(updateCb).toHaveBeenCalledTimes(1);
         alertSpy.mockRestore();
     })
@@ -1927,6 +2011,8 @@ describe('Vulnerability Modal', () => {
         ]));
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // batch variant snapshots (single fetch)
+        fetchMock.mockResponseOnce(JSON.stringify([])); // packages fetch for v1 (variantPackageMap effect)
+        fetchMock.mockResponseOnce(JSON.stringify([])); // packages fetch for v2 (variantPackageMap effect)
         // Two POST responses for two variants
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
@@ -1989,7 +2075,7 @@ describe('Vulnerability Modal', () => {
         await user.click(btn);
 
         // Should show multi-variant success message
-        const successMsg = await screen.findByText(/successfully added assessment to 2 variants/i);
+        const successMsg = await screen.findByText(/successfully added assessment to 1 package across 2 variants/i);
         expect(successMsg).toBeInTheDocument();
         expect(appendCb).toHaveBeenCalledTimes(2);
         expect(patchCb).toHaveBeenCalledTimes(1);
@@ -2374,5 +2460,116 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
         expect(screen.queryByText('Updated')).not.toBeInTheDocument();
         expect(screen.queryByText(/NVD API unavailable/i)).not.toBeInTheDocument();
+    });
+
+    test('builds variantPackageMap and disables packages absent from the selected variant', async () => {
+        fetchMock.resetMocks();
+        // Route fetches by URL so the per-variant package lookups resolve
+        // regardless of effect ordering.
+        fetchMock.mockResponse((req) => {
+            const url = req.url;
+            if (url.includes('/api/packages')) {
+                if (url.includes('variant_id=v1')) {
+                    return Promise.resolve(JSON.stringify([{ name: 'pkgA', version: '1.0.0' }]));
+                }
+                if (url.includes('variant_id=v2')) {
+                    return Promise.resolve(JSON.stringify([{ name: 'pkgB', version: '1.0.0' }]));
+                }
+                return Promise.resolve(JSON.stringify([]));
+            }
+            if (url.includes('/variants') && !url.includes('/variant-snapshots')) {
+                // Variants.listByVuln
+                return Promise.resolve(JSON.stringify([
+                    { id: 'v1', name: 'Variant Alpha', project_id: 'proj1' },
+                    { id: 'v2', name: 'Variant Beta', project_id: 'proj1' },
+                ]));
+            }
+            // assessments mount fetch, variant-snapshots, ...
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        const multiPkgVuln: Vulnerability = {
+            ...vulnerability,
+            packages: ['pkgA@1.0.0', 'pkgB@1.0.0'],
+            packages_current: [],
+            assessments: [],
+        };
+
+        render(<VulnModal vuln={multiPkgVuln} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
+        const user = userEvent.setup();
+
+        // Wait for the variants to render inside the StatusEditor.
+        await screen.findByText('Apply to variants:');
+
+        // Scope checkbox lookups to the StatusEditor sections so we do not match
+        // the TimeEstimateEditor / CVSS target-variant selectors that reuse the
+        // same variant names.
+        const sectionCheckbox = (header: string, labelText: string): HTMLInputElement => {
+            const section = screen.getByText(header).closest('div') as HTMLElement;
+            const input = within(section).getByText(labelText).closest('label')?.querySelector('input[type="checkbox"]');
+            if (!input) throw new Error(`No checkbox found for "${labelText}" under "${header}"`);
+            return input as HTMLInputElement;
+        };
+        const variantCheckbox = (name: string) => sectionCheckbox('Apply to variants:', name);
+        const packageCheckbox = (label: string) => sectionCheckbox('Apply to packages:', label);
+
+        // Both packages are reachable before any variant is selected.
+        expect(packageCheckbox('pkgA@1.0.0').disabled).toBe(false);
+        expect(packageCheckbox('pkgB@1.0.0').disabled).toBe(false);
+
+        // Select Variant Alpha, which only contains pkgA.
+        await user.click(variantCheckbox('Variant Alpha'));
+
+        // pkgB is absent from Variant Alpha → its checkbox becomes disabled.
+        await waitFor(() => {
+            expect(packageCheckbox('pkgB@1.0.0').disabled).toBe(true);
+        });
+        expect(packageCheckbox('pkgA@1.0.0').disabled).toBe(false);
+    });
+
+    test('omits variantPackageMap so all packages stay enabled when package lookups fail', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            const url = req.url;
+            if (url.includes('/api/packages')) {
+                // Simulate the package lookup failing for every variant.
+                return Promise.reject(new Error('packages unavailable'));
+            }
+            if (url.includes('/variants') && !url.includes('/variant-snapshots')) {
+                return Promise.resolve(JSON.stringify([
+                    { id: 'v1', name: 'Variant Alpha', project_id: 'proj1' },
+                    { id: 'v2', name: 'Variant Beta', project_id: 'proj1' },
+                ]));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        const multiPkgVuln: Vulnerability = {
+            ...vulnerability,
+            packages: ['pkgA@1.0.0', 'pkgB@1.0.0'],
+            packages_current: [],
+            assessments: [],
+        };
+
+        render(<VulnModal vuln={multiPkgVuln} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('Apply to variants:');
+
+        const sectionCheckbox = (header: string, labelText: string): HTMLInputElement => {
+            const section = screen.getByText(header).closest('div') as HTMLElement;
+            const input = within(section).getByText(labelText).closest('label')?.querySelector('input[type="checkbox"]');
+            if (!input) throw new Error(`No checkbox found for "${labelText}" under "${header}"`);
+            return input as HTMLInputElement;
+        };
+        const variantCheckbox = (name: string) => sectionCheckbox('Apply to variants:', name);
+        const packageCheckbox = (label: string) => sectionCheckbox('Apply to packages:', label);
+
+        // With an empty map (all lookups failed), no incompatibility filtering
+        // applies: selecting a variant leaves every package enabled.
+        await user.click(variantCheckbox('Variant Alpha'));
+
+        expect(packageCheckbox('pkgA@1.0.0').disabled).toBe(false);
+        expect(packageCheckbox('pkgB@1.0.0').disabled).toBe(false);
     });
 });

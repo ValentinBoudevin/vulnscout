@@ -125,7 +125,10 @@ class Packages {
                 vulnerabilities: counts,
                 maxSeverity: severities,
                 source: [...new Set([...pkg.source, ...vulnerabilities.map((vuln) => vuln.found_by).flat()])],
-                variants: [...new Set([...pkg.variants, ...vulnerabilities.flatMap((vuln) => vuln.variants || [])])],
+                // Keep variants package-scoped (from /api/packages enrichment).
+                // vuln.variants is vulnerability-scoped and can include
+                // variants unrelated to this exact package record.
+                variants: pkg.variants,
                 sbom_documents: pkg.sbom_documents,
             };
         });

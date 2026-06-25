@@ -3,7 +3,7 @@
 
 import logging
 
-from ..controllers import PackagesController, VulnerabilitiesController, AssessmentsController
+from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.assessment import Assessment
@@ -20,10 +20,10 @@ class GrypeVulns:
     Support only reading and parsing from JSON format.
     """
 
-    def __init__(self, controllers):
-        self.packagesCtrl: PackagesController = controllers["packages"]
-        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
-        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
+    def __init__(self, controllers: ControllersCache):
+        self.packagesCtrl: PackagesController = controllers.packages
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
+        self.assessmentsCtrl: AssessmentsController = controllers.assessments
 
     @staticmethod
     def _normalize_artifact_name(name: str, purl: Optional[str] = None) -> str:

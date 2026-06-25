@@ -4,8 +4,7 @@
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.assessment import Assessment
-from ..controllers import PackagesController, VulnerabilitiesController, AssessmentsController
-from ..helpers.verbose import verbose
+from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
 from uuid_extensions import uuid7
 from datetime import datetime, timezone
 import re
@@ -18,10 +17,10 @@ class OpenVex:
     Support reading, parsing and writing from/to JSON format.
     """
 
-    def __init__(self, controllers):
-        self.packagesCtrl: PackagesController = controllers["packages"]
-        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
-        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
+    def __init__(self, controllers: ControllersCache):
+        self.packagesCtrl: PackagesController = controllers.packages
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
+        self.assessmentsCtrl: AssessmentsController = controllers.assessments
 
     def parse_package_section(self, product: dict) -> Optional[Package]:
         pkg = None
@@ -95,17 +94,8 @@ class OpenVex:
                 self.assessmentsCtrl.add(assess)
 
     def _all_assessments(self) -> list:
-        """Return all assessments from in-memory dict and DB, de-duped by id."""
-        seen: dict = {}
-        for assess_id, assess in self.assessmentsCtrl.assessments.items():
-            seen[assess_id] = assess
-        try:
-            for assess in Assessment.get_all():
-                if str(assess.id) not in seen:
-                    seen[str(assess.id)] = assess
-        except Exception as e:
-            verbose(f"[OpenVex._get_all_assessments] {e}")
-        return list(seen.values())
+        """Return all assessments, de-duped by id and restricted to the export scope."""
+        return self.assessmentsCtrl.get_all()
 
     def to_dict(self, strict_export=False, author=None) -> dict:
         output = {

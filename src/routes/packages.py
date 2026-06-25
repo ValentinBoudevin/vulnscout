@@ -3,6 +3,9 @@
 
 import uuid
 
+from flask import Flask
+from flask.typing import ResponseReturnValue
+
 from ..models.package import Package
 from ..models.scan import Scan
 from ..models.variant import Variant
@@ -17,10 +20,10 @@ from ._scan_queries import _packages_by_scan_ids, _package_rows
 from ._scan_helpers import parse_uuid_or_400
 
 
-def init_app(app):
+def init_app(app: Flask) -> None:
 
     @app.route('/api/packages')
-    def index_pkg():
+    def index_pkg() -> ResponseReturnValue:
         from flask import request
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
@@ -29,12 +32,16 @@ def init_app(app):
             base_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
+            if base_uuid is None:
+                return {"error": "Internal error"}, 500
             compare_uuid, err = parse_uuid_or_400(compare_variant_id, "compare_variant_id")
             if err:
                 return err
+            if compare_uuid is None:
+                return {"error": "Internal error"}, 500
             operation = request.args.get('operation', 'difference')
 
-            def _pkg_ids_for_variant(variant_uuid):
+            def _pkg_ids_for_variant(variant_uuid: uuid.UUID) -> set[uuid.UUID]:
                 return set(db.session.execute(
                     db.select(Package.id)
                     .join(SBOMPackage, Package.id == SBOMPackage.package_id)
@@ -75,6 +82,8 @@ def init_app(app):
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
+            if variant_uuid is None:
+                return {"error": "Internal error"}, 500
             sbom_ids = active_sbom_scan_ids_for_variant(variant_uuid)
             if not sbom_ids:
                 pkgs = []
@@ -88,6 +97,8 @@ def init_app(app):
             project_uuid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
+            if project_uuid is None:
+                return {"error": "Internal error"}, 500
             sbom_ids = active_sbom_scan_ids_for_project(project_uuid)
             if not sbom_ids:
                 pkgs = []
@@ -116,6 +127,7 @@ def init_app(app):
         if pkg_ids:
             enrich_query = (
                 db.select(
+                    Package.id.label("package_id"),
                     Package.name,
                     Package.version,
                     Variant.name.label("variant_name"),
@@ -145,10 +157,11 @@ def init_app(app):
                 enrich_query = enrich_query.where(Variant.project_id == uuid.UUID(project_id))
             rows = db.session.execute(enrich_query).all()
 
-            # Build lookup: "name@version" → {variants: set, sources: set, sbom_documents: set}
+            # Build lookup by package UUID to avoid conflating similarly-named
+            # package rows (e.g. different supplier or near-identical versions).
             meta: dict = {}
             for row in rows:
-                key = f"{row.name}@{row.version}"
+                key = str(row.package_id)
                 if key not in meta:
                     meta[key] = {"variants": set(), "sources": set(), "sbom_documents": set()}
                 if row.variant_name:
@@ -159,7 +172,7 @@ def init_app(app):
                     meta[key]["sbom_documents"].add(row.doc_source_name)
 
             for p in result:
-                key = f"{p['name']}@{p['version']}"
+                key = str(p.get("package_id", ""))
                 info = meta.get(key, {})
                 p["variants"] = sorted(info.get("variants", set()))
                 p["sources"] = sorted(info.get("sources", set()))

@@ -1,5 +1,5 @@
-
 from .assessments import AssessmentsController
+from .conditions_parser import ConditionParser
 from .findings import FindingController
 from .metrics import MetricsController
 from .packages import PackagesController
@@ -10,8 +10,12 @@ from .time_estimates import TimeEstimateController
 from .variants import VariantController
 from .vulnerabilities import VulnerabilitiesController
 
+from .cache import ControllersCache
+from . import scc_engine
+
 __all__ = [
     "AssessmentsController",
+    "ConditionParser",
     "FindingController",
     "MetricsController",
     "PackagesController",
@@ -21,4 +25,5 @@ __all__ = [
     "TimeEstimateController",
     "VariantController",
     "VulnerabilitiesController",
+    "ControllersCache"
 ]

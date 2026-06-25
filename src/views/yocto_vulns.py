@@ -1,7 +1,7 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from ..controllers import PackagesController, VulnerabilitiesController, AssessmentsController
+from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
 from ..models import Package, Vulnerability, Assessment, CVSS
 from ..extensions import batch_session
 from ..helpers.env_vars import get_bool_env
@@ -10,10 +10,10 @@ from ..helpers.datetime_utils import normalize_timestamp_for_sort
 
 class YoctoVulns:
     """GrypeVulns class to handle grype vulnerabilities and parse it"""
-    def __init__(self, controllers):
-        self.packagesCtrl: PackagesController = controllers["packages"]
-        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
-        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
+    def __init__(self, controllers: ControllersCache):
+        self.packagesCtrl: PackagesController = controllers.packages
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
+        self.assessmentsCtrl: AssessmentsController = controllers.assessments
 
     def get_last_assessment(self, assessments):
         if not assessments:

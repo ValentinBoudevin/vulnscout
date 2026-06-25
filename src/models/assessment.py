@@ -4,8 +4,10 @@
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
-from sqlalchemy import orm
-from sqlalchemy.orm import Mapped, relationship, joinedload
+
+from sqlalchemy import orm, Text, DateTime, JSON, ForeignKey
+from sqlalchemy.orm import Mapped, relationship, joinedload, mapped_column
+
 from ..extensions import db, Base
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.verbose import verbose
@@ -109,38 +111,35 @@ class Assessment(Base):
     """
 
     __tablename__ = "assessments"
-
-    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    source = db.Column(db.String, nullable=True)
-    origin = db.Column(db.String, nullable=True)
-    status = db.Column(db.String, nullable=True)
-    simplified_status = db.Column(db.String, nullable=True)
-    status_notes = db.Column(db.Text, nullable=True)
-    justification = db.Column(db.Text, nullable=True)
-    impact_statement = db.Column(db.Text, nullable=True)
-    workaround = db.Column(db.Text, nullable=True)
-    timestamp: Mapped[datetime] = db.Column(
-        db.DateTime(timezone=True),
-        nullable=False,
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    source: Mapped[str | None] = mapped_column()
+    origin: Mapped[str | None] = mapped_column()
+    status: Mapped[str | None] = mapped_column()
+    simplified_status: Mapped[str | None] = mapped_column()
+    status_notes: Mapped[str | None] = mapped_column(Text)
+    justification: Mapped[str | None] = mapped_column(Text)
+    impact_statement: Mapped[str | None] = mapped_column(Text)
+    workaround: Mapped[str | None] = mapped_column(Text)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
-    responses = db.Column(db.JSON, nullable=True)
-    finding_id: Mapped[uuid.UUID | None] = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=True, index=True)
-    variant_id: Mapped[uuid.UUID | None] = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True, index=True)
+    responses: Mapped[list[str] | None] = mapped_column(JSON)
+    finding_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("findings.id"), index=True)
+    variant_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("variants.id"), index=True)
 
-    finding: Mapped["Finding | None"] = relationship("Finding", back_populates="assessments")
-    variant: Mapped["Variant | None"] = relationship("Variant", back_populates="assessments")
+    finding: Mapped["Finding | None"] = relationship(back_populates="assessments")
+    variant: Mapped["Variant | None"] = relationship(back_populates="assessments")
 
     # ------------------------------------------------------------------
     # Transient attributes (initialised by _init_transient)
     # ------------------------------------------------------------------
 
     @orm.reconstructor
-    def _init_on_load(self):
-        """Called by SQLAlchemy when reconstituting from the DB."""
+    def _init_on_load(self) -> None:
         self._init_transient()
 
-    def _init_transient(self):
+    def _init_transient(self) -> None:
         if not hasattr(self, "_vuln_id"):
             self._vuln_id = ""
         if not hasattr(self, "_packages"):
@@ -165,7 +164,7 @@ class Assessment(Base):
         return ""
 
     @vuln_id.setter
-    def vuln_id(self, value: str):
+    def vuln_id(self, value: str) -> None:
         self._vuln_id = value
 
     @property
@@ -180,7 +179,7 @@ class Assessment(Base):
         return []
 
     @packages.setter
-    def packages(self, value):
+    def packages(self, value: list[str]) -> None:
         self._packages = list(value or [])
 
     def __repr__(self) -> str:
@@ -220,7 +219,7 @@ class Assessment(Base):
     # Validation / mutation helpers
     # ==================================================================
 
-    def add_package(self, package) -> bool:
+    def add_package(self, package: str | Package) -> bool:
         """Add a package to the transient package list.
 
         *package* can be a ``'name@version'`` string or a :class:`Package` instance.
@@ -274,7 +273,7 @@ class Assessment(Base):
             return STATUS_OPENVEX_TO_CDX_VEX[self.status] == status
         return False
 
-    def set_status_notes(self, notes: str, append: bool = False):
+    def set_status_notes(self, notes: str, append: bool = False) -> None:
         if append and self.status_notes:
             if notes not in self.status_notes:
                 self.status_notes = self.status_notes + "\n" + notes
@@ -313,7 +312,7 @@ class Assessment(Base):
             return JUSTIFICATION_OPENVEX_TO_CDX_VEX[self.justification] == justification
         return False
 
-    def set_not_affected_reason(self, reason: str, append: bool = False):
+    def set_not_affected_reason(self, reason: str, append: bool = False) -> None:
         if append and self.impact_statement:
             if reason not in self.impact_statement:
                 self.impact_statement = self.impact_statement + "\n" + reason
@@ -335,8 +334,9 @@ class Assessment(Base):
             return True
         return False
 
-    def set_workaround(self, workaround: str, timestamp: Optional[str] = None):
+    def set_workaround(self, workaround: str, timestamp: Optional[str] = None) -> None:
         """Set the workaround text. The timestamp argument is accepted for compatibility but not stored."""
+
         self.workaround = workaround
 
     # ==================================================================
@@ -573,7 +573,11 @@ class Assessment(Base):
         ).scalars().unique().all())
 
     @staticmethod
-    def from_vuln_assessment(assess, finding_id=None, variant_id=None) -> "Assessment":
+    def from_vuln_assessment(
+        assess: "Assessment",
+        finding_id: "uuid.UUID | None" = None,
+        variant_id: "uuid.UUID | None" = None,
+    ) -> "Assessment":
         """Create or update an ``Assessment`` DB record from an Assessment DTO.
 
         Does not commit — callers are expected to be inside batch_session()
@@ -594,7 +598,7 @@ class Assessment(Base):
             existing.finding_id = finding_id or existing.finding_id
             existing.variant_id = variant_id or existing.variant_id
             existing.status = assess.status or existing.status
-            existing.simplified_status = STATUS_TO_SIMPLIFIED.get(existing.status, existing.simplified_status)
+            existing.simplified_status = STATUS_TO_SIMPLIFIED.get(existing.status or "", existing.simplified_status)
             existing.status_notes = assess.status_notes or existing.status_notes
             existing.justification = assess.justification or existing.justification
             existing.impact_statement = assess.impact_statement or existing.impact_statement
@@ -735,8 +739,7 @@ class Assessment(Base):
         justification: Optional[str] = None,
         impact_statement: Optional[str] = None,
         workaround: Optional[str] = None,
-        responses: Optional[list] = None,
-        **_kwargs,
+        responses: Optional[list[str]] = None,
     ) -> "Assessment":
         """Update fields in place, persist the change and return ``self``."""
         if status is not None:

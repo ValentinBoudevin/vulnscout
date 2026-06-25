@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import datetime
+import decimal
 import time
 import os
 import json
@@ -102,9 +103,10 @@ class VulnerabilitiesController:
     safe_url_regex = r"[^a-zA-Z0-9_\-\.]"
     """Regex to remove unsafe characters from URLs."""
 
-    def __init__(self, pkgCtrl: PackagesController):
+    def __init__(self, pkgCtrl: PackagesController, scope=None):
         """Take an instance of PackagesController to resolve package dependencies as parameter."""
         self.packagesCtrl: PackagesController = pkgCtrl
+        self._scope = scope
         self.vulnerabilities: dict[str, Vulnerability] = {}
         """A dictionary of vulnerabilities, indexed by their id."""
         self.alias_registered: dict[str, str] = {}
@@ -138,16 +140,32 @@ class VulnerabilitiesController:
         expensive ``to_dict()`` → ``from_dict()`` serialisation round-trip.
         """
         try:
+            # Loop-invariant: the in-scope package set depends only on the
+            # export scope, not on the vulnerability being processed.
+            allowed = self._scope.package_ids if self._scope is not None else None
             for rec in Vulnerability.get_all():
-                # Populate transient package list from eager-loaded findings
-                for f in (rec.findings or []):
-                    if f.package:
+                # Populate transient package list from eager-loaded findings.
+                # When an export scope is active, only consider findings whose
+                # package is in scope — and skip the vulnerability entirely if
+                # none of its findings touch an in-scope package.
+                if allowed is not None:
+                    in_scope_findings = [
+                        f for f in (rec.findings or [])
+                        if f.package and f.package_id in allowed
+                    ]
+                    if not in_scope_findings:
+                        continue
+                    for f in in_scope_findings:
                         rec.add_package(f.package.string_id)
+                else:
+                    for f in (rec.findings or []):
+                        if f.package:
+                            rec.add_package(f.package.string_id)
                 # Populate transient CVSS list from eager-loaded metrics
                 for m in (rec.metrics or []):
                     try:
                         _cvss = CVSS(
-                            m.version,
+                            m.version or "",
                             m.vector or "",
                             m.author or "unknown",
                             float(m.score) if m.score is not None else 0.0,
@@ -189,6 +207,9 @@ class VulnerabilitiesController:
             return self.vulnerabilities[vuln_id]
         if vuln_id in self.alias_registered:
             return self.vulnerabilities[self.alias_registered[vuln_id]]
+        if self._scope is not None:
+            # Scoped export: only resolve vulns already loaded in scope.
+            return None
         # Fall back to DB
         try:
             rec = Vulnerability.get_by_id(vuln_id)
@@ -373,9 +394,12 @@ class VulnerabilitiesController:
                     vuln.set_epss(result['score'], result['percentile'])
                     rec = self._db_record_cache.get(cve_id) or Vulnerability.get_by_id(cve_id)
                     if rec is not None:
+                        now = datetime.datetime.utcnow()
+                        new_score = decimal.Decimal(str(result['score']))
                         rec.update_record(
-                            epss_score=result['score'],
-                            epss_fetched_at=datetime.datetime.utcnow(),
+                            epss_score=new_score,
+                            epss_fetched_at=now,
+                            epss_data_updated_at=now,
                             commit=False,
                         )
                     nb_vuln += 1
@@ -409,10 +433,8 @@ class VulnerabilitiesController:
             with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode("utf-8"))
                 return data.get("published_at")
-        except urllib.error.HTTPError as e:
-            print(f"Error for {vuln_id}: {e.code}")
-        except urllib.error.URLError as e:
-            print(f"Error for {vuln_id}: {e.reason}")
+        except (urllib.error.HTTPError, urllib.error.URLError):
+            raise
         except Exception as e:
             print(f"Error for {vuln_id}: {e}")
         return None
@@ -536,6 +558,7 @@ class VulnerabilitiesController:
                                 patch_url=vuln.patch_url,
                                 nvd_last_modified=vuln.nvd_last_modified,
                                 nvd_fetched_at=datetime.datetime.utcnow(),
+                                nvd_data_updated_at=datetime.datetime.utcnow(),
                                 commit=False,
                             )
                     except Exception as e:
@@ -568,7 +591,8 @@ class VulnerabilitiesController:
                                 if rec is not None:
                                     rec.update_record(
                                         publish_date=publish_date,
-                                        nvd_fetched_at=datetime.datetime.utcnow(),
+                                        ghsa_fetched_at=datetime.datetime.utcnow(),
+                                        ghsa_data_updated_at=datetime.datetime.utcnow(),
                                         commit=False,
                                     )
                             except Exception as e:
@@ -666,6 +690,9 @@ class VulnerabilitiesController:
         """
         if self.vulnerabilities:
             yield from self.vulnerabilities.values()
+            return
+        if self._scope is not None:
+            # Scoped export: never fall back to the global vulnerability set.
             return
         try:
             for record in Vulnerability.get_all():

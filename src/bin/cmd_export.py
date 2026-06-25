@@ -4,23 +4,23 @@
 
 from __future__ import annotations
 
-from ..controllers.vulnerabilities import VulnerabilitiesController
+from ..controllers import ControllersCache, VulnerabilitiesController
+from ..controllers.projects import ProjectController
+from ..models.variant import Variant as DBVariant
 from ..views.spdx import SPDX
 from ..views.spdx3 import SPDX3
 from ..views.cyclonedx import CycloneDx
 from ..views.openvex import OpenVex
 from ..views.templates import Templates
 from .cmd_process import evaluate_condition
-from ._common import get_default_author, build_controllers
+from ._common import get_default_author
+from ..helpers.export_scope import compute_export_scope
 from datetime import date as _date
 import click
 import json
 import os
-from typing import TYPE_CHECKING
+import uuid
 from flask.cli import with_appcontext
-
-if TYPE_CHECKING:
-    from ..controllers.packages import PackagesController
 
 
 @click.command("export")
@@ -29,10 +29,60 @@ if TYPE_CHECKING:
               show_default=True, help="Output format.")
 @click.option("--output-dir", default="/scan/outputs", show_default=True,
               help="Directory where the exported file is written.")
+@click.option("--project", "-p", default=None,
+              help="Project name. When set, the export is scoped to this project.")
+@click.option("--variant", "-v", default=None,
+              help="Variant name. When omitted, all variants of the project are exported.")
+@click.option("--variant-id", "variant_id", default=None,
+              help="Variant UUID. Takes precedence over --project/--variant and "
+                   "resolves the variant unambiguously (use when variant names "
+                   "are not unique within a project).")
 @with_appcontext
-def export_command(export_format: str, output_dir: str) -> None:
+def export_command(
+    export_format: str,
+    output_dir: str,
+    project: str | None,
+    variant: str | None,
+    variant_id: str | None,
+) -> None:
     """Export the current project data as an SBOM (SPDX, CycloneDX, or OpenVEX)."""
-    ctrls = build_controllers(preload_cache=True)
+    # Resolve the optional project/variant scope so the export only contains
+    # the packages/vulnerabilities/assessments of the selected variant (or all
+    # variants of the project when only --project is given).  A missing
+    # project/variant is non-fatal: we warn and fall back to a global export so
+    # existing pipelines keep working.
+    scope = None
+    if variant_id:
+        # Exact-UUID scoping (used by the Grype trigger).  Avoids the ambiguity
+        # of resolving a variant by name when several variants share the same
+        # name within a project.
+        try:
+            vid = uuid.UUID(str(variant_id))
+        except (ValueError, TypeError):
+            click.echo(f"Warning: invalid variant id '{variant_id}'; exporting all data.", err=True)
+        else:
+            if DBVariant.get_by_id(vid) is None:
+                click.echo(f"Warning: variant id '{variant_id}' not found; exporting all data.", err=True)
+            else:
+                scope = compute_export_scope(variant_id=vid)
+    elif project:
+        project_obj = ProjectController.get_by_name(project)
+        if project_obj is None:
+            click.echo(f"Warning: project '{project}' not found; exporting all data.", err=True)
+        elif variant:
+            variant_obj = DBVariant.get_by_name_and_project(variant, project_obj.id)
+            if variant_obj is None:
+                click.echo(
+                    f"Warning: variant '{variant}' not found in project '{project}'; "
+                    f"exporting the whole project.", err=True)
+                scope = compute_export_scope(project_id=project_obj.id)
+            else:
+                scope = compute_export_scope(variant_id=variant_obj.id)
+        else:
+            scope = compute_export_scope(project_id=project_obj.id)
+
+    ctrls = ControllersCache(scope=scope)
+    ctrls.packages._preload_cache()
     author = get_default_author()
 
     os.makedirs(output_dir, exist_ok=True)
@@ -84,27 +134,15 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
     Also honours the GENERATE_DOCUMENTS env var (comma-separated list) when
     invoked; TEMPLATE_NAME is always generated regardless.
     """
-    controllers = build_controllers()
-    vulnCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
-    pkgCtrl: PackagesController = controllers["packages"]
-    vulnCtrl = VulnerabilitiesController.from_dict(pkgCtrl, vulnCtrl.to_dict())
-    controllers["vulnerabilities"] = vulnCtrl
-
-    from ..controllers.projects import ProjectController
-    from ..controllers.variants import VariantController
-    from ..controllers.scans import ScanController
-    from ..controllers.sbom_documents import SBOMDocumentController
-    controllers.update({
-        "projects": ProjectController,
-        "variants": VariantController,
-        "scans": ScanController,
-        "sbom_documents": SBOMDocumentController,
-    })
+    controllers = ControllersCache()
+    controllers.vulnerabilities = VulnerabilitiesController.from_dict(
+        controllers.packages, controllers.vulnerabilities.to_dict()
+    )
     templ = Templates(controllers)
 
     # Reuse failed_vulns from flask process if available, otherwise evaluate now
     match_condition = os.getenv("MATCH_CONDITION", "")
-    failed_vulns: list = []
+    failed_vulns: list | None = None
     if match_condition:
         cache_path = "/tmp/vulnscout_matched_vulns.json"
         if os.path.exists(cache_path):
@@ -112,9 +150,10 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
                 with open(cache_path) as _f:
                     failed_vulns = json.load(_f)
             except Exception:
-                failed_vulns = evaluate_condition(controllers, match_condition)
-        else:
-            failed_vulns = evaluate_condition(controllers, match_condition)
+                pass  # TODO log error somewhere?
+
+        if failed_vulns is None:
+            failed_vulns = evaluate_condition(controllers.vulnerabilities, controllers.assessments, match_condition)
 
     metadata = {
         "author": get_default_author(),
@@ -123,7 +162,7 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
         "ignore_before": "1970-01-01T00:00",
         "only_epss_greater": 0.0,
         "scan_date": "unknown date",
-        "failed_vulns": failed_vulns,
+        "failed_vulns": failed_vulns or [],
         "match_condition": match_condition,
     }
 

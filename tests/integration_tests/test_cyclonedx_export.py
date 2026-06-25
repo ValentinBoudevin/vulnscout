@@ -9,20 +9,14 @@ from src.models.package import Package
 from src.models.vulnerability import Vulnerability
 from src.models.cvss import CVSS
 from src.models.assessment import Assessment, VALID_STATUS_CDX_VEX, VALID_JUSTIFICATION_CDX_VEX
-from src.controllers.packages import PackagesController
-from src.controllers.vulnerabilities import VulnerabilitiesController
-from src.controllers.assessments import AssessmentsController
+from src.controllers import ControllersCache
 from datetime import datetime
 import json
 
 
 @pytest.fixture
 def cdx_exporter():
-    controllers = {}
-    controllers["packages"] = PackagesController()
-    controllers["vulnerabilities"] = VulnerabilitiesController(controllers["packages"])
-    controllers["assessments"] = AssessmentsController(controllers["packages"], controllers["vulnerabilities"])
-    return CycloneDx(controllers)
+    return CycloneDx(ControllersCache())
 
 
 def test_export_empty_json(cdx_exporter):

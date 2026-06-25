@@ -10,6 +10,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.17.0] - 2026-06-25
+
+### Added
+- Scan: add sbom-cve-check integration across CLI, API, and UI with local DB sync support.
+- Scan: add button to deactivate kernel module parsing; exclude kernel modules from scanner inputs.
+- Settings: support tar archive import.
+- GHSA: add refresh functionality and progress tracking; add per-advisory fetch.
+- Settings: new tab to copy custom assessments between variants.
+- Export: scope SBOM exports to a project or variant.
+- Vulnerabilities: add `ghsa_fetched_at`, `epss_data_updated_at`, and `ghsa_data_updated_at` columns; unify `data_fetched_at` / `data_updated_at` in Vulnerability model.
+
+### Changed
+- Settings: split page into categories; redesign tabs and sections.
+- Scan: redesign scan history.
+- Unify NVD/GHSA columns to Last Fetched / Last Updated; rename column label from 'Last Updated' to 'Last Assessed'.
+- Refactor: replace controllers dict with a cache object.
+- Typing: add TypedDicts for observations and findings; annotate routes, helpers, models, middlewares, and extensions; type effort as named tuple.
+- Vulnerability action bar always visible.
+- Enhance refresh banners with source-specific messages and failure counts.
+
+### Fixed
+- Attribute source from exact per-document provenance.
+- Keep track of scan status after web dashboard refresh.
+- Drop OpenEmbedded supplier from packages.
+- Metrics: count each vulnerability once per status.
+- Key package enrichment by UUID and scope variants.
+- Prevent selecting incompatible variant/pkg pairs in assessments.
+- Disable NVD and EPSS refresh when no CVE is selected.
+- Support CPE referenceType as full URI in SPDX parsing.
+
+---
+
 ## [0.16.2] - 2026-06-12
 
 ### Fixed

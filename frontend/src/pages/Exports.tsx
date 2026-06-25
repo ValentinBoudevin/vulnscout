@@ -30,7 +30,7 @@ const asExportDoc = (data: any): ExportDoc | [] => {
 }
 
 
-function Exports () {
+function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; projectId?: string }>) {
     const [tab, setTab] = useState<string>("all");
     const [docs, setDocs] = useState<ExportDoc[]>([]);
     const [openDl, setOpenDl] = useState<string | null>(null);
@@ -96,6 +96,8 @@ function Exports () {
         name={doc.id}
         key={encodeURIComponent(doc.id)}
         extension={doc.extension}
+        variantId={variantId}
+        projectId={projectId}
         opened={openDl === doc.id}
         onOpen={() => openDl === doc.id ? setOpenDl(null) : setOpenDl(doc.id)}
       />
@@ -106,7 +108,7 @@ function Exports () {
         <div className="text-lg font-medium">No documents found</div>
         {tab === 'custom' && (
           <div className="mt-2 text-sm">
-            You can upload your own templates in 
+            You can upload your own templates in
             <code className="p-1 mx-1 bg-white/10 rounded">.vulnscout/templates</code>
           </div>
         )}

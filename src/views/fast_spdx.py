@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from ..models.package import Package
-from ..controllers.packages import PackagesController
-from ..controllers.vulnerabilities import VulnerabilitiesController
-from ..controllers.assessments import AssessmentsController
+from ..controllers import ControllersCache, VulnerabilitiesController, PackagesController, AssessmentsController
 
 
 class FastSPDX ():
@@ -13,10 +11,10 @@ class FastSPDX ():
     Also support output to SPDX SBOM format.
     """
 
-    def __init__(self, controllers):
-        self.packagesCtrl: PackagesController = controllers["packages"]
-        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
-        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
+    def __init__(self, controllers: ControllersCache):
+        self.packagesCtrl: PackagesController = controllers.packages
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
+        self.assessmentsCtrl: AssessmentsController = controllers.assessments
 
     def _check_spdx_version(self, sbom: dict):
         """Check if the SPDX version is supported."""
@@ -46,7 +44,7 @@ class FastSPDX ():
                 purl = _get_field(external_ref, ["referenceLocator"])
                 if isinstance(purl, str):
                     package.add_purl(purl)
-            elif ref_type == "cpe23Type":
+            elif ref_type in ("cpe23Type", "http://spdx.org/rdf/references/cpe23Type"):
                 cpe = _get_field(external_ref, ["referenceLocator"])
                 if isinstance(cpe, str):
                     package.add_cpe(cpe)

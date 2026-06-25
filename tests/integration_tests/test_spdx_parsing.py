@@ -5,19 +5,13 @@
 
 import pytest
 from src.views.spdx import SPDX
-from src.controllers.packages import PackagesController
-from src.controllers.vulnerabilities import VulnerabilitiesController
-from src.controllers.assessments import AssessmentsController
+from src.controllers import ControllersCache
 import json
 
 
 @pytest.fixture
 def spdx_parser():
-    controllers = {}
-    controllers["packages"] = PackagesController()
-    controllers["vulnerabilities"] = VulnerabilitiesController(controllers["packages"])
-    controllers["assessments"] = AssessmentsController(controllers["packages"], controllers["vulnerabilities"])
-    return SPDX(controllers)
+    return SPDX(ControllersCache())
 
 
 @pytest.fixture
@@ -207,6 +201,42 @@ def test_parse_cpe23type_externalrefs(spdx_parser):
 
     # PURL must also be parsed
     assert "pkg:deb/ubuntu/libtasn1-6@4.13-2?arch=arm64" in pkg.purl
+
+
+def test_parse_cpe23type_uri_reference_type(spdx_parser):
+    """referenceType as full URI 'http://spdx.org/rdf/references/cpe23Type' (SPDX 2.2) must be accepted."""
+    spdx_parser.load_from_dict({
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "name": "test",
+        "spdxVersion": "SPDX-2.2",
+        "creationInfo": {"created": "2022-11-03T07:10:10Z", "creators": ["Tool: test"]},
+        "dataLicense": "CC0-1.0",
+        "documentNamespace": "https://example.com/test",
+        "packages": [
+            {
+                "SPDXID": "SPDXRef-linux-kernel",
+                "name": "linux-jammy-nvidia-tegra",
+                "versionInfo": "5.15.148+git",
+                "filesAnalyzed": False,
+                "downloadLocation": "NOASSERTION",
+                "externalRefs": [
+                    {
+                        "referenceCategory": "SECURITY",
+                        "referenceType": "http://spdx.org/rdf/references/cpe23Type",
+                        "referenceLocator": "cpe:2.3:*:*:linux_kernel:5.15.148:*:*:*:*:*:*:*"
+                    }
+                ]
+            }
+        ]
+    })
+    spdx_parser.parse_and_merge()
+
+    # spdx_tools normalizes "5.15.148+git" → "5.15.148"
+    pkg = spdx_parser.packagesCtrl.get("linux-jammy-nvidia-tegra@5.15.148")
+    assert pkg is not None
+
+    assert "cpe:2.3:*:*:linux_kernel:5.15.148:*:*:*:*:*:*:*" in pkg.cpe
+    assert pkg.cpe[0] == "cpe:2.3:*:*:linux_kernel:5.15.148:*:*:*:*:*:*:*"
 
 
 def test_parse_no_cpe23type_still_gets_generic(spdx_parser):

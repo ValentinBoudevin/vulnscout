@@ -5,7 +5,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
+
 import click
 
 if TYPE_CHECKING:
@@ -74,33 +75,3 @@ def resolve_project_variant(project: str, variant: str | None, *, create: bool =
         variant_obj = _var
 
     return project_obj, variant_obj
-
-
-def build_controllers(*, preload_cache: bool = False) -> dict[str, Any]:
-    """Build the standard controllers dict used by most CLI commands.
-
-    Parameters
-    ----------
-    preload_cache:
-        When *True*, call ``PackagesController._preload_cache()`` to bulk-load
-        package UUIDs and findings into memory.
-
-    Returns
-    -------
-    dict with ``"packages"``, ``"vulnerabilities"``, ``"assessments"`` keys.
-    """
-    from ..controllers.packages import PackagesController
-    from ..controllers.vulnerabilities import VulnerabilitiesController
-    from ..controllers.assessments import AssessmentsController
-
-    pkgCtrl = PackagesController()
-    if preload_cache:
-        pkgCtrl._preload_cache()
-    vulnCtrl = VulnerabilitiesController(pkgCtrl)
-    assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
-
-    return {
-        "packages": pkgCtrl,
-        "vulnerabilities": vulnCtrl,
-        "assessments": assessCtrl,
-    }

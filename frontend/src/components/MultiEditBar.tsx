@@ -1,4 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faXmark, faPenToSquare, faClock, faArrowsRotate, faChevronDown } from '@fortawesome/free-solid-svg-icons';
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { buildStatusSummary } from "../handlers/vulnerabilities";
 import StatusEditor from "./StatusEditor";
@@ -8,9 +10,10 @@ import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import { asAssessment, Assessment } from "../handlers/assessments";
 import Iso8601Duration from '../handlers/iso8601duration';
 import Variants from '../handlers/variant';
-import { BulkNvdRefreshHandler, BulkEpssRefreshHandler, BulkNvdRefreshCancelHandler, BulkEpssRefreshCancelHandler } from "../handlers/bulkRefresh";
+import { BulkNvdRefreshHandler, BulkEpssRefreshHandler, BulkNvdRefreshCancelHandler, BulkEpssRefreshCancelHandler, BulkGhsaRefreshHandler, BulkGhsaRefreshCancelHandler } from "../handlers/bulkRefresh";
 import type { NVDProgress } from "../handlers/nvd_progress";
 import type { EPSSProgress } from "../handlers/epss_progress";
+import type { GHSAProgress } from "../handlers/ghsa_progress";
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -18,7 +21,7 @@ type Props = {
     resetVulns: () => void;
     appendAssessment: (added: Assessment) => void;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
-    triggerBanner: (message: string, type: 'error' | 'success') => void;
+    triggerBanner: (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa', refreshActivity?: boolean) => void;
     hideBanner: () => void;
     variantId?: string;
     /** Origin variant when compare mode is active */
@@ -27,9 +30,10 @@ type Props = {
     compareOperation?: string;
     nvdProgress?: NVDProgress | null;
     epssProgress?: EPSSProgress | null;
+    ghsaProgress?: GHSAProgress | null;
 };
 
-function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, variantId, baseVariantId, compareOperation, nvdProgress, epssProgress} : Readonly<Props>) {
+function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, variantId, baseVariantId, compareOperation, nvdProgress, epssProgress, ghsaProgress} : Readonly<Props>) {
 
     const [panelOpened, setPanelOpened] = useState<number>(0)
     const [isLoading, setIsLoading] = useState<boolean>(false)
@@ -37,10 +41,12 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     const [isAllVariantsMode, setIsAllVariantsMode] = useState<boolean>(false)
     const [nvdCancelling, setNvdCancelling] = useState<boolean>(false)
     const [epssCancelling, setEpssCancelling] = useState<boolean>(false)
+    const [ghsaCancelling, setGhsaCancelling] = useState<boolean>(false)
     const [refreshMenuOpen, setRefreshMenuOpen] = useState<boolean>(false)
-    const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<'nvd' | 'epss'>>(new Set(['nvd', 'epss']))
+    const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<'nvd' | 'epss' | 'ghsa'>>(new Set(['nvd', 'epss', 'ghsa']))
     const refreshMenuRef = useRef<HTMLDivElement>(null)
     const loadingLabel = selectedVulns.length === 1 ? 'Editing selected CVE...' : 'Editing selected CVEs...'
+    const hasSelection = selectedVulns.length >= 1
     const closePanel = () => {
         if (!isLoading) setPanelOpened(0)
     }
@@ -77,6 +83,10 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     }, [epssProgress?.in_progress]);
 
     useEffect(() => {
+        if (!ghsaProgress?.in_progress) setGhsaCancelling(false);
+    }, [ghsaProgress?.in_progress]);
+
+    useEffect(() => {
         function handleClickOutside(e: MouseEvent) {
             if (refreshMenuRef.current && !refreshMenuRef.current.contains(e.target as Node)) {
                 setRefreshMenuOpen(false);
@@ -88,7 +98,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         }
     }, [refreshMenuOpen]);
 
-    function toggleRefreshType(type: 'nvd' | 'epss') {
+    function toggleRefreshType(type: 'nvd' | 'epss' | 'ghsa') {
         setSelectedRefreshTypes(prev => {
             const next = new Set(prev);
             if (next.has(type)) next.delete(type); else next.add(type);
@@ -98,30 +108,44 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
 
     const nvdInProgress = nvdProgress?.in_progress ?? false;
     const epssInProgress = epssProgress?.in_progress ?? false;
+    const ghsaInProgress = ghsaProgress?.in_progress ?? false;
+    const selectedGhsaIds = selectedVulns.filter(id => id.toUpperCase().startsWith('GHSA-'));
+    const hasGhsaIds = selectedGhsaIds.length > 0;
+    const selectedCveIds = selectedVulns.filter(id => id.toUpperCase().startsWith('CVE-'));
+    const hasCveIds = selectedCveIds.length > 0;
 
     // Number of selected targets that are not currently refreshing (actionable)
-    const actionableRefreshCount = (selectedRefreshTypes.has('nvd') && !nvdInProgress ? 1 : 0)
-        + (selectedRefreshTypes.has('epss') && !epssInProgress ? 1 : 0);
+    const actionableRefreshCount = (selectedRefreshTypes.has('nvd') && !nvdInProgress && hasCveIds ? 1 : 0)
+        + (selectedRefreshTypes.has('epss') && !epssInProgress && hasCveIds ? 1 : 0)
+        + (selectedRefreshTypes.has('ghsa') && !ghsaInProgress && hasGhsaIds ? 1 : 0);
 
     const allSelectedRefreshing = selectedRefreshTypes.size === 0 || actionableRefreshCount === 0;
 
     function handleRefresh() {
         hideBanner();
         const promises: Promise<void>[] = [];
-        if (selectedRefreshTypes.has('nvd') && !nvdInProgress) {
+        if (selectedRefreshTypes.has('nvd') && !nvdInProgress && hasCveIds) {
             promises.push(
-                BulkNvdRefreshHandler.trigger(selectedVulns).then(res => {
-                    if (res) triggerBanner(`NVD refresh started for ${res.total} CVE(s)`, 'success');
-                    else triggerBanner('Failed to start NVD refresh', 'error');
-                }).catch(() => triggerBanner('Failed to start NVD refresh', 'error'))
+                BulkNvdRefreshHandler.trigger(selectedCveIds).then(res => {
+                    if (res) triggerBanner(`NVD refresh started for ${res.total} CVE(s)`, 'success', 'nvd', true);
+                    else triggerBanner('Failed to start NVD refresh', 'error', 'nvd');
+                }).catch(() => triggerBanner('Failed to start NVD refresh', 'error', 'nvd'))
             );
         }
-        if (selectedRefreshTypes.has('epss') && !epssInProgress) {
+        if (selectedRefreshTypes.has('epss') && !epssInProgress && hasCveIds) {
             promises.push(
-                BulkEpssRefreshHandler.trigger(selectedVulns).then(res => {
-                    if (res) triggerBanner(`EPSS refresh started for ${res.total} CVE(s)`, 'success');
-                    else triggerBanner('Failed to start EPSS refresh', 'error');
-                }).catch(() => triggerBanner('Failed to start EPSS refresh', 'error'))
+                BulkEpssRefreshHandler.trigger(selectedCveIds).then(res => {
+                    if (res) triggerBanner(`EPSS refresh started for ${res.total} CVE(s)`, 'success', 'epss', true);
+                    else triggerBanner('Failed to start EPSS refresh', 'error', 'epss');
+                }).catch(() => triggerBanner('Failed to start EPSS refresh', 'error', 'epss'))
+            );
+        }
+        if (selectedRefreshTypes.has('ghsa') && !ghsaInProgress && selectedGhsaIds.length > 0) {
+            promises.push(
+                BulkGhsaRefreshHandler.trigger(selectedGhsaIds).then(res => {
+                    if (res) triggerBanner(`GHSA refresh started for ${res.total} GHSA(s)`, 'success', 'ghsa', true);
+                    else triggerBanner('Failed to start GHSA refresh', 'error', 'ghsa');
+                }).catch(() => triggerBanner('Failed to start GHSA refresh', 'error', 'ghsa'))
             );
         }
         if (promises.length > 0) setRefreshMenuOpen(false);
@@ -393,51 +417,105 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     }
 
     return (<>
-        {selectedVulns.length >= 1 && <>
-            {panelOpened > 0 && (
-                <div
-                    data-testid="multi-edit-backdrop"
-                    className="fixed inset-0 z-30 bg-black/40"
-                    onMouseDown={closePanel}
-                ></div>
-            )}
+        {panelOpened > 0 && (
+            <div
+                data-testid="multi-edit-backdrop"
+                className="fixed inset-0 z-30 bg-black/40"
+                onMouseDown={closePanel}
+            ></div>
+        )}
 
-            {isLoading && (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
-                    <div className="flex flex-col items-center gap-3 text-white">
-                        <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
-                        <span className="text-sm font-semibold">{loadingLabel}</span>
-                    </div>
+        {isLoading && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="flex flex-col items-center gap-3 text-white">
+                    <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-sm font-semibold">{loadingLabel}</span>
                 </div>
-            )}
+            </div>
+        )}
 
-            <div className="relative mb-4 z-40 w-full">
-                <div className="bg-slate-600/70 text-white w-full">
-                    <div className="p-2 flex flex-row items-center gap-2">
-                        <div>Selected vulnerabilities: {selectedVulns.length}</div>
-                        <button className="bg-sky-900 p-1 px-2 mr-4" onClick={() => { hideBanner(); resetVulns(); }}>Reset selection</button>
+        <div className="relative mb-4 z-40 w-full">
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-cyan-600/40 bg-gradient-to-r from-cyan-800 via-sky-800 to-sky-900 px-3 py-2 shadow-lg ring-1 ring-black/10">
 
-                        <button className="bg-sky-900 p-1 px-2" onClick={() => { hideBanner(); setPanelOpened(panelOpened == 1 ? 0 : 1); }}>Change status</button>
-                        <button className="bg-sky-900 p-1 px-2 mr-4" onClick={() => { hideBanner(); setPanelOpened(panelOpened == 2 ? 0 : 2); }}>Change estimated time</button>
+                {/* Selection summary */}
+                <div className="flex items-center gap-2 pr-3 mr-1 border-r border-white/15">
+                    <span className={[
+                        "inline-flex items-center justify-center min-w-[1.75rem] h-7 px-2 rounded-full text-sm font-bold transition-colors",
+                        hasSelection ? "bg-cyan-400 text-cyan-950" : "bg-white/15 text-white/70"
+                    ].join(' ')} data-testid="selected-vulns-count">
+                        {selectedVulns.length}
+                    </span>
+                    <span className="text-sm font-medium text-cyan-50 whitespace-nowrap">
+                        Selected vulnerabilities
+                    </span>
+                </div>
 
-                        {/* Refresh dropdown */}
-                        <div className="relative" ref={refreshMenuRef}>
-                            <button
-                                data-testid="refresh-dropdown-toggle"
-                                className="bg-sky-900 p-1 px-2 flex items-center gap-1"
-                                onClick={() => setRefreshMenuOpen(o => !o)}
-                                title="Select databases to fetch latest vulnerability data from"
-                            >
-                                Refresh Vulnerability Data
-                                {(nvdInProgress || epssInProgress) && (
-                                    <span className="inline-block w-2 h-2 rounded-full bg-cyan-400 animate-pulse ml-1" title="Refresh in progress" />
-                                )}
-                                <span className="ml-1">▾</span>
-                            </button>
+                {/* Reset selection */}
+                <button
+                    className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-white bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/10"
+                    disabled={!hasSelection}
+                    onClick={() => { hideBanner(); resetVulns(); }}
+                >
+                    <FontAwesomeIcon icon={faXmark} />
+                    Reset selection
+                </button>
 
-                            {refreshMenuOpen && (
-                                <div className="absolute left-0 top-full mt-1 z-50 w-64 rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-3">
-                                    <div className="text-xs font-semibold text-sky-300 mb-2">Fetch latest data from:</div>
+                <div className="w-px h-6 bg-white/15 mx-1"></div>
+
+                {/* Change status */}
+                <button
+                    className={[
+                        "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-semibold transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed",
+                        panelOpened === 1
+                            ? "border-cyan-300/80 bg-cyan-300 text-cyan-950 shadow-sm shadow-cyan-950/20 hover:bg-cyan-200"
+                            : "border-white/20 text-cyan-50 bg-white/10 hover:bg-white/20 hover:border-white/35 disabled:hover:bg-white/10"
+                    ].join(' ')}
+                    disabled={!hasSelection}
+                    aria-pressed={panelOpened === 1}
+                    onClick={() => { hideBanner(); setPanelOpened(panelOpened == 1 ? 0 : 1); }}
+                >
+                    <FontAwesomeIcon icon={faPenToSquare} />
+                    Change status
+                </button>
+
+                {/* Change estimated time */}
+                <button
+                    className={[
+                        "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-semibold transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed",
+                        panelOpened === 2
+                            ? "border-cyan-300/80 bg-cyan-300 text-cyan-950 shadow-sm shadow-cyan-950/20 hover:bg-cyan-200"
+                            : "border-white/20 text-cyan-50 bg-white/10 hover:bg-white/20 hover:border-white/35 disabled:hover:bg-white/10"
+                    ].join(' ')}
+                    disabled={!hasSelection}
+                    aria-pressed={panelOpened === 2}
+                    onClick={() => { hideBanner(); setPanelOpened(panelOpened == 2 ? 0 : 2); }}
+                >
+                    <FontAwesomeIcon icon={faClock} />
+                    Change time estimate
+                </button>
+
+                <div className="w-px h-6 bg-white/15 mx-1"></div>
+
+                {/* Refresh dropdown */}
+                <div className="relative" ref={refreshMenuRef}>
+                    <button
+                        data-testid="refresh-dropdown-toggle"
+                        className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-white bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/10"
+                        disabled={!hasSelection && !(nvdInProgress || epssInProgress || ghsaInProgress)}
+                        onClick={() => setRefreshMenuOpen(o => !o)}
+                        title="Select databases to fetch latest vulnerability data from"
+                    >
+                        <FontAwesomeIcon icon={faArrowsRotate} className={(nvdInProgress || epssInProgress || ghsaInProgress) ? 'animate-spin' : ''} />
+                        Refresh Vulnerability Data
+                        {(nvdInProgress || epssInProgress || ghsaInProgress) && (
+                            <span className="inline-block w-2 h-2 rounded-full bg-cyan-300 animate-pulse ml-0.5" title="Refresh in progress" />
+                        )}
+                        <FontAwesomeIcon icon={faChevronDown} className="ml-0.5 text-xs" />
+                    </button>
+
+                    {refreshMenuOpen && (
+                        <div className="absolute left-0 top-full mt-1 z-50 w-64 rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-3">
+                            <div className="text-xs font-semibold text-sky-300 mb-2">Fetch latest data from:</div>
 
                                     {/* NVD row */}
                                     <div className="flex items-center justify-between py-1 px-1 rounded hover:bg-sky-900/40">
@@ -450,10 +528,13 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                                     aria-label="NVD"
                                                     checked={selectedRefreshTypes.has('nvd')}
                                                     onChange={() => toggleRefreshType('nvd')}
-                                                    className="rounded accent-cyan-500"
+                                                    disabled={!hasCveIds}
+                                                    className="rounded accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
                                                 />
                                             )}
-                                            NVD
+                                            <span className={!hasCveIds && !nvdInProgress ? 'opacity-40' : ''}>
+                                                NVD {!hasCveIds && !nvdInProgress && <span className="text-xs text-neutral-400">(no CVE  selected)</span>}
+                                            </span>
                                         </div>
                                         {nvdInProgress && (
                                             <button
@@ -464,9 +545,9 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                                 onClick={() => {
                                                     setNvdCancelling(true);
                                                     BulkNvdRefreshCancelHandler.trigger().then(res => {
-                                                        if (res) triggerBanner('NVD refresh cancellation requested', 'success');
-                                                        else { setNvdCancelling(false); triggerBanner('Failed to cancel NVD refresh', 'error'); }
-                                                    }).catch(() => { setNvdCancelling(false); triggerBanner('Failed to cancel NVD refresh', 'error'); });
+                                                        if (res) triggerBanner('NVD refresh cancellation requested', 'success', 'nvd', true);
+                                                        else { setNvdCancelling(false); triggerBanner('Failed to cancel NVD refresh', 'error', 'nvd'); }
+                                                    }).catch(() => { setNvdCancelling(false); triggerBanner('Failed to cancel NVD refresh', 'error', 'nvd'); });
                                                 }}
                                             >{nvdCancelling ? 'Cancelling…' : 'Cancel'}</button>
                                         )}
@@ -483,10 +564,13 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                                     aria-label="EPSS"
                                                     checked={selectedRefreshTypes.has('epss')}
                                                     onChange={() => toggleRefreshType('epss')}
-                                                    className="rounded accent-cyan-500"
+                                                    disabled={!hasCveIds}
+                                                    className="rounded accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
                                                 />
                                             )}
-                                            EPSS
+                                            <span className={!hasCveIds && !epssInProgress ? 'opacity-40' : ''}>
+                                                EPSS {!hasCveIds && !epssInProgress && <span className="text-xs text-neutral-400">(no CVE selected)</span>}
+                                            </span>
                                         </div>
                                         {epssInProgress && (
                                             <button
@@ -497,11 +581,47 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                                 onClick={() => {
                                                     setEpssCancelling(true);
                                                     BulkEpssRefreshCancelHandler.trigger().then(res => {
-                                                        if (res) triggerBanner('EPSS refresh cancellation requested', 'success');
-                                                        else { setEpssCancelling(false); triggerBanner('Failed to cancel EPSS refresh', 'error'); }
-                                                    }).catch(() => { setEpssCancelling(false); triggerBanner('Failed to cancel EPSS refresh', 'error'); });
+                                                        if (res) triggerBanner('EPSS refresh cancellation requested', 'success', 'epss', true);
+                                                        else { setEpssCancelling(false); triggerBanner('Failed to cancel EPSS refresh', 'error', 'epss'); }
+                                                    }).catch(() => { setEpssCancelling(false); triggerBanner('Failed to cancel EPSS refresh', 'error', 'epss'); });
                                                 }}
                                             >{epssCancelling ? 'Cancelling…' : 'Cancel'}</button>
+                                        )}
+                                    </div>
+
+                                    {/* GHSA row */}
+                                    <div className="flex items-center justify-between py-1 px-1 rounded hover:bg-sky-900/40">
+                                        <div className="flex items-center gap-2 text-sm text-neutral-200">
+                                            {ghsaInProgress ? (
+                                                <span className="inline-block w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin flex-shrink-0" title="GHSA refresh in progress" />
+                                            ) : (
+                                                <input
+                                                    type="checkbox"
+                                                    aria-label="GHSA"
+                                                    checked={selectedRefreshTypes.has('ghsa')}
+                                                    onChange={() => toggleRefreshType('ghsa')}
+                                                    disabled={!hasGhsaIds}
+                                                    className="rounded accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                                                />
+                                            )}
+                                            <span className={!hasGhsaIds && !ghsaInProgress ? 'opacity-40' : ''}>
+                                                GHSA {!hasGhsaIds && !ghsaInProgress && <span className="text-xs text-neutral-400">(none selected)</span>}
+                                            </span>
+                                        </div>
+                                        {ghsaInProgress && (
+                                            <button
+                                                className="text-xs bg-red-800 hover:bg-red-700 px-2 py-0.5 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                                                disabled={ghsaCancelling}
+                                                title="Cancel in-progress GHSA refresh"
+                                                data-testid="cancel-ghsa-refresh"
+                                                onClick={() => {
+                                                    setGhsaCancelling(true);
+                                                    BulkGhsaRefreshCancelHandler.trigger().then(res => {
+                                                        if (res) triggerBanner('GHSA refresh cancellation requested', 'success', 'ghsa', true);
+                                                        else { setGhsaCancelling(false); triggerBanner('Failed to cancel GHSA refresh', 'error', 'ghsa'); }
+                                                    }).catch(() => { setGhsaCancelling(false); triggerBanner('Failed to cancel GHSA refresh', 'error', 'ghsa'); });
+                                                }}
+                                            >{ghsaCancelling ? 'Cancelling…' : 'Cancel'}</button>
                                         )}
                                     </div>
 
@@ -520,52 +640,52 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                         </div>
                     </div>
                 </div>
-            </div>
 
-            <div className={[
-                'absolute z-40 p-4 bg-slate-700 shadow-md shadow-slate-400/40 top-48 left-32 w-1/2',
-                panelOpened == 1 ? 'block' : 'hidden'
-            ].join(' ')} data-testid="multi-edit-status-panel">
-                <StatusEditor
-                    onAddAssessment={(data) => addAssessment(data)}
-                    progressBar={undefined}
-                    defaultStatus={uniformStatus}
-                />
-                {(isAllVariantsMode || affectedVariantNames.length > 0) && (
-                    <div className="mt-3 pt-3 border-t border-slate-500">
-                        {isAllVariantsMode ? (
-                            <p className="text-sm font-medium text-gray-300">
-                                Will be applied to all possible variants on each CVE
-                            </p>
-                        ) : (
-                            <>
-                                <p className="text-sm font-medium text-gray-300 mb-1">
-                                    Will be applied to variant{affectedVariantNames.length > 1 ? 's' : ''}:
+            <div className="relative z-50 w-full">
+                <div className={[
+                    'absolute left-0 top-0 mt-1 z-50 w-full max-w-4xl rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-3',
+                    panelOpened == 1 ? 'block' : 'hidden'
+                ].join(' ')} data-testid="multi-edit-status-panel">
+                    <StatusEditor
+                        onAddAssessment={(data) => addAssessment(data)}
+                        progressBar={undefined}
+                        defaultStatus={uniformStatus}
+                    />
+                    {(isAllVariantsMode || affectedVariantNames.length > 0) && (
+                        <div className="mt-3 pt-3 border-t border-slate-500">
+                            {isAllVariantsMode ? (
+                                <p className="text-sm font-medium text-gray-300">
+                                    Will be applied to all possible variants on each CVE
                                 </p>
-                                <div className="flex flex-wrap gap-1">
-                                    {affectedVariantNames.map(name => (
-                                        <span key={name} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
-                                            {name}
-                                        </span>
-                                    ))}
-                                </div>
-                            </>
-                        )}
-                    </div>
-                )}
-            </div>
+                            ) : (
+                                <>
+                                    <p className="text-sm font-medium text-gray-300 mb-1">
+                                        Will be applied to variant{affectedVariantNames.length > 1 ? 's' : ''}:
+                                    </p>
+                                    <div className="flex flex-wrap gap-1">
+                                        {affectedVariantNames.map(name => (
+                                            <span key={name} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+                                                {name}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    )}
+                </div>
 
-            <div className={[
-                'absolute z-40 p-4 bg-slate-700 shadow-md shadow-slate-400/40 top-48 left-32 w-1/2',
-                panelOpened == 2 ? 'block' : 'hidden'
-            ].join(' ')} data-testid="multi-edit-time-panel">
-                <TimeEstimateEditor
-                    onSaveTimeEstimation={(data) => saveTimeEstimation(data)}
-                    progressBar={undefined}
-                    actualEstimate={{optimistic: '', likely: '', pessimistic: ''}}
-                />
+                <div className={[
+                    'absolute left-0 top-0 mt-1 z-50 w-full max-w-4xl rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-3',
+                    panelOpened == 2 ? 'block' : 'hidden'
+                ].join(' ')} data-testid="multi-edit-time-panel">
+                    <TimeEstimateEditor
+                        onSaveTimeEstimation={(data) => saveTimeEstimation(data)}
+                        progressBar={undefined}
+                        actualEstimate={{optimistic: '', likely: '', pessimistic: ''}}
+                    />
+                </div>
             </div>
-        </>}
     </>);
 }
 

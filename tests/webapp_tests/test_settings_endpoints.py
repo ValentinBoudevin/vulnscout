@@ -9,6 +9,7 @@ import io
 import json
 import os
 import uuid
+import tarfile
 import pytest
 from unittest.mock import patch, MagicMock
 from werkzeug.datastructures import MultiDict
@@ -248,6 +249,133 @@ class TestDeleteVariant:
         assert resp.status_code == 404
 
 
+class TestCopyCustomAssessments:
+
+    def _seed_copy_data(self, app):
+        from src.extensions import db
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.models.finding import Finding
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+        from src.models.assessment import Assessment
+
+        with app.app_context():
+            project = Project.create("CopyDataProject")
+            source = Variant.create("SourceVariant", project.id)
+            target = Variant.create("TargetVariant", project.id)
+
+            source_scan = Scan.create("source sbom", source.id, scan_type="sbom")
+            target_scan = Scan.create("target sbom", target.id, scan_type="sbom")
+
+            source_pkg = Package.find_or_create("openssl", "1.1.1")
+            target_pkg = Package.find_or_create("openssl", "3.0.0")
+            vuln = Vulnerability.create_record(id="CVE-COPY-0001", description="Copy me")
+            db.session.commit()
+
+            source_finding = Finding.get_or_create(source_pkg.id, vuln.id)
+            target_finding = Finding.get_or_create(target_pkg.id, vuln.id)
+
+            source_doc = SBOMDocument.create("/tmp/source.spdx.json", "spdx", source_scan.id)
+            target_doc = SBOMDocument.create("/tmp/target.spdx.json", "spdx", target_scan.id)
+            SBOMPackage.create(source_doc.id, source_pkg.id)
+            SBOMPackage.create(target_doc.id, target_pkg.id)
+
+            Assessment.create(
+                status="affected",
+                origin="custom",
+                finding_id=source_finding.id,
+                variant_id=source.id,
+                source="manual",
+            )
+            db.session.commit()
+
+            return {
+                "source_variant_id": str(source.id),
+                "target_variant_id": str(target.id),
+                "target_finding_id": str(target_finding.id),
+            }
+
+    def test_copy_assessments_default_requires_common_packages(self, app, client):
+        ids = self._seed_copy_data(app)
+
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["copied"] == 0
+        assert "No packages in common" in data["message"]
+
+    def test_copy_assessments_ignore_package_version_copies_by_vuln(self, app, client):
+        from src.models.assessment import Assessment
+
+        ids = self._seed_copy_data(app)
+
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "ignore_package_version": True,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["copied"] == 1
+
+        with app.app_context():
+            target_assessments = Assessment.get_by_finding_and_variant(
+                ids["target_finding_id"],
+                ids["target_variant_id"],
+            )
+            assert any(a.origin == "custom" for a in target_assessments)
+
+    def test_copy_assessments_preview_default_no_common_packages(self, app, client):
+        ids = self._seed_copy_data(app)
+
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["count"] == 0
+        assert data["skipped"] == 0
+        assert data["entries"] == []
+        assert "No packages in common" in data["message"]
+
+    def test_copy_assessments_preview_ignore_package_version_lists_candidates(self, app, client):
+        ids = self._seed_copy_data(app)
+
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "ignore_package_version": True,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["count"] == 1
+        assert data["skipped"] == 0
+        assert len(data["entries"]) == 1
+        assert data["entries"][0]["vulnerability_id"] == "CVE-COPY-0001"
+        assert data["entries"][0]["source_package"] == "openssl@1.1.1"
+        assert data["entries"][0]["target_package"] == "openssl@3.0.0"
+
+
 # ---------------------------------------------------------------------------
 # SBOM Upload (multi-file)
 # ---------------------------------------------------------------------------
@@ -270,6 +398,18 @@ def _make_spdx_json(name="test-pkg", version="1.0.0"):
         ],
     }
     return json.dumps(doc).encode("utf-8")
+
+
+def _make_spdx_tar_archive(member_name="archive.spdx.json", package_name="archive-pkg"):
+    """Return bytes for a tar archive containing one SPDX JSON document."""
+    archive = io.BytesIO()
+    payload = _make_spdx_json(package_name, "1.0.0")
+    with tarfile.open(fileobj=archive, mode="w") as tar:
+        info = tarfile.TarInfo(name=member_name)
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
+    archive.seek(0)
+    return archive.getvalue()
 
 
 class TestSBOMUpload:
@@ -430,6 +570,78 @@ class TestSBOMUpload:
         assert resp.status_code == 400
         assert "Could not parse" in resp.get_json()["error"]
 
+    @patch("src.routes.settings.threading.Thread")
+    def test_upload_tar_archive_is_extracted(self, mock_thread, client):
+        """A tar archive containing SPDX JSON files is accepted and extracted."""
+        mock_thread.return_value = MagicMock()
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+
+        data = {
+            "project_id": pid,
+            "variant_id": vid,
+            "files": (io.BytesIO(_make_spdx_tar_archive()), "sbom.tar"),
+        }
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert resp.status_code == 202
+        assert "upload_id" in resp.get_json()
+        mock_thread.return_value.start.assert_called_once()
+
+    @patch("src.routes.settings.threading.Thread")
+    def test_upload_empty_tar_archive_rejected(self, mock_thread, client):
+        """A tar archive without SPDX JSON files is rejected."""
+        mock_thread.return_value = MagicMock()
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+
+        empty_archive = io.BytesIO()
+        with tarfile.open(fileobj=empty_archive, mode="w"):
+            pass
+        empty_archive.seek(0)
+
+        data = {
+            "project_id": pid,
+            "variant_id": vid,
+            "files": (empty_archive, "empty.tar"),
+        }
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert resp.status_code == 400
+        assert "No .spdx.json files" in resp.get_json()["error"]
+
+    @patch("src.routes.settings.threading.Thread")
+    @patch("src.routes.settings.subprocess.run")
+    def test_upload_tar_zst_archive_is_extracted(self, mock_run, mock_thread, client):
+        """A .tar.zst archive is decompressed and extracted like a normal tar."""
+        mock_thread.return_value = MagicMock()
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+
+        payload = _make_spdx_json("zst-pkg", "1.2.3")
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w") as tar:
+            info = tarfile.TarInfo(name="inner.spdx.json")
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+        archive.seek(0)
+
+        def _fake_run(cmd, check=True, **kwargs):
+            if cmd and cmd[0] == "unzstd":
+                out_path = cmd[cmd.index("-o") + 1]
+                with open(cmd[-1], "rb") as src, open(out_path, "wb") as dst:
+                    dst.write(src.read())
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = _fake_run
+
+        data = {
+            "project_id": pid,
+            "variant_id": vid,
+            "files": (io.BytesIO(archive.getvalue()), "sbom.tar.zst"),
+        }
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert resp.status_code == 202
+        mock_thread.return_value.start.assert_called_once()
+
 
 class TestUploadStatus:
 
@@ -455,6 +667,34 @@ class TestUploadStatus:
         status_resp = client.get(f"/api/sbom/upload/{upload_id}/status")
         assert status_resp.status_code == 200
         assert status_resp.get_json()["status"] == "processing"
+
+
+class TestUploadHelpers:
+
+    def test_prune_upload_status_removes_stale_entries(self):
+        from src.routes.settings import _prune_upload_status, _upload_status, _UPLOAD_STATUS_TTL
+
+        original = dict(_upload_status)
+        try:
+            now = 10_000.0
+            _upload_status.clear()
+            _upload_status.update({
+                "keep": {"status": "processing", "ts": now},
+                "done-old": {"status": "done", "ts": now - _UPLOAD_STATUS_TTL - 1},
+                "error-old": {"status": "error", "ts": now - _UPLOAD_STATUS_TTL - 1},
+                "done-fresh": {"status": "done", "ts": now},
+            })
+
+            with patch("src.routes.settings.time.time", return_value=now):
+                _prune_upload_status()
+
+            assert "keep" in _upload_status
+            assert "done-fresh" in _upload_status
+            assert "done-old" not in _upload_status
+            assert "error-old" not in _upload_status
+        finally:
+            _upload_status.clear()
+            _upload_status.update(original)
 
 
 # ---------------------------------------------------------------------------
@@ -590,7 +830,7 @@ class TestUploadContentType:
 class TestProcessSBOMBackground:
     """Test the background SBOM processing function directly."""
 
-    def test_process_sets_done_status(self, app):
+    def test_process_sets_done_status(self, app, monkeypatch):
         """Processing an SPDX SBOM file sets status to 'done'."""
         from src.routes.settings import (
             _process_sbom_background, _upload_status,
@@ -600,6 +840,8 @@ class TestProcessSBOMBackground:
         from src.models.variant import Variant
         from src.models.scan import Scan
         from src.models.sbom_document import SBOMDocument
+
+        monkeypatch.setenv("IGNORE_PARSING_ERRORS", "true")
 
         with app.app_context():
             project = Project.create("BgTestProject")
@@ -674,6 +916,44 @@ class TestProcessSBOMBackground:
             status = _upload_status[upload_id]
             # Should either succeed (no docs to parse) or fail gracefully
             assert status["status"] in ("done", "error")
+
+    def test_process_read_inputs_failure_sets_error_status(self, app, monkeypatch, tmp_path):
+        """A processing failure inside read_inputs is converted to an error status."""
+        from src.routes.settings import _process_sbom_background, _upload_status
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+
+        with app.app_context():
+            project = Project.create("BgReadErrProject")
+            variant = Variant.create("BgReadErrVariant", project.id)
+            scan = Scan.create("", variant.id)
+
+            sbom_path = tmp_path / "input.spdx.json"
+            sbom_path.write_text("{}")
+
+            monkeypatch.setattr(
+                "src.bin.cmd_process.read_inputs",
+                lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+            )
+
+            upload_id = "bg-test-read-inputs-fail"
+            _process_sbom_background(app, upload_id, [str(sbom_path)], scan.id, variant.id)
+
+            assert _upload_status[upload_id]["status"] == "error"
+
+    def test_regenerate_openvex_handles_exception(self, app, tmp_path):
+        """_regenerate_openvex() must swallow OpenVEX generation failures."""
+        from src.routes.settings import _regenerate_openvex
+
+        out_file = tmp_path / "openvex.json"
+        app.config["OPENVEX_FILE"] = str(out_file)
+
+        with patch("src.views.openvex.OpenVex.to_dict", side_effect=RuntimeError("boom")):
+            _regenerate_openvex(app)
+
+        assert out_file.exists()
+        assert out_file.stat().st_size == 0
 
 
 # ---------------------------------------------------------------------------
@@ -935,3 +1215,461 @@ class TestNvdApiKey:
         finally:
             os.environ.pop("NVD_API_KEY", None)
             os.environ.pop("VULNSCOUT_CONFIG", None)
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: _retry_on_lock exhaustion
+# ---------------------------------------------------------------------------
+
+class TestRetryOnLockExhaustion:
+
+    def test_raises_runtime_error_when_max_retries_is_zero(self, app):
+        """_retry_on_lock with max_retries=0 never enters the loop and raises RuntimeError."""
+        from src.routes.settings import _retry_on_lock
+        with app.app_context():
+            with pytest.raises(RuntimeError, match="retry loop exhausted"):
+                _retry_on_lock(lambda: 42, max_retries=0)
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: _extract_spdx_archive member filtering
+# ---------------------------------------------------------------------------
+
+class TestExtractSpdxArchive:
+
+    def test_skips_non_file_and_non_spdx_json_members(self, tmp_path):
+        """Directory entries and non-.spdx.json files are ignored; only .spdx.json extracted."""
+        from src.routes.settings import _extract_spdx_archive
+
+        spdx_content = b'{"spdxVersion": "SPDX-2.3"}'
+        archive_path = str(tmp_path / "mixed.tar")
+
+        with tarfile.open(archive_path, "w") as tar:
+            # Directory entry — triggers the isfile() continue branch
+            dir_info = tarfile.TarInfo(name="subdir")
+            dir_info.type = tarfile.DIRTYPE
+            tar.addfile(dir_info)
+            # Non-.spdx.json regular file — triggers the name-suffix continue branch
+            txt_info = tarfile.TarInfo(name="readme.txt")
+            txt_info.size = len(b"readme")
+            tar.addfile(txt_info, io.BytesIO(b"readme"))
+            # The one valid .spdx.json member
+            spdx_info = tarfile.TarInfo(name="result.spdx.json")
+            spdx_info.size = len(spdx_content)
+            tar.addfile(spdx_info, io.BytesIO(spdx_content))
+
+        results = _extract_spdx_archive(archive_path, "mixed.tar")
+
+        assert len(results) == 1
+        extracted_path, member_name = results[0]
+        assert member_name == "result.spdx.json"
+        os.unlink(extracted_path)
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: invalid-UUID paths on CRUD routes
+# ---------------------------------------------------------------------------
+
+class TestRouteUUIDValidation:
+
+    def test_rename_project_invalid_uuid_in_path(self, client):
+        resp = client.patch("/api/projects/not-a-uuid/rename", json={"name": "X"})
+        assert resp.status_code == 400
+
+    def test_rename_variant_invalid_uuid_in_path(self, client):
+        resp = client.patch("/api/variants/not-a-uuid/rename", json={"name": "X"})
+        assert resp.status_code == 400
+
+    def test_delete_project_invalid_uuid_in_path(self, client):
+        resp = client.delete("/api/projects/not-a-uuid")
+        assert resp.status_code == 400
+
+    def test_delete_variant_invalid_uuid_in_path(self, client):
+        resp = client.delete("/api/variants/not-a-uuid")
+        assert resp.status_code == 400
+
+    def test_create_variant_invalid_project_uuid_in_path(self, client):
+        resp = client.post("/api/projects/not-a-uuid/variants", json={"name": "X"})
+        assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: copy-assessments validation edge cases
+# ---------------------------------------------------------------------------
+
+class TestCopyAssessmentsValidation:
+
+    def test_invalid_source_variant_uuid(self, client):
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={"source_variant_id": "not-a-uuid", "target_variant_id": str(uuid.uuid4())},
+        )
+        assert resp.status_code == 400
+
+    def test_invalid_target_variant_uuid(self, client):
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={"source_variant_id": str(uuid.uuid4()), "target_variant_id": "not-a-uuid"},
+        )
+        assert resp.status_code == 400
+
+    def test_same_source_and_target_variant(self, client):
+        vid = str(uuid.uuid4())
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={"source_variant_id": vid, "target_variant_id": vid},
+        )
+        assert resp.status_code == 400
+        assert "different" in resp.get_json()["error"].lower()
+
+    def test_variant_not_found(self, client):
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": str(uuid.uuid4()),
+                "target_variant_id": str(uuid.uuid4()),
+            },
+        )
+        assert resp.status_code == 404
+
+    def test_cross_project_variants_rejected(self, app, client):
+        from src.extensions import db
+        from src.models.project import Project
+        from src.models.variant import Variant
+
+        with app.app_context():
+            p1 = Project.create("CrossProjAlpha")
+            p2 = Project.create("CrossProjBeta")
+            v1 = Variant.create("VarAlpha", p1.id)
+            v2 = Variant.create("VarBeta", p2.id)
+            db.session.commit()
+            source_id = str(v1.id)
+            target_id = str(v2.id)
+
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={"source_variant_id": source_id, "target_variant_id": target_id},
+        )
+        assert resp.status_code == 400
+        assert "same project" in resp.get_json()["error"].lower()
+
+    def test_preview_invalid_source_variant_uuid(self, client):
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={"source_variant_id": "not-a-uuid", "target_variant_id": str(uuid.uuid4())},
+        )
+        assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: copy-assessments logic edge cases
+# ---------------------------------------------------------------------------
+
+class TestCopyAssessmentsEdgeCases:
+
+    def _seed_no_source_active_packages(self, app):
+        """Source variant has a custom assessment but no active SBOM scan packages."""
+        from src.extensions import db
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.models.finding import Finding
+        from src.models.assessment import Assessment
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+
+        with app.app_context():
+            project = Project.create("NoSrcScanProject")
+            source = Variant.create("NoSrcScan", project.id)
+            target = Variant.create("HasScan", project.id)
+
+            pkg = Package.find_or_create("unscanned-lib", "1.0")
+            vuln = Vulnerability.create_record(id="CVE-NOSCAN-010", description="x")
+            db.session.commit()
+            finding = Finding.get_or_create(pkg.id, vuln.id)
+            Assessment.create(
+                status="affected", origin="custom", finding_id=finding.id,
+                variant_id=source.id, source="manual",
+            )
+
+            # Give target an active scan so we pass the early variants-exist check
+            tgt_pkg = Package.find_or_create("tgt-lib-nosrc", "9.9")
+            tgt_scan = Scan.create("", target.id, scan_type="sbom")
+            tgt_doc = SBOMDocument.create("/tmp/tgt_nosrc.spdx.json", "spdx", tgt_scan.id)
+            SBOMPackage.create(tgt_doc.id, tgt_pkg.id)
+            db.session.commit()
+
+            return {"source_id": str(source.id), "target_id": str(target.id)}
+
+    def _seed_no_matching_target_findings(self, app):
+        """Source has active packages + assessments; target packages share no vulnerabilities."""
+        from src.extensions import db
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.models.finding import Finding
+        from src.models.assessment import Assessment
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+
+        with app.app_context():
+            project = Project.create("NoMatchFindingsProject")
+            source = Variant.create("NoMatchSrc", project.id)
+            target = Variant.create("NoMatchTgt", project.id)
+
+            pkg_a = Package.find_or_create("pkg-alpha-nm", "1.0")
+            cve_a = Vulnerability.create_record(id="CVE-NOMATCH-001", description="a")
+            db.session.commit()
+            finding_a = Finding.get_or_create(pkg_a.id, cve_a.id)
+            Assessment.create(
+                status="affected", origin="custom", finding_id=finding_a.id,
+                variant_id=source.id, source="manual",
+            )
+            src_scan = Scan.create("", source.id, scan_type="sbom")
+            src_doc = SBOMDocument.create("/tmp/src_nm.spdx.json", "spdx", src_scan.id)
+            SBOMPackage.create(src_doc.id, pkg_a.id)
+
+            # Target has a different package with a different vulnerability
+            pkg_b = Package.find_or_create("pkg-beta-nm", "1.0")
+            cve_b = Vulnerability.create_record(id="CVE-NOMATCH-002", description="b")
+            db.session.commit()
+            Finding.get_or_create(pkg_b.id, cve_b.id)
+            tgt_scan = Scan.create("", target.id, scan_type="sbom")
+            tgt_doc = SBOMDocument.create("/tmp/tgt_nm.spdx.json", "spdx", tgt_scan.id)
+            SBOMPackage.create(tgt_doc.id, pkg_b.id)
+            db.session.commit()
+
+            return {"source_id": str(source.id), "target_id": str(target.id)}
+
+    def _seed_non_common_packages(self, app):
+        """Source has two packages (one shared with target, one not); assessments on both."""
+        from src.extensions import db
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.models.finding import Finding
+        from src.models.assessment import Assessment
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+
+        with app.app_context():
+            project = Project.create("NonCommonProject")
+            source = Variant.create("NonCommonSrc", project.id)
+            target = Variant.create("NonCommonTgt", project.id)
+
+            pkg_shared = Package.find_or_create("shared-lib-nc", "1.0")
+            pkg_only = Package.find_or_create("source-only-lib-nc", "1.0")
+            vuln_x = Vulnerability.create_record(id="CVE-NCSHARED-001", description="x")
+            vuln_y = Vulnerability.create_record(id="CVE-NCONLY-001", description="y")
+            db.session.commit()
+
+            finding_sx = Finding.get_or_create(pkg_shared.id, vuln_x.id)
+            finding_oy = Finding.get_or_create(pkg_only.id, vuln_y.id)
+
+            src_scan = Scan.create("", source.id, scan_type="sbom")
+            src_doc = SBOMDocument.create("/tmp/src_nc.spdx.json", "spdx", src_scan.id)
+            SBOMPackage.create(src_doc.id, pkg_shared.id)
+            SBOMPackage.create(src_doc.id, pkg_only.id)
+
+            tgt_scan = Scan.create("", target.id, scan_type="sbom")
+            tgt_doc = SBOMDocument.create("/tmp/tgt_nc.spdx.json", "spdx", tgt_scan.id)
+            SBOMPackage.create(tgt_doc.id, pkg_shared.id)
+
+            Assessment.create(
+                status="affected", origin="custom", finding_id=finding_sx.id,
+                variant_id=source.id, source="manual",
+            )
+            Assessment.create(
+                status="affected", origin="custom", finding_id=finding_oy.id,
+                variant_id=source.id, source="manual",
+            )
+            db.session.commit()
+
+            return {"source_id": str(source.id), "target_id": str(target.id)}
+
+    def test_ignore_version_empty_source_active_packages_returns_no_vulns(self, app, client):
+        """ignore_package_version=True with no active source packages → no vulns in common."""
+        ids = self._seed_no_source_active_packages(app)
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_id"],
+                "target_variant_id": ids["target_id"],
+                "ignore_package_version": True,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["copied"] == 0
+        assert "No vulnerabilities in common" in data["message"]
+
+    def test_ignore_version_no_matching_target_findings_returns_no_vulns(self, app, client):
+        """ignore_package_version=True with non-empty source_vuln_ids but no target findings."""
+        ids = self._seed_no_matching_target_findings(app)
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_id"],
+                "target_variant_id": ids["target_id"],
+                "ignore_package_version": True,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["copied"] == 0
+        assert "No vulnerabilities in common" in data["message"]
+
+    def test_non_common_package_assessment_not_copied(self, app, client):
+        """Assessment on a source-only package is skipped; only the shared-package assessment copies."""
+        ids = self._seed_non_common_packages(app)
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_id"],
+                "target_variant_id": ids["target_id"],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        # Only the shared-package assessment can be copied (source-only is skipped)
+        assert data["copied"] == 1
+
+    def test_copy_skips_already_assessed_target_and_reports_skipped(self, app, client):
+        """Re-running copy after an initial copy skips already-present custom assessments."""
+        from tests.webapp_tests.test_settings_endpoints import TestCopyCustomAssessments
+        helper = TestCopyCustomAssessments()
+        ids = helper._seed_copy_data(app)
+
+        # First copy
+        r1 = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "ignore_package_version": True,
+            },
+        )
+        assert r1.get_json()["copied"] == 1
+
+        # Second copy — all already assessed → skipped
+        r2 = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "ignore_package_version": True,
+            },
+        )
+        assert r2.status_code == 200
+        data = r2.get_json()
+        assert data["copied"] == 0
+        assert data["skipped"] == 1
+        assert "already present" in data["message"]
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: SBOM upload edge cases
+# ---------------------------------------------------------------------------
+
+class TestSBOMUploadEdgeCases:
+
+    def test_upload_corrupt_archive_returns_400(self, client):
+        """A file with a .tar extension that is not a valid tar archive triggers a 400."""
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+        corrupt = b"this is definitely not a tar archive"
+        data = {
+            "project_id": pid,
+            "variant_id": vid,
+            "files": (io.BytesIO(corrupt), "sbom.tar"),
+        }
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert resp.status_code == 400
+        assert "Could not extract archive" in resp.get_json()["error"]
+
+    @patch("src.routes.settings.threading.Thread")
+    def test_upload_unknown_format_json_returns_400(self, mock_thread, client):
+        """Valid JSON that does not match any known SBOM format is rejected."""
+        mock_thread.return_value = MagicMock()
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+        unknown = json.dumps({"totally": "unrecognized", "structure": True}).encode()
+        data = {
+            "project_id": pid,
+            "variant_id": vid,
+            "files": (io.BytesIO(unknown), "mystery.json"),
+        }
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert resp.status_code == 400
+        assert "Unrecognized SBOM format" in resp.get_json()["error"]
+
+    @patch("src.routes.settings.threading.Thread")
+    def test_upload_second_file_error_cleans_up_first_file(self, mock_thread, client):
+        """When the second uploaded file is invalid, temp files from the first are cleaned up."""
+        mock_thread.return_value = MagicMock()
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+        data = MultiDict([
+            ("project_id", pid),
+            ("variant_id", vid),
+            ("files", (io.BytesIO(_make_spdx_json()), "first.spdx.json")),
+            ("files", (io.BytesIO(b"not json <<<"), "second.json")),
+        ])
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert resp.status_code == 400
+        assert "Could not parse" in resp.get_json()["error"]
+
+    @patch("src.routes.settings.threading.Thread")
+    def test_upload_file_with_empty_filename_skipped(self, mock_thread, client):
+        """A file entry with an empty filename is skipped; the valid file still processes."""
+        mock_thread.return_value = MagicMock()
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+        data = MultiDict([
+            ("project_id", pid),
+            ("variant_id", vid),
+            ("files", (io.BytesIO(b"ignored"), "")),
+            ("files", (io.BytesIO(_make_spdx_json()), "real.spdx.json")),
+        ])
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert resp.status_code == 202
+        mock_thread.return_value.start.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: background SBOM processing EPSS failure path
+# ---------------------------------------------------------------------------
+
+class TestProcessSBOMBackgroundEpss:
+
+    def test_epss_failure_is_swallowed_and_processing_completes(self, app, monkeypatch):
+        """A post_treatment (EPSS) exception is caught; final status is still 'done'."""
+        import tempfile as _tempfile
+        from src.routes.settings import _process_sbom_background, _upload_status
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+
+        monkeypatch.setenv("IGNORE_PARSING_ERRORS", "true")
+        monkeypatch.setattr("src.bin.cmd_process.read_inputs", lambda *a, **k: None)
+        monkeypatch.setattr("src.bin.cmd_process.populate_observations", lambda *a, **k: None)
+        monkeypatch.setattr(
+            "src.bin.cmd_process.post_treatment",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("epss unavailable")),
+        )
+
+        with app.app_context():
+            project = Project.create("EpssFailProject")
+            variant = Variant.create("EpssFailVariant", project.id)
+            scan = Scan.create("", variant.id)
+
+            upload_id = "epss-coverage-test"
+            _process_sbom_background(app, upload_id, [], scan.id, variant.id)
+
+            assert _upload_status[upload_id]["status"] == "done"

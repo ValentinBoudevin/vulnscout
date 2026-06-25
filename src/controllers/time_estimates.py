@@ -101,7 +101,7 @@ class TimeEstimateController:
         new_opt = optimistic if optimistic is not None else resolved.optimistic
         new_lik = likely if likely is not None else resolved.likely
         new_pes = pessimistic if pessimistic is not None else resolved.pessimistic
-        if all(v is not None for v in [new_opt, new_lik, new_pes]):
+        if new_opt is not None and new_lik is not None and new_pes is not None:
             if new_opt > new_lik or new_lik > new_pes:
                 raise ValueError(
                     "Time estimates must satisfy: optimistic <= likely <= pessimistic."

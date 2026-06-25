@@ -66,6 +66,7 @@ Input commands (can be chained, triggers scan automatically):
   --perform-grype-scan            Run Grype on the current DB content (after merging any added inputs)
   --perform-nvd-scan              Run an NVD CPE-based vulnerability scan
   --perform-osv-scan              Run an OSV PURL-based vulnerability scan
+  --perform-sbom-cve-check-scan          Run a sbom-cve-check vulnerability scan
 
 Scan & output commands:
   --match-condition <expr>        Run vulnerability scan
@@ -208,6 +209,13 @@ REFRESH_REMOTE_DELAY=2w
 EOF
         echo "Created default config at $VULNSCOUT_CONFIG_FILE"
     fi
+    # The sbom-cve-check advisory databases (NVD-FKIE + CVEList) live inside the
+    # VulnScout cache directory by default (sub-folder next to vulnscout.db), so the
+    # existing cache mount already covers them and no extra mount is needed.  An
+    # explicit VULNSCOUT_SBOM_CVE_CHECK_DB_DIR override (e.g. a shared host clone) is
+    # mounted separately and pointed at by SBOM_CVE_CHECK_DATABASES_DIR.
+    local _sbom_cve_check_host_db="${VULNSCOUT_SBOM_CVE_CHECK_DB_DIR:-}"
+
     local -a env_args=()
     _detect_legacy
     while IFS='=' read -r key value; do
@@ -216,11 +224,19 @@ EOF
         env_args+=(-e "${key}=${value}")
     done < "$VULNSCOUT_CONFIG_FILE"
     [[ "$LEGACY_SETUP_DETECTED" == true ]] && env_args+=(-e LEGACY_SETUP_DETECTED=true)
+    # Pass SBOM_CVE_CHECK_AUTO_UPDATE from the host environment so the operator can
+    # override the container default (1 = on) e.g. to run offline (SBOM_CVE_CHECK_AUTO_UPDATE=0).
+    [[ -n "${SBOM_CVE_CHECK_AUTO_UPDATE:-}" ]] && env_args+=(-e "SBOM_CVE_CHECK_AUTO_UPDATE=$SBOM_CVE_CHECK_AUTO_UPDATE")
     local -a vol_args=(
         -v "$VULNSCOUT_CACHE_DIR:/cache/vulnscout:Z"
         -v "$VULNSCOUT_OUTPUTS_DIR:/scan/outputs:Z"
         -v "$VULNSCOUT_CONFIG_FILE:/etc/vulnscout/config.env:Z"
     )
+    if [[ -n "$_sbom_cve_check_host_db" ]]; then
+        mkdir -p "$_sbom_cve_check_host_db"
+        vol_args+=(-v "$_sbom_cve_check_host_db:/sbom_cve_check_databases:Z")
+        env_args+=(-e "SBOM_CVE_CHECK_DATABASES_DIR=/sbom_cve_check_databases")
+    fi
     if [ "$DEV_MODE" = true ] && [ -d "$SCRIPT_DIR/src" ]; then
         vol_args+=(-v "$SCRIPT_DIR/src":/scan/src:Z)
         env_args+=(-e DEV_MODE=true)
@@ -314,6 +330,8 @@ parse_and_run() {
                 ensure_running; PENDING_ARGS+=(--perform-nvd-scan); shift ;;
             perform-osv-scan|--perform-osv-scan)
                 ensure_running; PENDING_ARGS+=(--perform-osv-scan); shift ;;
+            perform-sbom-cve-check-scan|--perform-sbom-cve-check-scan|sbom-cve-check-scan|--sbom-cve-check-scan)
+                ensure_running; PENDING_ARGS+=(--perform-sbom-cve-check-scan); shift ;;
             export-spdx|--export-spdx)
                 ensure_running; EXPORT_ARGS+=(--export-spdx); shift ;;
             export-cdx|--export-cdx)

@@ -843,6 +843,45 @@ GET /api/variants/<variant_id>/osv-scan/status
 
 Same response shape as Grype status. `total` is the number of unique PURLs to query.
 
+### Trigger sbom-cve-check Scan
+
+```
+POST /api/variants/<variant_id>/sbom-cve-check-scan
+```
+
+Runs a CVE scan powered by the sbom-cve-check engine. For every active package, the engine looks up candidate advisories from locally-cloned NVD-FKIE and CVEList V5 databases, applies product-name aliasing, evaluates version ranges locally, and records findings as a tool scan. No network calls are made during matching.
+
+The databases live at `SBOM_CVE_CHECK_DATABASES_DIR` inside the container (default: `/cache/vulnscout/sbom_cve_check_databases`, inside the cache volume next to `vulnscout.db`). Set `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` on the host to use a shared clone mounted at `/sbom_cve_check_databases` instead. Set `SBOM_CVE_CHECK_AUTO_UPDATE=1` to let the engine clone the databases on first use and fetch fresh advisories before every scan.
+
+**Response:** `202 Accepted`
+```json
+{ "status": "started", "variant_id": "..." }
+```
+
+`total` is the number of active packages to scan. Progress is reported per package.
+
+### Check sbom-cve-check Scan Status
+
+```
+GET /api/variants/<variant_id>/sbom-cve-check-scan/status
+```
+
+Same response shape as Grype status. `total` is the number of active packages being scanned, `done_count` advances per package.
+
+**Response:**
+```json
+{
+  "status": "running",
+  "error": null,
+  "progress": "42/120 packages",
+  "logs": ["Resolved 120 active packages", "Index ready — scanning packages", "[1/120] busybox@1.35.0 → 3 vuln(s): CVE-2022-28391, ..."],
+  "total": 120,
+  "done_count": 42
+}
+```
+
+Status values: `"idle"` (no scan started), `"running"`, `"done"`, `"error"`.
+
 ---
 
 ## SBOM Upload

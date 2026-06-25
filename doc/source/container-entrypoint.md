@@ -46,6 +46,9 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 | `--add-cdx <path>` | Add a CycloneDX file |
 | `--add-grype <path>` | Add a Grype results file (`.grype.json`) |
 | `--perform-grype-scan` | Export current DB as CycloneDX, run Grype on it, and merge results back |
+| `--perform-nvd-scan` | Run an NVD CPE-based vulnerability scan |
+| `--perform-osv-scan` | Run an OSV PURL-based vulnerability scan |
+| `--perform-sbom-cve-check-scan` | Run a CVE scan using local sbom-cve-check databases |
 | `--clear-inputs` | Remove all staged input files |
 
 ### Scan & Output Commands
@@ -108,6 +111,9 @@ When multiple flags are provided in a single invocation, the entrypoint processe
    - Web server started in background (if `--serve`)
    - Input files merged into the database
    - Grype scan (if `--perform-grype-scan`)
+   - NVD CPE scan (if `--perform-nvd-scan`)
+   - OSV PURL scan (if `--perform-osv-scan`)
+   - sbom-cve-check scan (if `--perform-sbom-cve-check-scan`)
    - Vulnerability processing (NVD enrichment, EPSS scoring)
    - Input files cleaned up after processing
 3. **Reports** — Templates specified with `--report` are generated
@@ -130,6 +136,7 @@ The following paths inside the container are relevant:
 | `/scan/src/views/templates/` | Built-in report templates |
 | `/cache/vulnscout/vulnscout.db` | SQLite database |
 | `/etc/vulnscout/config.env` | Persistent configuration file |
+| `/cache/vulnscout/sbom_cve_check_databases/` | Local sbom-cve-check advisory database clones (NVD-FKIE + CVEList), stored inside the cache volume next to `vulnscout.db`. Override the host path with `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` (then mounted at `/sbom_cve_check_databases`) |
 | `/scan/status.txt` | Scan progress status (used by the web UI) |
 
 ---
@@ -161,6 +168,16 @@ docker exec vulnscout /scan/src/entrypoint.sh \
   --report all_assessments.adoc \
   --export-spdx --export-cdx
 ```
+
+**Run a sbom-cve-check scan:**
+```bash
+docker exec vulnscout /scan/src/entrypoint.sh \
+  --project demo --variant x86 \
+  --add-spdx /scan/inputs/sbom.spdx.json \
+  --perform-sbom-cve-check-scan
+```
+
+> By default the sbom-cve-check databases live in `/cache/vulnscout/sbom_cve_check_databases` (inside the cache volume, next to `vulnscout.db`); set `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` to use a shared host clone mounted at `/sbom_cve_check_databases` instead. With `SBOM_CVE_CHECK_AUTO_UPDATE=1` the databases are cloned automatically on first use and refreshed before every scan.
 
 **Set persistent configuration:**
 ```bash

@@ -20,6 +20,18 @@ if [ -f "$CONFIG_FILE" ]; then
     . "$CONFIG_FILE"
 fi
 
+# The sbom-cve-check advisory databases live inside the VulnScout cache directory
+# (mounted at /cache/vulnscout), in a sbom_cve_check_databases sub-folder next to
+# vulnscout.db.  Default SBOM_CVE_CHECK_DATABASES_DIR to that location so the engine
+# finds (and, with SBOM_CVE_CHECK_AUTO_UPDATE=1, clones) them without an explicit env
+# var; config.env (sourced above) or an explicit override may still change this.
+export SBOM_CVE_CHECK_DATABASES_DIR="${SBOM_CVE_CHECK_DATABASES_DIR:-/cache/vulnscout/sbom_cve_check_databases}"
+mkdir -p "$SBOM_CVE_CHECK_DATABASES_DIR" 2>/dev/null || true
+# Auto-update is on by default: the engine will clone/fetch the NVD-FKIE and CVEList
+# databases on first use and keep them current.  Set SBOM_CVE_CHECK_AUTO_UPDATE=0 to
+# run in offline mode against an already-cloned database.
+export SBOM_CVE_CHECK_AUTO_UPDATE="${SBOM_CVE_CHECK_AUTO_UPDATE:-1}"
+
 show_help() {
     cat <<EOF
 VulnScout Entrypoint
@@ -38,6 +50,7 @@ Input commands:
   --perform-grype-scan      Perform a Grype scan on the added inputs
   --perform-nvd-scan        Run an NVD CPE-based vulnerability scan
   --perform-osv-scan        Run an OSV PURL-based vulnerability scan
+  --perform-sbom-cve-check-scan  Run a sbom-cve-check vulnerability scan
 
 Scan & output commands:
   --serve                   Run scan then start interactive web UI (port 7275)
@@ -304,7 +317,7 @@ cmd_scan() {
     local _cmd_scan_exit=0
     [[ -n "${MATCH_CONDITION:-}" ]]       && has_condition=true
 
-    if [[ "$has_inputs" == "true" ]] || [[ "$has_condition" == "true" ]] || [[ "${GRYPE_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${NVD_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${OSV_SCAN_REQUESTED:-false}" == "true" ]]; then
+    if [[ "$has_inputs" == "true" ]] || [[ "$has_condition" == "true" ]] || [[ "${GRYPE_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${NVD_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${OSV_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${SBOM_CVE_CHECK_SCAN_REQUESTED:-false}" == "true" ]]; then
         if [[ "$has_inputs" == "true" ]]; then
             if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
                 set_status "1" "Merging inputs and processing vulnerabilities"
@@ -347,6 +360,13 @@ cmd_scan() {
         if [[ "${OSV_SCAN_REQUESTED:-false}" == "true" ]]; then
             echo "Running OSV scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
             (cd "$BASE_DIR" && flask --app src.bin.webapp osv-scan \
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME")
+        fi
+
+        # If an sbom-cve-check scan was requested, run it synchronously via the flask CLI.
+        if [[ "${SBOM_CVE_CHECK_SCAN_REQUESTED:-false}" == "true" ]]; then
+            echo "Running sbom-cve-check scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
+            (cd "$BASE_DIR" && flask --app src.bin.webapp sbom-cve-check-scan \
                 --project "$PROJECT_NAME" --variant "$VARIANT_NAME")
         fi
 
@@ -408,8 +428,12 @@ cmd_export() {
     local fmt="$1"
     cd "$BASE_DIR"
     local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
+    local -a scope_args=(--project "$PROJECT_NAME")
+    if [[ -n "$VARIANT_NAME" ]]; then
+        scope_args+=(--variant "$VARIANT_NAME")
+    fi
     flask --app src.bin.webapp db upgrade
-    flask --app src.bin.webapp export --format "$fmt" --output-dir "$output_dir"
+    flask --app src.bin.webapp export --format "$fmt" --output-dir "$output_dir" "${scope_args[@]}"
     setup_user
 }
 
@@ -544,6 +568,7 @@ SERVE_REQUESTED=false
 GRYPE_SCAN_REQUESTED=false
 NVD_SCAN_REQUESTED=false
 OSV_SCAN_REQUESTED=false
+SBOM_CVE_CHECK_SCAN_REQUESTED=false
 REPORT_TEMPLATES=()
 EXPORT_FORMATS=()
 SCAN_REQUIRED=false
@@ -642,6 +667,8 @@ while [[ $# -gt 0 ]]; do
             NVD_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --perform-osv-scan)
             OSV_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
+        --perform-sbom-cve-check-scan)
+            SBOM_CVE_CHECK_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --clear-inputs)
             cmd_clear_inputs; shift ;;
         --delete-scan)

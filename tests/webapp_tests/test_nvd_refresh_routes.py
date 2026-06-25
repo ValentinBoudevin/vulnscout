@@ -80,7 +80,7 @@ class TestSingleCveRefreshEndpoint:
         assert "vulnerabilities" in data
         vuln = data["vulnerabilities"][0]
         assert vuln["id"] == existing_cve_id
-        assert "nvd_fetched_at" in vuln  # timestamp always stamped
+        assert "data_fetched_at" in vuln  # timestamp always stamped
         # CVSS score should be reflected in the response
         cvss_scores = vuln["severity"]["cvss"]
         assert any(abs(c["base_score"] - 8.1) < 0.01 for c in cvss_scores)

@@ -11,6 +11,7 @@ from typing import Any, Callable, List, Optional
 from ..models.iso8601_duration import Iso8601Duration
 from ..models.sbom_package import SBOMPackage
 from ..controllers import (
+    ControllersCache,
     PackagesController,
     VulnerabilitiesController,
     AssessmentsController,
@@ -22,14 +23,14 @@ from ..controllers import (
 
 
 class Templates:
-    def __init__(self, controllers):
-        self.packagesCtrl: PackagesController = controllers["packages"]
-        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
-        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
-        self.projectsCtrl: ProjectController = controllers.get("projects")
-        self.variantsCtrl: VariantController = controllers.get("variants")
-        self.scansCtrl: ScanController = controllers.get("scans")
-        self.sbomDocumentsCtrl: SBOMDocumentController = controllers.get("sbom_documents")
+    def __init__(self, controllers: ControllersCache):
+        self.packagesCtrl: PackagesController = controllers.packages
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
+        self.assessmentsCtrl: AssessmentsController = controllers.assessments
+        self.projectsCtrl: ProjectController | None = controllers.project
+        self.variantsCtrl: VariantController | None = controllers.variant
+        self.scansCtrl: ScanController | None = controllers.scan
+        self.sbomDocumentsCtrl: SBOMDocumentController | None = controllers.sbom_document
 
         template_dir = os.path.join(os.path.dirname(__file__), "templates")
         self.internal_loader = FileSystemLoader([

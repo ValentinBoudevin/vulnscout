@@ -117,9 +117,7 @@ class TestCmdProcessCoverage:
     def test_read_inputs_unknown_format_prints_warning(self, app, tmp_path, capsys):
         """read_inputs prints a warning for docs with unrecognisable format (line 152)."""
         from src.bin.cmd_process import read_inputs
-        from src.controllers.packages import PackagesController
-        from src.controllers.vulnerabilities import VulnerabilitiesController
-        from src.controllers.assessments import AssessmentsController
+        from src.controllers import ControllersCache
         from src.models.sbom_document import SBOMDocument
         from src.models.scan import Scan
 
@@ -132,25 +130,14 @@ class TestCmdProcessCoverage:
             SBOMDocument.create(str(unknown_file), "unknown.json", scan.id, format=None)
             _db.session.commit()
 
-            pkgCtrl = PackagesController()
-            vulnCtrl = VulnerabilitiesController(pkgCtrl)
-            assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
-            controllers = {
-                "packages": pkgCtrl,
-                "vulnerabilities": vulnCtrl,
-                "assessments": assessCtrl,
-            }
-
-            read_inputs(controllers, scan_id=scan.id)
+            read_inputs(ControllersCache(), scan_id=scan.id)
 
         assert "Warning: unknown format" in capsys.readouterr().out
 
     def test_read_inputs_spdx3_uses_fast_parser(self, app, tmp_path):
         """read_inputs dispatches to FastSPDX3.parse_from_dict for SPDX 3 docs (line 131)."""
         from src.bin.cmd_process import read_inputs
-        from src.controllers.packages import PackagesController
-        from src.controllers.vulnerabilities import VulnerabilitiesController
-        from src.controllers.assessments import AssessmentsController
+        from src.controllers import ControllersCache
         from src.models.sbom_document import SBOMDocument
         from src.models.scan import Scan
 
@@ -168,16 +155,7 @@ class TestCmdProcessCoverage:
             SBOMDocument.create(str(spdx3_file), "sbom_spdx3.spdx.json", scan.id, format="spdx")
             _db.session.commit()
 
-            pkgCtrl = PackagesController()
-            vulnCtrl = VulnerabilitiesController(pkgCtrl)
-            assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
-            controllers = {
-                "packages": pkgCtrl,
-                "vulnerabilities": vulnCtrl,
-                "assessments": assessCtrl,
-            }
-
             with patch("src.views.fast_spdx3.FastSPDX3.parse_from_dict") as mock_parse:
-                read_inputs(controllers, scan_id=scan.id)
+                read_inputs(ControllersCache(), scan_id=scan.id)
 
         mock_parse.assert_called_once_with(spdx3_data)

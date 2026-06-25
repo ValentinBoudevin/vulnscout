@@ -9,20 +9,33 @@ NVD and OSV trigger endpoints.
 
 import uuid as uuid_module
 
-from flask import jsonify
+from flask import jsonify, Response
+from flask.typing import ResponseReturnValue
+from typing import Dict, List, Optional, Sequence, Set, Tuple, Union, cast
 
 from ..controllers.variants import VariantController
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant, active_package_ids_for_scans
+from ..helpers.scan_filters import filter_scannable_packages
 from ..models.observation import Observation
 from ..models.package import Package
+from ..models.variant import Variant
+from ..models.finding import Finding
+from ..models.scan import Scan
 from ..extensions import db
+
+# Shared progress-tracking structures keyed by stringified variant UUID.
+ProgressEntry = Dict[str, object]
+ProgressDict = Dict[str, ProgressEntry]
+ErrorResponse = Tuple[Response, int]
 
 
 # ---------------------------------------------------------------------------
 # UUID parsing
 # ---------------------------------------------------------------------------
 
-def parse_uuid_or_400(value: str, label: str = "id"):
+def parse_uuid_or_400(
+    value: str, label: str = "id"
+) -> Union[Tuple[uuid_module.UUID, None], Tuple[None, ErrorResponse]]:
     """Parse *value* as a UUID or return a 400 JSON error response.
 
     Returns ``(uuid, None)`` on success or ``(None, Response)`` on failure.
@@ -37,7 +50,9 @@ def parse_uuid_or_400(value: str, label: str = "id"):
 # Scan-trigger boilerplate
 # ---------------------------------------------------------------------------
 
-def validate_trigger(variant_id: str, progress_dict: dict, scan_label: str):
+def validate_trigger(
+    variant_id: str, progress_dict: ProgressDict, scan_label: str
+) -> Union[Tuple[None, None, ErrorResponse], Tuple[uuid_module.UUID, Variant, None]]:
     """Common validation for scan trigger endpoints.
 
     Parses the variant UUID, checks the variant exists, and checks that
@@ -49,6 +64,8 @@ def validate_trigger(variant_id: str, progress_dict: dict, scan_label: str):
     variant_uuid, err = parse_uuid_or_400(variant_id, "variant id")
     if err is not None:
         return None, None, err
+    if variant_uuid is None:
+        return None, None, (jsonify({"error": "Internal error"}), 500)
 
     variant = VariantController.get(variant_uuid)
     if variant is None:
@@ -64,7 +81,7 @@ def validate_trigger(variant_id: str, progress_dict: dict, scan_label: str):
     return variant_uuid, variant, None
 
 
-def scan_status_response(variant_id: str, progress_dict: dict):
+def scan_status_response(variant_id: str, progress_dict: ProgressDict) -> ResponseReturnValue:
     """Common handler for ``/status`` endpoints."""
     variant_uuid, err = parse_uuid_or_400(variant_id, "variant id")
     if err is not None:
@@ -76,7 +93,7 @@ def scan_status_response(variant_id: str, progress_dict: dict):
     return jsonify(info)
 
 
-def init_progress(progress_dict: dict, vid_str: str, total: int = 0):
+def init_progress(progress_dict: ProgressDict, vid_str: str, total: int = 0) -> None:
     """Initialise the progress entry for a scan."""
     progress_dict[vid_str] = {
         "status": "running",
@@ -88,10 +105,10 @@ def init_progress(progress_dict: dict, vid_str: str, total: int = 0):
     }
 
 
-def set_error(progress_dict: dict, vid_str: str, error: str):
+def set_error(progress_dict: ProgressDict, vid_str: str, error: str) -> None:
     """Transition a progress entry to error state."""
     old = progress_dict.get(vid_str, {})
-    logs = old.get("logs", [])
+    logs = cast(List[str], old.get("logs", []))
     logs.append(f"ERROR: {error}")
     progress_dict[vid_str] = {
         "status": "error",
@@ -107,7 +124,12 @@ def set_error(progress_dict: dict, vid_str: str, error: str):
 # Resolve active packages for a variant
 # ---------------------------------------------------------------------------
 
-def resolve_active_packages(variant_uuid, progress_dict: dict | None = None, vid_str: str | None = None):
+def resolve_active_packages(
+    variant_uuid: uuid_module.UUID,
+    progress_dict: Optional[ProgressDict] = None,
+    vid_str: Optional[str] = None,
+    exclude_kernel: bool = True,
+) -> Tuple[Sequence[Package], Optional[str]]:
     """Return the active ``Package`` list for *variant_uuid*.
 
     Looks at the latest **SBOM** scan for the variant, resolves its
@@ -117,6 +139,12 @@ def resolve_active_packages(variant_uuid, progress_dict: dict | None = None, vid
 
     Returns ``(packages, error_string_or_None)``.  When *progress_dict*
     and *vid_str* are provided the function sets an error state on failure.
+
+    When *exclude_kernel* is ``True`` (the default), kernel companion
+    packages (``kernel-*``) are dropped: they bloat SPDX 3 SBOMs to
+    thousands of entries and all inherit the base kernel CPE, so feeding
+    them to the scanners attributes the entire kernel CVE set to each with
+    no useful results.  Pass ``exclude_kernel=False`` to scan them anyway.
     """
     latest_ids = active_sbom_scan_ids_for_variant(variant_uuid)
 
@@ -138,6 +166,8 @@ def resolve_active_packages(variant_uuid, progress_dict: dict | None = None, vid
         db.select(Package).where(Package.id.in_(all_pkg_ids))
     ).scalars().all()
 
+    if exclude_kernel:
+        return filter_scannable_packages(packages), None
     return packages, None
 
 
@@ -146,13 +176,13 @@ def resolve_active_packages(variant_uuid, progress_dict: dict | None = None, vid
 # ---------------------------------------------------------------------------
 
 def create_observation_and_assessment(
-    finding,
-    scan,
-    variant_uuid,
+    finding: Finding,
+    scan: Scan,
+    variant_uuid: uuid_module.UUID,
     origin: str,
-    observation_pairs: set,
-    assessed_findings: set,
-):
+    observation_pairs: Set[Tuple[uuid_module.UUID, uuid_module.UUID]],
+    assessed_findings: Set[Tuple[uuid_module.UUID, uuid_module.UUID]],
+) -> None:
     """Create an Observation and (if needed) an initial Assessment.
 
     De-duplicates against *observation_pairs* ``{(finding_id, scan_id)}``

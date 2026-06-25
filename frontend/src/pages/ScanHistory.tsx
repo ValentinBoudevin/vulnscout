@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from "react";
+import type { ReactNode } from "react";
 import ScansHandler from "../handlers/scans";
-import type { Scan, ScanDiff, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, AssessmentDiffEntry, GlobalResult } from "../handlers/scans";
-import { subscribe, getSnapshot, setOnDone, triggerScan, dismiss as grypeDismiss } from "../handlers/grypeScanState";
+import type { Scan, ScanDiff, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, AssessmentDiffEntry, GlobalResult, RunningScanEntry } from "../handlers/scans";
+import { subscribe, getSnapshot, setOnDone, triggerScan, dismiss as grypeDismiss, restoreFromStatus as grypeRestore } from "../handlers/grypeScanState";
 import {
     subscribe as nvdSubscribe,
     getSnapshot as nvdGetSnapshot,
     setOnDone as nvdSetOnDone,
     triggerScan as nvdTriggerScan,
     dismiss as nvdDismiss,
+    restoreFromStatus as nvdRestore,
 } from "../handlers/nvdScanState";
 import {
     subscribe as osvSubscribe,
@@ -15,7 +17,16 @@ import {
     setOnDone as osvSetOnDone,
     triggerScan as osvTriggerScan,
     dismiss as osvDismiss,
+    restoreFromStatus as osvRestore,
 } from "../handlers/osvScanState";
+import {
+    subscribe as sccSubscribe,
+    getSnapshot as sccGetSnapshot,
+    setOnDone as sccSetOnDone,
+    triggerScan as sccTriggerScan,
+    dismiss as sccDismiss,
+    restoreFromStatus as sccRestore,
+} from "../handlers/sccScanState";
 import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
 import ScanProgressPanel from "../components/ScanProgressPanel";
 import { useDocUrl } from "../helpers/useDocUrl";
@@ -23,7 +34,8 @@ import { extractSupplierName } from "../helpers/pkgId";
 import { formatSourceName } from "../helpers/sourceNames";
 import { downloadJson } from "../helpers/exportJson";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook, faDownload } from "@fortawesome/free-solid-svg-icons";
+import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook, faDownload, faMagnifyingGlass, faBox, faClipboardCheck, faCircleQuestion } from "@fortawesome/free-solid-svg-icons";
+import type { IconDefinition } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
 import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
@@ -59,6 +71,55 @@ function formatDate(iso: string): string {
         minute: '2-digit',
         timeZoneName: 'short',
     });
+}
+
+// ---------------------------------------------------------------------------
+// Scan-card presentation helpers
+// ---------------------------------------------------------------------------
+
+type ChangeTone = 'total' | 'added' | 'removed' | 'upgraded' | 'neutral';
+
+const CHANGE_TEXT_CLASSES: Record<ChangeTone, string> = {
+    total: 'text-cyan-600 dark:text-cyan-400',
+    added: 'text-green-600 dark:text-green-400',
+    removed: 'text-red-600 dark:text-red-400',
+    upgraded: 'text-yellow-600 dark:text-yellow-400',
+    neutral: 'text-neutral-500 dark:text-neutral-400',
+};
+
+// Big highlighted number + muted label, used in the "Current result" summary.
+function BigStat({ count, label }: { count: number; label: string }) {
+    return (
+        <div className="flex items-baseline gap-2">
+            <span className="text-2xl font-bold text-cyan-600 dark:text-cyan-400 tabular-nums">{count.toLocaleString()}</span>
+            <span className="text-sm font-medium text-neutral-500 dark:text-neutral-300">{label}</span>
+        </div>
+    );
+}
+
+// A single coloured "<n> <label>" segment within a change row.
+function ChangeStat({ count, label, tone }: { count: number; label: string; tone: ChangeTone }) {
+    return (
+        <span className={CHANGE_TEXT_CLASSES[tone]}>
+            <span className="font-bold tabular-nums">{count.toLocaleString()}</span> {label}
+        </span>
+    );
+}
+
+// Dot separator between change segments.
+function Dot() {
+    return <span className="text-neutral-300 dark:text-neutral-600 select-none">·</span>;
+}
+
+// Icon + label + inline change segments.
+function ChangeLine({ icon, label, children }: { icon: IconDefinition; label: string; children: ReactNode }) {
+    return (
+        <div className="flex items-center gap-2.5 text-sm">
+            <FontAwesomeIcon icon={icon} className="w-4 text-center text-neutral-400 dark:text-neutral-500 shrink-0" />
+            <span className="font-semibold text-neutral-600 dark:text-neutral-200 shrink-0">{label}:</span>
+            <div className="flex items-center gap-2 flex-wrap">{children}</div>
+        </div>
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,6 +1106,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const [showGrype, setShowGrype] = useState(true);
     const [showOsv, setShowOsv] = useState(true);
     const [showNvd, setShowNvd] = useState(true);
+    const [showScc, setShowScc] = useState(true);
 
     // Export state
     const [exportMenuScanId, setExportMenuScanId] = useState<string | null>(null);
@@ -1058,7 +1120,10 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const [scanMenuOpen, setScanMenuOpen] = useState(false);
     const [allVariants, setAllVariants] = useState<Variant[]>([]);
     const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
-    const [selectedScanTypes, setSelectedScanTypes] = useState<Set<string>>(new Set(['grype', 'nvd', 'osv']));
+    const [selectedScanTypes, setSelectedScanTypes] = useState<Set<string>>(new Set(['grype', 'nvd', 'osv', 'scc']));
+    // Scan options
+    const [excludeKernel, setExcludeKernel] = useState(true);
+    const [showKernelHelp, setShowKernelHelp] = useState(false);
     const scanMenuRef = useRef<HTMLDivElement>(null);
 
     // Global Grype scan state — survives tab switches (per-variant)
@@ -1072,6 +1137,10 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     // Global OSV scan state — survives tab switches (per-variant)
     const osvEntries: ScanManagerSnapshot = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
     const osvRunning = osvEntries.some(e => e.status === "running");
+
+    // Global SCC scan state — survives tab switches (per-variant)
+    const sccEntries: ScanManagerSnapshot = useSyncExternalStore(sccSubscribe, sccGetSnapshot);
+    const sccRunning = sccEntries.some(e => e.status === "running");
 
     const refreshScans = useCallback(() => {
         ScansHandler.list(variantId, projectId)
@@ -1144,13 +1213,42 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         return () => osvSetOnDone(null);
     }, [refreshScans, onScanComplete]);
 
+    useEffect(() => {
+        sccSetOnDone(() => { refreshScans(); onScanComplete?.(); });
+        return () => sccSetOnDone(null);
+    }, [refreshScans, onScanComplete]);
+
     // If a scan finished while we were away, refresh the list on mount
     useEffect(() => {
         if (grypeEntries.some(e => e.status === 'done')) refreshScans();
         if (nvdEntries.some(e => e.status === 'done')) refreshScans();
         if (osvEntries.some(e => e.status === 'done')) refreshScans();
+        if (sccEntries.some(e => e.status === 'done')) refreshScans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // After variants are loaded, probe the backend once for any scan that was
+    // running before the page was refreshed and restore the progress panel.
+    useEffect(() => {
+        if (allVariants.length === 0) return;
+        const nameById = new Map(allVariants.map(v => [v.id, v.name]));
+        let cancelled = false;
+
+        ScansHandler.getRunningScans().then(running => {
+            if (cancelled) return;
+            const toEntries = (list: RunningScanEntry[]) =>
+                list
+                    .filter(s => nameById.has(s.variant_id))
+                    .map(s => ({ variantId: s.variant_id, name: nameById.get(s.variant_id)!, status: s }));
+
+            grypeRestore(toEntries(running.grype));
+            nvdRestore(toEntries(running.nvd));
+            osvRestore(toEntries(running.osv));
+            sccRestore(toEntries(running['sbom-cve-check']));
+        });
+
+        return () => { cancelled = true; };
+    }, [allVariants]);
 
     // Fetch variants scoped to the current view for the scan menu
     useEffect(() => {
@@ -1229,10 +1327,12 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
             .map(v => ({ id: v.id, name: v.name }));
         if (variants.length === 0 || selectedScanTypes.size === 0) return;
         setScanMenuOpen(false);
+        const opts = { excludeKernel };
         const promises: Promise<void>[] = [];
-        if (selectedScanTypes.has('grype')) promises.push(triggerScan(variants));
-        if (selectedScanTypes.has('nvd')) promises.push(nvdTriggerScan(variants));
-        if (selectedScanTypes.has('osv')) promises.push(osvTriggerScan(variants));
+        if (selectedScanTypes.has('grype')) promises.push(triggerScan(variants, opts));
+        if (selectedScanTypes.has('nvd')) promises.push(nvdTriggerScan(variants, opts));
+        if (selectedScanTypes.has('osv')) promises.push(osvTriggerScan(variants, opts));
+        if (selectedScanTypes.has('scc')) promises.push(sccTriggerScan(variants, opts));
         await Promise.all(promises);
     }
 
@@ -1252,7 +1352,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
     // Build the scan-trigger button (always visible when there are variant(s) to scan)
     const canTriggerScan = effectiveVariantIds.length > 0 || variantId;
-    const allRunning = grypeRunning || nvdRunning || osvRunning;
+    const allRunning = grypeRunning || nvdRunning || osvRunning || sccRunning;
 
     // Filter out "empty" scans (no changes) when toggle is active
     const displayedScans = hideEmptyScans
@@ -1280,6 +1380,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         if (src === 'grype' && !showGrype) return false;
         if (src === 'osv' && !showOsv) return false;
         if (src === 'nvd' && !showNvd) return false;
+        if (src === 'scc' && !showScc) return false;
         return true;
     });
 
@@ -1306,6 +1407,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         grype: "bg-purple-400",
         osv: "bg-green-400",
         nvd: "bg-orange-400",
+        scc: "bg-sky-400",
     };
 
     // Column sizing — single lane
@@ -1366,6 +1468,17 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
             >
                 <FontAwesomeIcon icon={faShieldHalved} />
                 NVD
+            </button>
+            <button
+                onClick={() => setShowScc(v => !v)}
+                className={[
+                    "py-1 px-2 rounded flex items-center gap-1 text-xs font-semibold transition-colors",
+                    showScc ? "bg-sky-600 text-white" : "bg-sky-900/60 text-sky-400 line-through",
+                ].join(' ')}
+                title={showScc ? "sbom-cve-check scans visible" : "sbom-cve-check scans hidden"}
+            >
+                <FontAwesomeIcon icon={faCrosshairs} />
+                sbom-cve-check
             </button>
 
             {/* Right side: doc link + export + scan menu */}
@@ -1445,6 +1558,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                         { key: 'grype', label: 'Grype', icon: faBug, color: 'purple' },
                                         { key: 'nvd', label: 'NVD CPE', icon: faShieldHalved, color: 'orange' },
                                         { key: 'osv', label: 'OSV', icon: faLeaf, color: 'green' },
+                                        { key: 'scc', label: 'sbom-cve-check', icon: faCrosshairs, color: 'sky' },
                                     ] as const).map(({ key, label, icon, color }) => (
                                         <label
                                             key={key}
@@ -1498,6 +1612,45 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                     )}
                                 </div>
 
+                                {/* Options */}
+                                <div className="mb-3">
+                                    <div className="text-xs font-semibold text-sky-300 mb-1.5">Options</div>
+                                    <div className="flex items-center gap-2 py-1 px-1 rounded hover:bg-sky-900/40 text-sm">
+                                        <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                                            <input
+                                                type="checkbox"
+                                                checked={excludeKernel}
+                                                onChange={() => setExcludeKernel(v => !v)}
+                                                className="rounded accent-cyan-500"
+                                            />
+                                            <span className="text-neutral-200 truncate">Deactivate kernel scan</span>
+                                        </label>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowKernelHelp(v => !v)}
+                                            className="text-sky-400 hover:text-sky-300 transition-colors shrink-0"
+                                            title="Why deactivate kernel scan?"
+                                            aria-label="Why deactivate kernel scan?"
+                                        >
+                                            <FontAwesomeIcon icon={faCircleQuestion} className="w-3.5" />
+                                        </button>
+                                    </div>
+                                    {showKernelHelp && (
+                                        <div className="mt-1 p-2 rounded bg-sky-900/30 border border-sky-700/40 text-xs text-sky-200 leading-relaxed">
+                                            A Yocto kernel recipe expands into the real kernel package
+                                            (e.g. <span className="font-mono text-sky-100">linux-*</span>) plus many
+                                            companion packages (<span className="font-mono text-sky-100">kernel-6.6.x</span>,
+                                            {' '}<span className="font-mono text-sky-100">kernel-modules</span>,
+                                            {' '}<span className="font-mono text-sky-100">kernel-devicetree</span>,
+                                            {' '}<span className="font-mono text-sky-100">kernel-module-*</span> …) that all
+                                            inherit the same kernel CPE. Scanning them attributes the entire kernel CVE set
+                                            to every companion, producing thousands of duplicate findings and slow scans.
+                                            The real kernel package is still scanned, so kernel CVEs remain covered.
+                                            Leave this on unless you specifically need to scan each kernel sub-package.
+                                        </div>
+                                    )}
+                                </div>
+
                                 {/* Run button */}
                                 <button
                                     onClick={handleRunSelectedScans}
@@ -1524,6 +1677,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const grypeColors = { border: "border-purple-700/60", headerBg: "bg-purple-900/40", iconText: "text-purple-400", titleText: "text-purple-200", subtitleText: "text-purple-300/80", bar: "bg-purple-500" };
     const nvdColors = { border: "border-orange-700/60", headerBg: "bg-orange-900/40", iconText: "text-orange-400", titleText: "text-orange-200", subtitleText: "text-orange-300/80", bar: "bg-orange-500" };
     const osvColors = { border: "border-green-700/60", headerBg: "bg-green-900/40", iconText: "text-green-400", titleText: "text-green-200", subtitleText: "text-green-300/80", bar: "bg-green-500" };
+    const sccColors = { border: "border-sky-700/60", headerBg: "bg-sky-900/40", iconText: "text-sky-400", titleText: "text-sky-200", subtitleText: "text-sky-300/80", bar: "bg-sky-500" };
 
     const progressPanels = (
         <>
@@ -1543,6 +1697,12 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                 .filter(e => e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
                 .map(entry => (
                     <ScanProgressPanel key={`osv-${entry.variantId}`} entry={entry} label="OSV Scan" icon={faLeaf} colors={osvColors} onDismiss={() => osvDismiss(entry.variantId)} />
+                ))
+            }
+            {sccEntries
+                .filter(e => e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
+                .map(entry => (
+                    <ScanProgressPanel key={`scc-${entry.variantId}`} entry={entry} label="sbom-cve-check Scan" icon={faCrosshairs} colors={sccColors} onDismiss={() => sccDismiss(entry.variantId)} />
                 ))
             }
         </>
@@ -1725,6 +1885,17 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                             NVD CPE Scan
                                         </span>
                                         </>
+                                    ) : (scan.scan_type || 'sbom') === 'tool' && scan.scan_source === 'scc' ? (
+                                        <>
+                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300">
+                                            <FontAwesomeIcon icon={faCrosshairs} className="mr-1" />
+                                            Vulnerability Scan
+                                        </span>
+                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">
+                                            <FontAwesomeIcon icon={faBook} className="mr-1" />
+                                            sbom-cve-check Scan
+                                        </span>
+                                        </>
                                     ) : (scan.scan_type || 'sbom') === 'tool' ? (
                                         <>
                                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300">
@@ -1759,245 +1930,112 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                     }
                                 </p>
 
-                                {/* Row 2: badges + details button */}
-                                {(scan.scan_type || 'sbom') === 'tool' && (
-                                <>
-                                {/* Update Vulnerabilities row */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Update Vulnerabilities:</span>
-                                    {scan.is_first ? (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vuln_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.vuln_count ?? 0).toLocaleString()} vulnerabilities detected
-                                            </span>
-                                            {scan.newly_detected_vulns != null && (
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${scan.newly_detected_vulns > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {scan.newly_detected_vulns.toLocaleString()} new vulnerabilities discovered
-                                            </span>
-                                            )}
-                                        </>
-                                    ) : (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vuln_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.vuln_count ?? 0).toLocaleString()} vulnerabilities detected
-                                            </span>
-                                            {scan.newly_detected_vulns != null && (
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${scan.newly_detected_vulns > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {scan.newly_detected_vulns.toLocaleString()} new vulnerabilities discovered
-                                            </span>
-                                            )}
-                                        </>
-                                    )}
-                                </div>
-                                {/* Update Findings row */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Update Findings:</span>
-                                    {scan.is_first ? (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.finding_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.finding_count ?? 0).toLocaleString()} findings detected
-                                            </span>
-                                            {scan.newly_detected_findings != null && (
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${scan.newly_detected_findings > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {scan.newly_detected_findings.toLocaleString()} new findings discovered
-                                            </span>
-                                            )}
-                                        </>
-                                    ) : (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.finding_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.finding_count ?? 0).toLocaleString()} findings detected
-                                            </span>
-                                            {scan.newly_detected_findings != null && (
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${scan.newly_detected_findings > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {scan.newly_detected_findings.toLocaleString()} new findings discovered
-                                            </span>
-                                            )}
-                                        </>
-                                    )}
-
-                                </div>
-                                {/* Update Assessments row */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Update Assessments:</span>
-                                    {scan.is_first ? (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.assessment_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.assessment_count ?? 0).toLocaleString()} assessments detected
-                                            </span>
-                                            {scan.newly_detected_assessments != null && (
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.newly_detected_assessments ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.newly_detected_assessments ?? 0).toLocaleString()} new assessments discovered
-                                            </span>
-                                            )}
-                                        </>
-                                    ) : (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.assessment_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.assessment_count ?? 0).toLocaleString()} assessments detected
-                                            </span>
-                                            {scan.newly_detected_assessments != null && (
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.newly_detected_assessments ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.newly_detected_assessments ?? 0).toLocaleString()} new assessments discovered
-                                            </span>
-                                            )}
-                                        </>
-                                    )}
-                                    {/* Details button */}
-                                    <button
-                                        onClick={() => { setOpenDiffId(scan.id); setOpenDiffType(scan.scan_type || 'sbom'); }}
-                                        className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-neutral-200 transition-colors"
-                                    >
-                                        Details
-                                    </button>
-                                </div>
-                                </>
-                                )}
-                                {(scan.scan_type || 'sbom') !== 'tool' && (
-                                <>
-                                {/* Vulnerabilities row */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Vulnerabilities:</span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vuln_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.vuln_count ?? 0).toLocaleString()} vulnerabilities detected
-                                    </span>
-                                    {!scan.is_first && (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vulns_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.vulns_added ?? 0).toLocaleString()} new vulnerabilities
-                                            </span>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vulns_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.vulns_removed ?? 0).toLocaleString()} vulnerabilities removed
-                                            </span>
-                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
-                                                {(scan.vulns_unchanged ?? 0).toLocaleString()} vulnerabilities unchanged
-                                            </span>
-                                        </>
-                                    )}
-                                </div>
-                                {/* Findings row */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Findings:</span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.finding_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.finding_count ?? 0).toLocaleString()} findings detected
-                                    </span>
-                                    {!scan.is_first && (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.findings_added ?? 0).toLocaleString()} new findings
-                                            </span>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.findings_removed ?? 0).toLocaleString()} findings removed
-                                            </span>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_upgraded ?? 0) > 0 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.findings_upgraded ?? 0).toLocaleString()} findings upgraded
-                                            </span>
-                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
-                                                {(scan.findings_unchanged ?? 0).toLocaleString()} findings unchanged
-                                            </span>
-                                        </>
-                                    )}
-                                </div>
-                                {/* Packages row */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Packages:</span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.package_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.package_count ?? 0).toLocaleString()} packages detected
-                                    </span>
-                                    {!scan.is_first && (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.packages_added ?? 0).toLocaleString()} new packages
-                                            </span>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.packages_removed ?? 0).toLocaleString()} packages removed
-                                            </span>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_upgraded ?? 0) > 0 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.packages_upgraded ?? 0).toLocaleString()} packages upgraded
-                                            </span>
-                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
-                                                {(scan.packages_unchanged ?? 0).toLocaleString()} packages unchanged
-                                            </span>
-                                        </>
-                                    )}
-                                </div>
-                                {/* Assessments row */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Assessments:</span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.assessment_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.assessment_count ?? 0).toLocaleString()} assessments detected
-                                    </span>
-                                    {!scan.is_first && (scan.assessment_count ?? 0) > 0 && (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.assessments_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.assessments_added ?? 0).toLocaleString()} new assessments
-                                            </span>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.assessments_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.assessments_removed ?? 0).toLocaleString()} assessments removed
-                                            </span>
-                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
-                                                {(scan.assessments_unchanged ?? 0).toLocaleString()} assessments unchanged
-                                            </span>
-                                        </>
-                                    )}
-                                    {/* Details button */}
-                                    <button
-                                        onClick={() => { setOpenDiffId(scan.id); setOpenDiffType(scan.scan_type || 'sbom'); }}
-                                        className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-neutral-200 transition-colors"
-                                    >
-                                        Details
-                                    </button>
-                                </div>
-
-                                {/* Scan Result row — uses global counts when tool scans exist, else SBOM-only */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1 mt-2 pt-2 border-t border-neutral-300 dark:border-neutral-600">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Scan Result:</span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${((scan.global_package_count ?? scan.package_count ?? 0)) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.global_package_count ?? scan.package_count ?? 0).toLocaleString()} packages
-                                    </span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${((scan.global_finding_count ?? scan.finding_count ?? 0)) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.global_finding_count ?? scan.finding_count ?? 0).toLocaleString()} findings
-                                    </span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${((scan.global_vuln_count ?? scan.vuln_count ?? 0)) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.global_vuln_count ?? scan.vuln_count ?? 0).toLocaleString()} vulnerabilities
-                                    </span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_assessment_count ?? scan.assessment_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.global_assessment_count ?? scan.assessment_count ?? 0).toLocaleString()} assessments
-                                    </span>
+                                {/* ===== Current result (top) ===== */}
+                                <div className="mt-3 flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <h4 className="text-sm font-bold text-neutral-700 dark:text-neutral-100 mb-1.5">Current result</h4>
+                                        <div className="flex items-baseline gap-x-10 gap-y-1.5 flex-wrap">
+                                            <BigStat count={scan.global_package_count ?? scan.package_count ?? 0} label="packages" />
+                                            <BigStat count={scan.global_vuln_count ?? scan.vuln_count ?? 0} label="unique vulnerabilities" />
+                                            <BigStat count={scan.global_finding_count ?? scan.finding_count ?? 0} label="vulnerability matches" />
+                                            <BigStat count={scan.global_assessment_count ?? scan.assessment_count ?? 0} label="assessments" />
+                                        </div>
+                                    </div>
                                     <button
                                         onClick={() => setOpenGlobalId(scan.id)}
-                                        className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-neutral-200 transition-colors"
+                                        className="shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-neutral-200 transition-colors"
                                     >
                                         Details
                                     </button>
                                 </div>
-                                </>
-                                )}
 
-                                {/* Scan Result (tool scans only) — SBOM ∪ all sources */}
-                                {(scan.scan_type || 'sbom') === 'tool' && scan.global_finding_count != null && (
-                                    <div className="flex items-center gap-2 flex-wrap mb-1 mt-2 pt-2 border-t border-neutral-300 dark:border-neutral-600">
-                                        <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Scan Result:</span>
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_package_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.global_package_count ?? 0).toLocaleString()} packages
-                                        </span>
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_finding_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.global_finding_count ?? 0).toLocaleString()} findings
-                                        </span>
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_vuln_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.global_vuln_count ?? 0).toLocaleString()} vulnerabilities
-                                        </span>
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_assessment_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.global_assessment_count ?? 0).toLocaleString()} assessments
-                                        </span>
+                                {/* ===== Changes since previous scan (skipped only for the very
+                                       first SBOM import, where the diff would simply mirror the
+                                       current result.  Tool scans always have meaningful changes —
+                                       their `is_first` only means "first scan of this source" — so
+                                       they keep showing the section.) ===== */}
+                                {!(scan.is_first && (scan.scan_type || 'sbom') !== 'tool') && (
+                                <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-600">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <h4 className="text-sm font-bold text-neutral-700 dark:text-neutral-100">
+                                            Changes since previous scan
+                                        </h4>
                                         <button
-                                            onClick={() => setOpenGlobalId(scan.id)}
+                                            onClick={() => { setOpenDiffId(scan.id); setOpenDiffType(scan.scan_type || 'sbom'); }}
                                             className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-neutral-200 transition-colors"
                                         >
                                             Details
                                         </button>
                                     </div>
+                                    <div className="space-y-1.5">
+                                        {(scan.scan_type || 'sbom') === 'tool' ? (
+                                            <>
+                                                <ChangeLine icon={faShieldHalved} label="Unique vulnerabilities">
+                                                    <ChangeStat count={scan.vuln_count ?? 0} label="detected" tone="total" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.newly_detected_vulns ?? 0} label="new" tone="added" />
+                                                </ChangeLine>
+                                                <ChangeLine icon={faMagnifyingGlass} label="Vulnerability matches">
+                                                    <ChangeStat count={scan.finding_count ?? 0} label="detected" tone="total" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.newly_detected_findings ?? 0} label="new" tone="added" />
+                                                </ChangeLine>
+                                                <ChangeLine icon={faClipboardCheck} label="Assessments">
+                                                    <ChangeStat count={scan.assessment_count ?? 0} label="detected" tone="total" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.newly_detected_assessments ?? 0} label="new" tone="added" />
+                                                </ChangeLine>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <ChangeLine icon={faShieldHalved} label="Unique vulnerabilities">
+                                                    <ChangeStat count={scan.vuln_count ?? 0} label="detected" tone="total" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.vulns_added ?? 0} label="new" tone="added" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.vulns_removed ?? 0} label="no longer present" tone="removed" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.vulns_unchanged ?? 0} label="still present" tone="neutral" />
+                                                </ChangeLine>
+                                                <ChangeLine icon={faMagnifyingGlass} label="Vulnerability matches">
+                                                    <ChangeStat count={scan.finding_count ?? 0} label="detected" tone="total" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.findings_added ?? 0} label="new" tone="added" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.findings_removed ?? 0} label="no longer present" tone="removed" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.findings_upgraded ?? 0} label="upgraded" tone="upgraded" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.findings_unchanged ?? 0} label="still present" tone="neutral" />
+                                                </ChangeLine>
+                                                <ChangeLine icon={faBox} label="Packages">
+                                                    <ChangeStat count={scan.package_count ?? 0} label="detected" tone="total" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.packages_added ?? 0} label="new" tone="added" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.packages_removed ?? 0} label="no longer present" tone="removed" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.packages_upgraded ?? 0} label="upgraded" tone="upgraded" />
+                                                    <Dot />
+                                                    <ChangeStat count={scan.packages_unchanged ?? 0} label="still present" tone="neutral" />
+                                                </ChangeLine>
+                                                <ChangeLine icon={faClipboardCheck} label="Assessments">
+                                                    <ChangeStat count={scan.assessment_count ?? 0} label="detected" tone="total" />
+                                                    {(scan.assessment_count ?? 0) > 0 && (<>
+                                                        <Dot />
+                                                        <ChangeStat count={scan.assessments_added ?? 0} label="new" tone="added" />
+                                                        <Dot />
+                                                        <ChangeStat count={scan.assessments_removed ?? 0} label="no longer present" tone="removed" />
+                                                        <Dot />
+                                                        <ChangeStat count={scan.assessments_unchanged ?? 0} label="still present" tone="neutral" />
+                                                    </>)}
+                                                </ChangeLine>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
                                 )}
+
 
                                 {/* Description row */}
                                 {editingDescId === scan.id ? (

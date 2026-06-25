@@ -6,7 +6,7 @@ from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.cvss import CVSS
 from ..models.assessment import Assessment
-from ..controllers import PackagesController, VulnerabilitiesController, AssessmentsController
+from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
 from ..helpers.datetime_utils import normalize_timestamp_for_sort
 from cyclonedx.model.bom import Bom
 from cyclonedx.output.json import JsonV1Dot4, JsonV1Dot5, JsonV1Dot6
@@ -25,11 +25,11 @@ class CycloneDx:
     Also support output to CycloneDx SBOM format.
     """
 
-    def __init__(self, controllers):
-        self.packagesCtrl: PackagesController = controllers["packages"]
-        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
-        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
-        self.ref_dict = {}
+    def __init__(self, controllers: ControllersCache):
+        self.packagesCtrl: PackagesController = controllers.packages
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
+        self.assessmentsCtrl: AssessmentsController = controllers.assessments
+        self.ref_dict: dict = {}  # TODO exact type
 
     _SEVERITY_MAP = {
         "low": cyclonedx.model.vulnerability.VulnerabilitySeverity.LOW,
@@ -251,7 +251,8 @@ class CycloneDx:
 
             for assessment in self.assessmentsCtrl.gets_by_vuln(vulnerability.id):
                 if (assessment.is_compatible_status(assess.status)
-                   and assessment.is_compatible_justification(assess.justification)):
+                   and assessment.is_compatible_justification(assess.justification)
+                   and assess.status_notes is not None):
 
                     similar_status_notes = False
 
@@ -303,7 +304,7 @@ class CycloneDx:
                 bom_ref=vuln.id,
                 source=cyclonedx.model.vulnerability.VulnerabilitySource(
                     name=vuln.namespace,
-                    url=vuln.datasource
+                    url=cyclonedx.model.XsUri(uri=vuln.datasource)
                 ),
                 description=vuln.description,
             )
@@ -351,13 +352,16 @@ class CycloneDx:
                 )
             for pkg in vuln.packages:
                 package = self.packagesCtrl.get(pkg)
-                if len(package.purl) < 1:
+                if package is None:
+                    continue
+                if not package.purl:
                     package.generate_generic_purl()
-                vuln_obj.affects.add(
-                    cyclonedx.model.vulnerability.BomTarget(
-                        ref=package.purl[0]
+                if package.purl:
+                    vuln_obj.affects.add(
+                        cyclonedx.model.vulnerability.BomTarget(
+                            ref=package.purl[0]
+                        )
                     )
-                )
             self.register_assessment(vuln_obj)
             self.sbom.vulnerabilities.add(vuln_obj)
 

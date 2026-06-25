@@ -9,8 +9,10 @@ endpoint for polling progress.
 
 import os
 import threading
+import uuid
 
-from flask import jsonify
+from flask import Flask, jsonify, request
+from flask.typing import ResponseReturnValue
 
 from ..models.scan import Scan
 from ..models.finding import Finding
@@ -20,6 +22,7 @@ from ..models.sbom_package import SBOMPackage
 from ..models.sbom_document import SBOMDocument
 from ..extensions import db
 from ..views.grype_vulns import GrypeVulns
+from ..helpers.scan_filters import is_kernel_package_name
 
 from ._scan_helpers import (
     validate_trigger,
@@ -31,7 +34,16 @@ from ._scan_helpers import (
 )
 
 
-def init_app(app):
+def _read_exclude_kernel() -> bool:
+    """Read the ``exclude_kernel`` request option (defaults to ``True``).
+
+    Kernel companion packages are excluded from scanner inputs by default;
+    the UI can opt back in by sending ``?exclude_kernel=false``.
+    """
+    return request.args.get("exclude_kernel", "true").strip().lower() != "false"
+
+
+def init_app(app: Flask) -> None:
 
     # ------------------------------------------------------------------
     # Grype Scan
@@ -40,7 +52,7 @@ def init_app(app):
     _grype_scans_in_progress: dict = {}
 
     @app.route('/api/variants/<variant_id>/grype-scan', methods=['POST'])
-    def trigger_grype_scan(variant_id):
+    def trigger_grype_scan(variant_id: str) -> ResponseReturnValue:
         """Trigger a Grype vulnerability scan for the given variant.
 
         Exports the variant's packages as CycloneDX, runs ``grype`` on the
@@ -54,6 +66,8 @@ def init_app(app):
             variant_id, _grype_scans_in_progress, "Grype scan")
         if err is not None:
             return err
+        if variant_uuid is None or variant is None:
+            return jsonify({"error": "Internal error"}), 500
 
         # Check that grype is available
         if shutil.which("grype") is None:
@@ -85,9 +99,10 @@ def init_app(app):
             ).all()
             sbom_pkg_set = {(r[0], r[1]) for r in pkg_rows}
 
+        exclude_kernel = _read_exclude_kernel()
         init_progress(_grype_scans_in_progress, vid_str, total=4)
 
-        def _run_grype_scan():
+        def _run_grype_scan() -> None:
             try:
                 base_dir = os.environ.get(
                     "BASE_DIR",
@@ -95,14 +110,18 @@ def init_app(app):
                 )
                 grype_tmp = tempfile.mkdtemp(prefix="vulnscout_grype_")
                 try:
-                    # 1. Export current DB as CycloneDX
+                    # 1. Export this variant's DB packages as CycloneDX.
+                    #    The export is scoped to the project/variant so it only
+                    #    emits this variant's packages — Grype never sees the
+                    #    other projects'/variants' components.
                     _grype_scans_in_progress[vid_str]["progress"] = "1/4 Exporting CycloneDX"
                     _grype_scans_in_progress[vid_str]["logs"].append(
-                        "[1/4] Exporting current DB as CycloneDX…"
+                        "[1/4] Exporting variant packages as CycloneDX…"
                     )
                     subprocess.run(
                         ["flask", "--app", "src.bin.webapp", "export",
-                         "--format", "cdx16", "--output-dir", grype_tmp],
+                         "--format", "cdx16", "--output-dir", grype_tmp,
+                         "--variant-id", vid_str],
                         cwd=base_dir, check=True, capture_output=True, text=True,
                         timeout=120,
                     )
@@ -116,6 +135,64 @@ def init_app(app):
                     _grype_scans_in_progress[vid_str]["logs"].append(
                         "[1/4] CycloneDX export complete"
                     )
+
+                    # 1.5 De-duplicate components that share the same
+                    #     name@version before running Grype.  Even when scoped
+                    #     to a single variant, the export emits one row per
+                    #     package, so a package appears multiple times when it
+                    #     differs only by supplier (the supplier-less
+                    #     Grype/NOASSERTION base alongside the SBOM-declared
+                    #     supplier).  Grype only needs one, and feeding
+                    #     duplicates just multiplies its work and produces
+                    #     duplicate matches.  Key on the *raw* name@version:
+                    #     supplier duplicates carry an identical raw name,
+                    #     whereas normalising would over-collapse genuinely
+                    #     distinct packages that happen to share a normalised
+                    #     name.
+                    if sbom_pkg_set:
+                        import json as _json
+                        with open(exported_cdx, "r") as cf:
+                            cdx_data = _json.load(cf)
+                        components = cdx_data.get("components", [])
+                        orig_components = len(components)
+                        kept = []
+                        kept_refs = set()
+                        seen_nv: set = set()
+                        kernel_modules_dropped = 0
+                        for comp in components:
+                            name = comp.get("name", "")
+                            version = comp.get("version", "")
+                            # Skip kernel companion packages: they expand to
+                            # thousands of entries in SPDX 3 SBOMs and all inherit
+                            # the base kernel CPE, so they make Grype crawl with
+                            # no useful results.  Skipped only when the kernel
+                            # exclusion option is enabled (the default).
+                            if exclude_kernel and is_kernel_package_name(name):
+                                kernel_modules_dropped += 1
+                                continue
+                            nv = (name, version)
+                            if nv in seen_nv:
+                                continue
+                            seen_nv.add(nv)
+                            kept.append(comp)
+                            ref = comp.get("bom-ref")
+                            if ref:
+                                kept_refs.add(ref)
+                        cdx_data["components"] = kept
+                        # Prune dependency edges that reference dropped components.
+                        if isinstance(cdx_data.get("dependencies"), list):
+                            cdx_data["dependencies"] = [
+                                dep for dep in cdx_data["dependencies"]
+                                if dep.get("ref") in kept_refs
+                            ]
+                        with open(exported_cdx, "w") as cf:
+                            _json.dump(cdx_data, cf)
+                        _grype_scans_in_progress[vid_str]["logs"].append(
+                            f"[1/4] De-duplicated components: "
+                            f"{len(kept)}/{orig_components} kept"
+                            + (f" ({kernel_modules_dropped} kernel modules excluded)"
+                               if kernel_modules_dropped else "")
+                        )
 
                     # 2. Run grype on the exported SBOM
                     _grype_scans_in_progress[vid_str]["progress"] = "2/4 Running Grype"
@@ -141,11 +218,11 @@ def init_app(app):
                         "[2/4] Grype scan complete"
                     )
 
-                    # 2.5 Filter grype output to only keep matches for
+                    # 2.5 Defensive filter: keep only grype matches for
                     #     packages present in this variant's SBOM.  The
-                    #     CycloneDX export is global (all variants), so
-                    #     grype may report vulnerabilities for packages
-                    #     that do not belong to this variant.
+                    #     CycloneDX input is already scoped to the variant, so
+                    #     this is normally a no-op, but it guards against any
+                    #     stray artifact grype might synthesise.
                     if sbom_pkg_set:
                         import json as _json
                         with open(grype_out, "r") as gf:
@@ -225,7 +302,7 @@ def init_app(app):
         return jsonify({"status": "started", "variant_id": vid_str}), 202
 
     @app.route('/api/variants/<variant_id>/grype-scan/status')
-    def grype_scan_status(variant_id):
+    def grype_scan_status(variant_id: str) -> ResponseReturnValue:
         """Check the status of a running Grype scan for the given variant."""
         return scan_status_response(variant_id, _grype_scans_in_progress)
 
@@ -236,7 +313,7 @@ def init_app(app):
     _nvd_scans_in_progress: dict = {}
 
     @app.route('/api/variants/<variant_id>/nvd-scan', methods=['POST'])
-    def trigger_nvd_scan(variant_id):
+    def trigger_nvd_scan(variant_id: str) -> ResponseReturnValue:
         """Trigger an NVD CPE-based vulnerability scan for the given variant.
 
         For every active package that has CPE identifiers, query the NVD CVE
@@ -247,15 +324,18 @@ def init_app(app):
             variant_id, _nvd_scans_in_progress, "NVD scan")
         if err is not None:
             return err
+        if variant_uuid is None:
+            return jsonify({"error": "Internal error"}), 500
 
         vid_str = str(variant_uuid)
+        exclude_kernel = _read_exclude_kernel()
         init_progress(_nvd_scans_in_progress, vid_str)
 
-        def _run_nvd_scan():
+        def _run_nvd_scan() -> None:
             with app.app_context():
                 _do_nvd_scan(vid_str, variant_uuid)
 
-        def _do_nvd_scan(vid_str, variant_uuid):
+        def _do_nvd_scan(vid_str: str, variant_uuid: uuid.UUID) -> None:
             try:
                 from ..controllers.nvd_db import NVD_DB
                 from ..models.vulnerability import Vulnerability as VulnModel
@@ -270,7 +350,8 @@ def init_app(app):
                     "Resolving active packages…"
                 )
                 packages, pkg_err = resolve_active_packages(
-                    variant_uuid, _nvd_scans_in_progress, vid_str)
+                    variant_uuid, _nvd_scans_in_progress, vid_str,
+                    exclude_kernel=exclude_kernel)
                 if pkg_err:
                     return
 
@@ -466,7 +547,7 @@ def init_app(app):
         return jsonify({"status": "started", "variant_id": vid_str}), 202
 
     @app.route('/api/variants/<variant_id>/nvd-scan/status')
-    def nvd_scan_status(variant_id):
+    def nvd_scan_status(variant_id: str) -> ResponseReturnValue:
         """Check the status of a running NVD scan for the given variant."""
         return scan_status_response(variant_id, _nvd_scans_in_progress)
 
@@ -477,7 +558,7 @@ def init_app(app):
     _osv_scans_in_progress: dict = {}
 
     @app.route('/api/variants/<variant_id>/osv-scan', methods=['POST'])
-    def trigger_osv_scan(variant_id):
+    def trigger_osv_scan(variant_id: str) -> ResponseReturnValue:
         """Trigger an OSV PURL-based vulnerability scan for the given variant.
 
         For every active package that has PURL identifiers, query the OSV API
@@ -488,15 +569,18 @@ def init_app(app):
             variant_id, _osv_scans_in_progress, "OSV scan")
         if err is not None:
             return err
+        if variant_uuid is None:
+            return jsonify({"error": "Internal error"}), 500
 
         vid_str = str(variant_uuid)
+        exclude_kernel = _read_exclude_kernel()
         init_progress(_osv_scans_in_progress, vid_str)
 
-        def _run_osv_scan():
+        def _run_osv_scan() -> None:
             with app.app_context():
                 _do_osv_scan(vid_str, variant_uuid)
 
-        def _do_osv_scan(vid_str, variant_uuid):
+        def _do_osv_scan(vid_str: str, variant_uuid: uuid.UUID) -> None:
             try:
                 from ..controllers.osv_client import OSVClient
                 from ..models.vulnerability import Vulnerability as VulnModel
@@ -508,7 +592,8 @@ def init_app(app):
                     "Resolving active packages…"
                 )
                 packages, pkg_err = resolve_active_packages(
-                    variant_uuid, _osv_scans_in_progress, vid_str)
+                    variant_uuid, _osv_scans_in_progress, vid_str,
+                    exclude_kernel=exclude_kernel)
                 if pkg_err:
                     return
 
@@ -664,6 +749,213 @@ def init_app(app):
         return jsonify({"status": "started", "variant_id": vid_str}), 202
 
     @app.route('/api/variants/<variant_id>/osv-scan/status')
-    def osv_scan_status(variant_id):
+    def osv_scan_status(variant_id: str) -> ResponseReturnValue:
         """Check the status of a running OSV scan for the given variant."""
         return scan_status_response(variant_id, _osv_scans_in_progress)
+
+    # ------------------------------------------------------------------
+    # sbom-cve-check Scan — local NVD-FKIE + CVEList with VEX
+    # ------------------------------------------------------------------
+
+    _sbom_cve_check_scans_in_progress: dict = {}
+
+    @app.route('/api/variants/<variant_id>/sbom-cve-check-scan', methods=['POST'])
+    def trigger_sbom_cve_check_scan(variant_id: str) -> ResponseReturnValue:
+        """Trigger a local CVE-database scan (NVD-FKIE + CVEList V5) for the given variant.
+
+        Matches every active package against locally-cloned advisory databases,
+        applies product-name aliasing and semantic version-range analysis, and
+        records each engine VEX verdict.  Works once the databases are cloned.
+        """
+        variant_uuid, variant, err = validate_trigger(
+            variant_id, _sbom_cve_check_scans_in_progress, "sbom-cve-check scan")
+        if err is not None:
+            return err
+        if variant_uuid is None:
+            return jsonify({"error": "Internal error"}), 500
+
+        vid_str = str(variant_uuid)
+        exclude_kernel = _read_exclude_kernel()
+        init_progress(_sbom_cve_check_scans_in_progress, vid_str)
+
+        def _run_sbom_cve_check_scan() -> None:
+            with app.app_context():
+                _do_sbom_cve_check_scan(vid_str, variant_uuid)
+
+        def _do_sbom_cve_check_scan(vid_str: str, variant_uuid: uuid.UUID) -> None:
+            try:
+                from ..controllers.scc_engine import get_engine
+                from ..bin.cmd_vuln_scan import (
+                    _SccBulkWriter,
+                )
+
+                # 1. Resolve active packages
+                _sbom_cve_check_scans_in_progress[vid_str]["logs"].append(
+                    "Resolving active packages…"
+                )
+                packages, pkg_err = resolve_active_packages(
+                    variant_uuid, _sbom_cve_check_scans_in_progress, vid_str,
+                    exclude_kernel=exclude_kernel)
+                if pkg_err:
+                    return
+
+                total_pkgs = len(packages)
+                _sbom_cve_check_scans_in_progress[vid_str]["total"] = total_pkgs
+                _sbom_cve_check_scans_in_progress[vid_str]["logs"].append(
+                    f"Resolved {total_pkgs} active packages"
+                )
+
+                # 2. Load (or reuse cached) engine index — expensive on first call.
+                # Forward sbom_cve_check library log records (git clone/fetch
+                # progress, indexing steps) directly into the scan log so the
+                # UI shows live progress instead of a frozen spinner.
+                import logging
+
+                class _SccLogForwarder(logging.Handler):
+                    def __init__(self, logs: list) -> None:
+                        super().__init__(logging.INFO)
+                        self._logs = logs
+
+                    def emit(self, record: logging.LogRecord) -> None:
+                        self._logs.append(self.format(record))
+
+                _forwarder = _SccLogForwarder(
+                    _sbom_cve_check_scans_in_progress[vid_str]["logs"]
+                )
+                _forwarder.setFormatter(logging.Formatter("%(message)s"))
+                _scc_logger = logging.getLogger("sbom_cve_check")
+                _scc_logger.addHandler(_forwarder)
+                _scc_prev_level = _scc_logger.level
+                _scc_logger.setLevel(logging.INFO)
+                _sbom_cve_check_scans_in_progress[vid_str]["logs"].append(
+                    "Loading CVE databases — this might take several minutes on first run…"
+                )
+                try:
+                    engine = get_engine()
+                except Exception as e:
+                    set_error(_sbom_cve_check_scans_in_progress, vid_str,
+                              f"Failed to load CVE databases: {str(e)[:300]}")
+                    return
+                finally:
+                    _scc_logger.removeHandler(_forwarder)
+                    _scc_logger.setLevel(_scc_prev_level)
+                _sbom_cve_check_scans_in_progress[vid_str]["logs"].append(
+                    "Index ready — scanning packages"
+                )
+
+                # 3. Create a tool scan
+                scan = Scan.create(
+                    description="empty description",
+                    variant_id=variant_uuid,
+                    scan_type="tool",
+                    scan_source="scc",
+                )
+                writer = _SccBulkWriter(scan.id, variant_uuid, packages)
+
+                for idx, pkg in enumerate(packages, 1):
+                    pkg_label = (
+                        f"{pkg.name}@{pkg.version}" if pkg.name else str(pkg.id)
+                    )
+                    _sbom_cve_check_scans_in_progress[vid_str]["progress"] = (
+                        f"{idx}/{total_pkgs} packages"
+                    )
+
+                    persisted_ids: list = []
+                    seen_keys: set = set()
+                    try:
+                        for computed, status in engine.applicable_vulns(pkg):
+                            cve_id = writer.add(pkg, computed, status, seen_keys)
+                            if cve_id is not None:
+                                persisted_ids.append(cve_id)
+                    except Exception as e:
+                        log_entry = (
+                            f"[{idx}/{total_pkgs}] ERROR "
+                            f"{pkg_label}: {str(e)[:200]}"
+                        )
+                        _sbom_cve_check_scans_in_progress[vid_str]["logs"].append(log_entry)
+                        _sbom_cve_check_scans_in_progress[vid_str]["done_count"] = idx
+                        print(f"[sbom-cve-check Scan] Error scanning {pkg_label}: {e}", flush=True)
+                        continue
+
+                    if persisted_ids:
+                        ids_str = ', '.join(persisted_ids[:10])
+                        ellip = '…' if len(persisted_ids) > 10 else ''
+                        log_entry = (
+                            f"[{idx}/{total_pkgs}] {pkg_label} → "
+                            f"{len(persisted_ids)} vuln(s): {ids_str}{ellip}"
+                        )
+                    else:
+                        log_entry = (
+                            f"[{idx}/{total_pkgs}] {pkg_label} → no vulnerabilities"
+                        )
+                    _sbom_cve_check_scans_in_progress[vid_str]["logs"].append(log_entry)
+                    _sbom_cve_check_scans_in_progress[vid_str]["done_count"] = idx
+
+                    # Flush in large bulk-inserted chunks to bound transaction size.
+                    writer.maybe_flush()
+
+                writer.flush()
+                cves_found = writer.cves_found
+
+                done_logs = _sbom_cve_check_scans_in_progress[vid_str].get("logs", [])
+                done_logs.append(
+                    f"✓ Scan complete — found {len(cves_found)} "
+                    f"unique vulnerabilities across {total_pkgs} packages"
+                )
+                _sbom_cve_check_scans_in_progress[vid_str] = {
+                    "status": "done",
+                    "error": None,
+                    "progress": (
+                        f"Found {len(cves_found)} vulnerabilities "
+                        f"across {total_pkgs} packages"
+                    ),
+                    "logs": done_logs,
+                    "total": total_pkgs,
+                    "done_count": total_pkgs,
+                }
+
+            except Exception as e:
+                db.session.rollback()
+                set_error(_sbom_cve_check_scans_in_progress, vid_str, str(e)[:500])
+
+        thread = threading.Thread(
+            target=_run_sbom_cve_check_scan,
+            name=f"sbom-cve-check-scan-{vid_str}",
+            daemon=True,
+        )
+        thread.start()
+
+        return jsonify({"status": "started", "variant_id": vid_str}), 202
+
+    @app.route('/api/variants/<variant_id>/sbom-cve-check-scan/status')
+    def sbom_cve_check_scan_status(variant_id: str) -> ResponseReturnValue:
+        """Check the status of a running sbom-cve-check scan for the given variant."""
+        return scan_status_response(variant_id, _sbom_cve_check_scans_in_progress)
+
+    # ------------------------------------------------------------------
+    # Bulk running-scan discovery
+    # ------------------------------------------------------------------
+
+    @app.route('/api/scans/running')
+    def running_scans() -> ResponseReturnValue:
+        """Return every scan currently running, grouped by scan type.
+
+        Lets the frontend restore in-progress scan panels after a page
+        refresh with a single request instead of polling each variant's
+        per-type ``/status`` endpoint individually.
+        """
+        groups = {
+            "grype": _grype_scans_in_progress,
+            "nvd": _nvd_scans_in_progress,
+            "osv": _osv_scans_in_progress,
+            "sbom-cve-check": _sbom_cve_check_scans_in_progress,
+        }
+        result = {
+            label: [
+                {"variant_id": vid_str, **info}
+                for vid_str, info in progress_dict.items()
+                if info.get("status") == "running"
+            ]
+            for label, progress_dict in groups.items()
+        }
+        return jsonify(result)

@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 import uuid
 
+from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController
+
 
 def generate_spdx_namespace() -> str:
     """Generate SPDX namespace UUID-based for SPDX 3.0 specv3 documents."""
@@ -15,9 +17,9 @@ def generate_spdx_namespace() -> str:
 
 
 class SPDX3:
-    def __init__(self, controllers: Dict[str, Any]):
-        self.packagesCtrl = controllers["packages"]
-        self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
+    def __init__(self, controllers: ControllersCache):
+        self.packagesCtrl: PackagesController = controllers.packages
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
         self.pkg_to_ref: Dict[str, str] = {}
         self.vuln_to_ref: Dict[str, str] = {}
         self.namespace = generate_spdx_namespace()

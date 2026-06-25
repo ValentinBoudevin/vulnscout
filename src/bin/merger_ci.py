@@ -15,6 +15,7 @@
 #   cmd_scans.py       — ``flask list-projects``, ``flask list-scans``, ``flask delete-scan``
 #   cmd_vuln_scan.py   — ``flask nvd-scan`` and ``flask osv-scan``
 
+from ..controllers import ControllersCache
 from ._common import DEFAULT_VARIANT_NAME  # noqa: F401 — intentional re-export
 from .cmd_process import (  # noqa: F401 — intentional re-exports for callers
     create_project_context,
@@ -36,7 +37,7 @@ from .cmd_scans import (
     list_scans_command,
     delete_scan_command,
 )
-from .cmd_vuln_scan import nvd_scan_command, osv_scan_command
+from .cmd_vuln_scan import nvd_scan_command, osv_scan_command, sbom_cve_check_scan_command
 
 
 def init_app(app) -> None:
@@ -52,12 +53,13 @@ def init_app(app) -> None:
     app.cli.add_command(delete_scan_command)
     app.cli.add_command(nvd_scan_command)
     app.cli.add_command(osv_scan_command)
+    app.cli.add_command(sbom_cve_check_scan_command)
 
 
-def main() -> dict:
+def main() -> ControllersCache:
     """Entry-point for direct invocation (``python -m src.bin.merger_ci``).
 
-    Returns the controllers dict so callers can inspect in-memory state.
+    Returns the controllers cache so callers can inspect in-memory state.
     Prefer running via ``flask --app bin.webapp process`` in production so that
     the DB session is properly initialised.
     """

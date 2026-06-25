@@ -273,7 +273,7 @@ describe('Vulnerability Table', () => {
         const exploit_header = await screen.getByRole('columnheader', {name: /EPSS score/i});
         const packages_header = await screen.getByRole('columnheader', {name: /SBOM Affected/i});
         const status_header = await screen.getByRole('columnheader', {name: /status/i});
-        const last_updated_header = await screen.getByRole('columnheader', {name: /last updated/i});
+        const last_updated_header = await screen.getByRole('columnheader', {name: /last assessed/i});
 
         // ASSERT - Default visible columns
         expect(id_header).toBeInTheDocument();
@@ -674,7 +674,7 @@ describe('Vulnerability Table', () => {
         const selected_checkbox = await screen.getByTitle(/unselect/i);
         expect(selected_checkbox).toBeInTheDocument();
 
-        const bulkeditbar = await screen.getByText(/selected vulnerabilities: 1/i);
+        const bulkeditbar = await screen.getByText(/selected vulnerabilities/i);
         expect(bulkeditbar).toBeInTheDocument();
 
         const reset_btn = await screen.getByRole('button', {name: /reset selection/i});
@@ -745,6 +745,7 @@ describe('Vulnerability Table', () => {
 
         // ASSERT
         // 3 Variants.listByVuln calls (one per selected vulnerability) + 1 batch assessment API call
+        // (no GHSA progress poll: the test data contains no GHSA- vulnerabilities)
         expect(fetchMock).toHaveBeenCalledTimes(4);
     })
 
@@ -777,7 +778,7 @@ describe('Vulnerability Table', () => {
 
         await user.click(select_all)
 
-        const edit_time_btn = await screen.getByRole('button', {name: /Change estimated time/i});
+        const edit_time_btn = await screen.getByRole('button', {name: /Change time estimate/i});
         expect(edit_time_btn).toBeInTheDocument();
         await user.click(edit_time_btn);
 
@@ -793,6 +794,8 @@ describe('Vulnerability Table', () => {
         await user.click(btn);
 
         // ASSERT
+        // 2 Variants.listByVuln + 1 batch time estimate API call
+        // (no GHSA progress poll: the test data contains no GHSA- vulnerabilities)
         expect(fetchMock).toHaveBeenCalledTimes(3);
     })
 
@@ -1192,7 +1195,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnWithDifferentDates} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const lastUpdatedHeader = await screen.getByRole('columnheader', {name: /last updated/i});
+        const lastUpdatedHeader = await screen.getByRole('columnheader', {name: /last assessed/i});
 
         // ACT - Sort by last updated (first click: descending - newest first, then older, then no assessments)
         await user.click(lastUpdatedHeader);
@@ -1254,7 +1257,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnWithMixedDates} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const lastUpdatedHeader = await screen.getByRole('columnheader', {name: /last updated/i});
+        const lastUpdatedHeader = await screen.getByRole('columnheader', {name: /last assessed/i});
 
         // ACT - Sort descending (newest first) - should only need one click
         await user.click(lastUpdatedHeader);
@@ -2345,8 +2348,8 @@ describe('More Filters dropdown', () => {
     });
 });
 
-describe('NVD timestamp columns', () => {
-    const makeVuln = (id: string, nvd_fetched_at?: string, nvd_data_updated_at?: string): Vulnerability => ({
+describe('Data timestamp columns (Fetched / Updated)', () => {
+    const makeVuln = (id: string, data_fetched_at?: string, data_updated_at?: string): Vulnerability => ({
         id,
         aliases: [],
         related_vulnerabilities: [],
@@ -2368,8 +2371,8 @@ describe('NVD timestamp columns', () => {
         simplified_status: 'Pending Assessment',
         assessments: [],
         variants: [],
-        nvd_fetched_at,
-        nvd_data_updated_at,
+        data_fetched_at,
+        data_updated_at,
     });
 
     const enableColumn = async (user: ReturnType<typeof userEvent.setup>, name: string) => {
@@ -2379,43 +2382,43 @@ describe('NVD timestamp columns', () => {
         await user.click(checkbox);
     };
 
-    test('NVD Fetched column is hidden by default and can be enabled', async () => {
+    test('Fetched column is hidden by default and can be enabled', async () => {
         render(<TableVulnerabilities vulnerabilities={[makeVuln('CVE-2024-0001', '2024-01-15T10:00:00Z')]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        expect(screen.queryByRole('columnheader', { name: /nvd fetched/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('columnheader', { name: /^last fetched$/i })).not.toBeInTheDocument();
 
-        await enableColumn(user, 'NVD Fetched');
+        await enableColumn(user, 'Last Fetched');
 
         await waitFor(() => {
-            expect(screen.getByRole('columnheader', { name: /nvd fetched/i })).toBeInTheDocument();
+            expect(screen.getByRole('columnheader', { name: /^last fetched$/i })).toBeInTheDocument();
         });
     });
 
-    test('NVD Fetched shows formatted date when value is present', async () => {
+    test('Fetched shows formatted date when value is present', async () => {
         render(<TableVulnerabilities vulnerabilities={[makeVuln('CVE-2024-0001', '2024-01-15T10:00:00Z')]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await enableColumn(user, 'NVD Fetched');
+        await enableColumn(user, 'Last Fetched');
 
         await waitFor(() => {
             expect(screen.queryByText('Never')).not.toBeInTheDocument();
-            expect(screen.getByRole('columnheader', { name: /nvd fetched/i })).toBeInTheDocument();
+            expect(screen.getByRole('columnheader', { name: /^last fetched$/i })).toBeInTheDocument();
         });
     });
 
-    test('NVD Fetched shows "Never" when value is absent', async () => {
+    test('Fetched shows "Never" when value is absent', async () => {
         render(<TableVulnerabilities vulnerabilities={[makeVuln('CVE-2024-0001', undefined)]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await enableColumn(user, 'NVD Fetched');
+        await enableColumn(user, 'Last Fetched');
 
         await waitFor(() => {
             expect(screen.getByText('Never')).toBeInTheDocument();
         });
     });
 
-    test('NVD Fetched column sorts by fetch time', async () => {
+    test('Fetched column sorts by fetch time', async () => {
         const vulns = [
             makeVuln('CVE-EARLIER', '2023-03-01T00:00:00Z'),
             makeVuln('CVE-LATER', '2024-09-01T00:00:00Z'),
@@ -2423,9 +2426,9 @@ describe('NVD timestamp columns', () => {
         render(<TableVulnerabilities vulnerabilities={vulns} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await enableColumn(user, 'NVD Fetched');
+        await enableColumn(user, 'Last Fetched');
 
-        const header = screen.getByRole('columnheader', { name: /nvd fetched/i });
+        const header = screen.getByRole('columnheader', { name: /^last fetched$/i });
         await user.click(header);
         await waitFor(() => {
             const html = document.body.innerHTML;
@@ -2439,43 +2442,43 @@ describe('NVD timestamp columns', () => {
         });
     });
 
-    test('NVD Updated column is hidden by default and can be enabled', async () => {
+    test('Updated column is hidden by default and can be enabled', async () => {
         render(<TableVulnerabilities vulnerabilities={[makeVuln('CVE-2024-0001', undefined, '2024-03-10T12:00:00Z')]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        expect(screen.queryByRole('columnheader', { name: /nvd updated/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('columnheader', { name: /^last updated$/i })).not.toBeInTheDocument();
 
-        await enableColumn(user, 'NVD Updated');
+        await enableColumn(user, 'Last Updated');
 
         await waitFor(() => {
-            expect(screen.getByRole('columnheader', { name: /nvd updated/i })).toBeInTheDocument();
+            expect(screen.getByRole('columnheader', { name: /^last updated$/i })).toBeInTheDocument();
         });
     });
 
-    test('NVD Updated shows formatted date when value is present', async () => {
+    test('Updated shows formatted date when value is present', async () => {
         render(<TableVulnerabilities vulnerabilities={[makeVuln('CVE-2024-0001', undefined, '2024-03-10T12:00:00Z')]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await enableColumn(user, 'NVD Updated');
+        await enableColumn(user, 'Last Updated');
 
         await waitFor(() => {
             expect(screen.queryByText('Never')).not.toBeInTheDocument();
-            expect(screen.getByRole('columnheader', { name: /nvd updated/i })).toBeInTheDocument();
+            expect(screen.getByRole('columnheader', { name: /^last updated$/i })).toBeInTheDocument();
         });
     });
 
-    test('NVD Updated shows "Never" when value is absent', async () => {
+    test('Updated shows "Never" when value is absent', async () => {
         render(<TableVulnerabilities vulnerabilities={[makeVuln('CVE-2024-0001', undefined, undefined)]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await enableColumn(user, 'NVD Updated');
+        await enableColumn(user, 'Last Updated');
 
         await waitFor(() => {
             expect(screen.getByText('Never')).toBeInTheDocument();
         });
     });
 
-    test('NVD Updated column sorts by update time', async () => {
+    test('Updated column sorts by update time', async () => {
         const vulns = [
             makeVuln('CVE-EARLIER', undefined, '2023-03-01T00:00:00Z'),
             makeVuln('CVE-LATER', undefined, '2024-09-01T00:00:00Z'),
@@ -2483,9 +2486,9 @@ describe('NVD timestamp columns', () => {
         render(<TableVulnerabilities vulnerabilities={vulns} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await enableColumn(user, 'NVD Updated');
+        await enableColumn(user, 'Last Updated');
 
-        const header = screen.getByRole('columnheader', { name: /nvd updated/i });
+        const header = screen.getByRole('columnheader', { name: /^last updated$/i });
         await user.click(header);
         await waitFor(() => {
             const html = document.body.innerHTML;
@@ -2503,8 +2506,10 @@ describe('NVD timestamp columns', () => {
         jest.useFakeTimers();
         try {
             const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
+            // First poll must be in-progress so the component keeps polling; the refresh then
+            // completes on the next poll (polling only runs while a refresh is active).
             NVDProgressHandler.getProgress
-                .mockResolvedValueOnce({ in_progress: false, phase: 'idle', current: 0, total: 0, message: '' })
+                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_nvd_refresh', current: 5, total: 10, message: '' })
                 .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 10, total: 10, message: '' });
 
             render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -2547,8 +2552,10 @@ describe('NVD timestamp columns', () => {
         jest.useFakeTimers();
         try {
             const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+            // First poll must be in-progress so the component keeps polling; the refresh then
+            // completes on the next poll (polling only runs while a refresh is active).
             EPSSProgressHandler.getProgress
-                .mockResolvedValueOnce({ in_progress: false, phase: 'idle', current: 0, total: 0, message: '' })
+                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_epss_refresh', current: 25, total: 50, message: '' })
                 .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 50, total: 50, message: '' });
 
             render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -2622,6 +2629,54 @@ describe('NVD timestamp columns', () => {
             await act(async () => { await Promise.resolve(); });
 
             expect(screen.queryByText(/NVD refresh complete/i)).not.toBeInTheDocument();
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('shows EPSS completion banner when refresh completes between polls (started_at changes)', async () => {
+        jest.useFakeTimers();
+        try {
+            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+            // First poll must be in-progress so the component keeps polling; the refresh then
+            // completes on the next poll with a new started_at (polling only runs while active).
+            EPSSProgressHandler.getProgress
+                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_epss_refresh', current: 25, total: 50, message: '', started_at: '2026-06-10T10:00:00Z' })
+                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 50, total: 50, message: '', started_at: '2026-06-10T10:01:00Z' });
+
+            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            await act(async () => { await Promise.resolve(); });
+            await act(async () => { jest.advanceTimersByTime(5001); });
+            await act(async () => { await Promise.resolve(); });
+
+            await waitFor(() => {
+                expect(screen.getByText(/EPSS refresh complete \(50 CVEs\)/i)).toBeInTheDocument();
+            });
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('shows EPSS completion banner for a re-triggered fast refresh (started_at changes)', async () => {
+        jest.useFakeTimers();
+        try {
+            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+            // A re-triggered refresh is in progress on the first poll (so polling continues),
+            // then completes on the next poll with a new started_at marking the fresh cycle.
+            EPSSProgressHandler.getProgress
+                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_epss_refresh', current: 10, total: 50, message: '', started_at: '2026-06-10T09:00:00Z' })
+                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 50, total: 50, message: '', started_at: '2026-06-10T10:01:00Z' });
+
+            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            await act(async () => { await Promise.resolve(); });
+            await act(async () => { jest.advanceTimersByTime(5001); });
+            await act(async () => { await Promise.resolve(); });
+
+            await waitFor(() => {
+                expect(screen.getByText(/EPSS refresh complete \(50 CVEs\)/i)).toBeInTheDocument();
+            });
         } finally {
             jest.useRealTimers();
         }

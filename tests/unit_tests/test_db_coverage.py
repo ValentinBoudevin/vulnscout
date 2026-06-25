@@ -452,16 +452,13 @@ class TestAssessmentFromVulnAssessment:
 
 class TestTimeEstimatesDB:
     def _make_controllers(self):
-        from src.controllers.packages import PackagesController
-        from src.controllers.vulnerabilities import VulnerabilitiesController
-        from src.controllers.assessments import AssessmentsController
+        from src.controllers import ControllersCache
         from unittest.mock import patch, MagicMock
-        pkg = PackagesController()
+        controllers = ControllersCache()
         with patch("src.controllers.vulnerabilities.EPSS_DB") as mock_epss:
             mock_epss.return_value = MagicMock()
-            vuln = VulnerabilitiesController(pkg)
-        assess = AssessmentsController(pkg, vuln)
-        return {"packages": pkg, "vulnerabilities": vuln, "assessments": assess}
+            _ = controllers.packages  # in order to pre-load data with mocked epss DB
+        return controllers
 
     def test_iso_to_hours_valid(self, app):
         from src.views.time_estimates import TimeEstimates
@@ -934,8 +931,7 @@ class TestAssessmentsController:
         """remove(None) should return False immediately (line 216)."""
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
-        from unittest.mock import MagicMock
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         assert ctrl.remove(None) is False
 
     def test_remove_existing_assessment(self, app):
@@ -943,8 +939,7 @@ class TestAssessmentsController:
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
         from src.models.assessment import Assessment
-        from unittest.mock import MagicMock
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         a = Assessment.new_dto("CVE-2099-REM", ["pkg@1.0"])
         ctrl.add(a)
         removed = ctrl.remove(str(a.id))
@@ -955,16 +950,14 @@ class TestAssessmentsController:
         """__contains__ with a string key covers line 261."""
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
-        from unittest.mock import MagicMock
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         assert ("nonexistent-uuid" in ctrl) is False
 
     def test_gets_by_pkg_db_path(self, app):
         """gets_by_pkg queries the DB when no in-memory match (lines 127-132 in assessments)."""
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
-        from unittest.mock import MagicMock
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         result = ctrl.gets_by_pkg("pkg@1.0")
         assert isinstance(result, list)
 
@@ -976,7 +969,6 @@ class TestAssessmentsController:
         from src.models.assessment import Assessment as DBAssessment
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
-        from unittest.mock import MagicMock
 
         v = Vulnerability.create_record("CVE-2099-VPAIR")
         p = Package.create("vpair-lib", "1.0")
@@ -984,7 +976,7 @@ class TestAssessmentsController:
         # Create a persisted assessment linked to the finding
         DBAssessment.create(status="affected", finding_id=f.id)
 
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         result = ctrl.gets_by_vuln_pkg(v.id, p.string_id)
         assert len(result) >= 1
 
@@ -996,16 +988,41 @@ class TestAssessmentsController:
         from src.models.assessment import Assessment as DBAssessment
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
-        from unittest.mock import MagicMock
 
         v = Vulnerability.create_record("CVE-2099-PKG2")
         p = Package.create("pkgctl2-test", "1.0")
         f = Finding.create(p.id, v.id)
         DBAssessment.create(status="affected", finding_id=f.id)
 
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         result = ctrl.gets_by_pkg(p.string_id)
         assert len(result) >= 1
+
+    def test_gets_by_pkg_db_exception_is_caught(self, app):
+        """Lines 152-153: exception in gets_by_pkg DB query is caught silently."""
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+        from unittest.mock import patch
+
+        ctrl = AssessmentsController(PackagesController())
+        with patch("src.controllers.assessments.Assessment.get_by_package",
+                   side_effect=RuntimeError("db exploded")):
+            result = ctrl.gets_by_pkg("somepkg@1.0")
+        assert result == []
+
+    def test_iter_yields_all_assessments(self, app):
+        """Line 316: __iter__ returns all in-memory assessments."""
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+        from src.models.assessment import Assessment
+
+        ctrl = AssessmentsController(PackagesController())
+        a1 = Assessment.new_dto("CVE-2099-ITER1")
+        a2 = Assessment.new_dto("CVE-2099-ITER2")
+        ctrl.add(a1)
+        ctrl.add(a2)
+        items = list(ctrl)
+        assert len(items) == 2
 
     def test_to_dict_db_fallback(self, app):
         """to_dict() falls back to DB when in-memory dict is empty."""
@@ -1015,14 +1032,13 @@ class TestAssessmentsController:
         from src.models.assessment import Assessment as DBAssessment
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
-        from unittest.mock import MagicMock
 
         v = Vulnerability.create_record("CVE-2099-TODICT2")
         p = Package.create("todictpkg", "1.0")
         f = Finding.create(p.id, v.id)
         DBAssessment.create(status="not_affected", finding_id=f.id)
 
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         # ctrl.assessments is empty (not pre-loaded from DB), so to_dict queries DB
         result = ctrl.to_dict()
         assert isinstance(result, dict)
@@ -1030,11 +1046,11 @@ class TestAssessmentsController:
 
     def test_to_dict_db_exception(self, app):
         """to_dict() returns {} when DB raises (lines 246-248)."""
-        from unittest.mock import patch as mock_patch, MagicMock
+        from unittest.mock import patch as mock_patch
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
 
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         with mock_patch("src.models.assessment.Assessment.get_all", side_effect=RuntimeError("fail")):
             result = ctrl.to_dict()
         assert result == {}
@@ -1044,9 +1060,8 @@ class TestAssessmentsController:
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
         from src.models.assessment import Assessment
-        from unittest.mock import MagicMock
 
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         a = Assessment.new_dto("CVE-2099-VUERR", ["pkg@1.0"])
         ctrl.add(a)
         key = str(a.id)
@@ -1060,9 +1075,8 @@ class TestAssessmentsController:
         from src.controllers.packages import PackagesController
         from src.controllers.assessments import AssessmentsController
         from src.models.assessment import Assessment
-        from unittest.mock import MagicMock
 
-        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        ctrl = AssessmentsController(PackagesController())
         a = Assessment.new_dto("CVE-2099-VPERR", ["pkg@1.0"])
         ctrl.add(a)
         key = str(a.id)
@@ -1199,26 +1213,28 @@ class TestVulnerabilitiesController:
         assert result == "2024-03-01T00:00:00Z"
 
     def test_fetch_ghsa_published_http_error(self):
-        """_fetch_ghsa_published returns None on HTTPError (line 283)."""
+        """_fetch_ghsa_published re-raises HTTPError so callers can discriminate status codes."""
         import urllib.error
+        import pytest
         from unittest.mock import patch as mock_patch
         from src.controllers.vulnerabilities import VulnerabilitiesController
 
         err = urllib.error.HTTPError("url", 404, "Not Found", {}, None)
         with mock_patch("urllib.request.urlopen", side_effect=err):
-            result = VulnerabilitiesController._fetch_ghsa_published("GHSA-xxxx")
-        assert result is None
+            with pytest.raises(urllib.error.HTTPError):
+                VulnerabilitiesController._fetch_ghsa_published("GHSA-xxxx")
 
     def test_fetch_ghsa_published_url_error(self):
-        """_fetch_ghsa_published returns None on URLError (line 285)."""
+        """_fetch_ghsa_published re-raises URLError so callers can distinguish network failures."""
         import urllib.error
+        import pytest
         from unittest.mock import patch as mock_patch
         from src.controllers.vulnerabilities import VulnerabilitiesController
 
         err = urllib.error.URLError("timeout")
         with mock_patch("urllib.request.urlopen", side_effect=err):
-            result = VulnerabilitiesController._fetch_ghsa_published("GHSA-xxxx")
-        assert result is None
+            with pytest.raises(urllib.error.URLError):
+                VulnerabilitiesController._fetch_ghsa_published("GHSA-xxxx")
 
     def test_fetch_ghsa_published_generic_error(self):
         """_fetch_ghsa_published returns None on generic Exception (line 286)."""
@@ -1283,3 +1299,342 @@ class TestVulnerabilitiesController:
             "published transient should be initialised from publish_date on DB load"
         )
         assert fresh.to_dict()["published"] == "2024-03-15"
+
+
+# ===========================================================================
+# PackagesController — scoped get() returns None (line 170) and __contains__ (218)
+# ===========================================================================
+
+class TestPackagesControllerScopedBranches:
+    """Cover scoped branches: get() returns None for out-of-scope packages,
+    and __contains__ returns False for out-of-scope packages."""
+
+    def test_get_returns_none_for_out_of_scope_package(self, app):
+        """Line 170: get() returns None when the package is not in scope.package_ids."""
+        from src.controllers.packages import PackagesController
+        from src.models.package import Package
+        from src.helpers.export_scope import ExportScope
+        import uuid
+
+        pkg = Package.create("scope-test", "1.0.0")
+
+        # Scope that explicitly excludes this package
+        scope = ExportScope(package_ids=set(), variant_ids=set())
+        ctrl = PackagesController(scope=scope)
+        ctrl._cache.clear()  # ensure cache miss so DB fallback is triggered
+
+        result = ctrl.get(pkg.string_id)
+        assert result is None
+
+    def test_contains_returns_false_for_out_of_scope_package(self, app):
+        """Line 218: __contains__ returns False when package exists in DB but not in scope."""
+        from src.controllers.packages import PackagesController
+        from src.models.package import Package
+        from src.helpers.export_scope import ExportScope
+        import uuid
+
+        pkg = Package.create("scope-contains-test", "2.0.0")
+
+        scope = ExportScope(package_ids=set(), variant_ids=set())
+        ctrl = PackagesController(scope=scope)
+        ctrl._cache.clear()
+
+        result = pkg.string_id in ctrl
+        assert result is False
+
+
+# ===========================================================================
+# PackagesController — _preload_cache exception handlers (lines 52, 61)
+# ===========================================================================
+
+class TestPackagesControllerPreloadExceptions:
+    def test_preload_packages_exception_clears_gracefully(self, app):
+        """Line 52: exception in Package.get_all() is caught without re-raise."""
+        from src.controllers.packages import PackagesController
+        from unittest.mock import patch
+        ctrl = PackagesController.__new__(PackagesController)
+        ctrl._cache = {}
+        ctrl._db_id_cache = {}
+        ctrl._finding_cache = {}
+        ctrl._scope = None
+        ctrl._current_sbom_document = None
+
+        with patch("src.controllers.packages.Package.get_all", side_effect=RuntimeError("packages gone")):
+            ctrl._preload_cache()
+
+        assert ctrl._cache == {}
+
+    def test_preload_findings_exception_clears_gracefully(self, app):
+        """Line 61: exception in Finding.get_all() is caught without re-raise."""
+        from src.controllers.packages import PackagesController
+        from unittest.mock import patch
+        ctrl = PackagesController.__new__(PackagesController)
+        ctrl._cache = {}
+        ctrl._db_id_cache = {}
+        ctrl._finding_cache = {}
+        ctrl._scope = None
+        ctrl._current_sbom_document = None
+
+        with patch("src.controllers.packages.Package.get_all", return_value=[]):
+            with patch("src.controllers.packages.Finding.get_all", side_effect=RuntimeError("findings gone")):
+                ctrl._preload_cache()
+
+        assert ctrl._finding_cache == {}
+
+
+# ---------------------------------------------------------------------------
+# PackagesController._preload_cache — scope filtering continue branches
+# (lines 52 and 61: skip packages/findings not in the allowed set)
+# ---------------------------------------------------------------------------
+
+class TestPackagesControllerPreloadScopeFilter:
+    def test_out_of_scope_package_is_skipped(self, app):
+        """Line 52: when scope excludes a package, the continue branch is taken."""
+        import uuid
+        from src.controllers.packages import PackagesController
+        from src.models.package import Package
+        from src.helpers.export_scope import ExportScope
+        from unittest.mock import patch, MagicMock
+
+        # Create a fake package whose id is NOT in the allowed set
+        pkg_in_scope_id = uuid.uuid4()
+        pkg_out_id = uuid.uuid4()
+        scope = ExportScope(package_ids={pkg_in_scope_id}, variant_ids=set())
+
+        fake_pkg_out = MagicMock()
+        fake_pkg_out.id = pkg_out_id
+        fake_pkg_out.string_id = "outpkg@1.0"
+
+        ctrl = PackagesController.__new__(PackagesController)
+        ctrl._cache = {}
+        ctrl._db_id_cache = {}
+        ctrl._finding_cache = {}
+        ctrl._scope = scope
+        ctrl._current_sbom_document = None
+
+        with patch("src.controllers.packages.Package.get_all", return_value=[fake_pkg_out]):
+            with patch("src.controllers.packages.Finding.get_all", return_value=[]):
+                ctrl._preload_cache()
+
+        # Package is excluded — cache stays empty
+        assert "outpkg@1.0" not in ctrl._cache
+
+    def test_out_of_scope_finding_is_skipped(self, app):
+        """Line 61: when scope excludes a finding's package, the continue branch is taken."""
+        import uuid
+        from src.controllers.packages import PackagesController
+        from src.helpers.export_scope import ExportScope
+        from unittest.mock import patch, MagicMock
+
+        pkg_in_scope_id = uuid.uuid4()
+        pkg_out_id = uuid.uuid4()
+        vuln_id = "CVE-2099-SKIP"
+        scope = ExportScope(package_ids={pkg_in_scope_id}, variant_ids=set())
+
+        fake_finding = MagicMock()
+        fake_finding.package_id = pkg_out_id
+        fake_finding.vulnerability_id = vuln_id
+
+        ctrl = PackagesController.__new__(PackagesController)
+        ctrl._cache = {}
+        ctrl._db_id_cache = {}
+        ctrl._finding_cache = {}
+        ctrl._scope = scope
+        ctrl._current_sbom_document = None
+
+        with patch("src.controllers.packages.Package.get_all", return_value=[]):
+            with patch("src.controllers.packages.Finding.get_all", return_value=[fake_finding]):
+                ctrl._preload_cache()
+
+        # Finding is excluded — finding_cache stays empty
+        assert (pkg_out_id, vuln_id) not in ctrl._finding_cache
+
+
+# ---------------------------------------------------------------------------
+# AssessmentsController._apply_scope with a real scope (lines 123-124)
+# ---------------------------------------------------------------------------
+
+class TestAssessmentsControllerApplyScope:
+    def test_apply_scope_filters_by_variant_id(self, app):
+        """Lines 123-124: _apply_scope returns only in-scope assessments."""
+        import uuid
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+        from src.models.assessment import Assessment
+        from src.helpers.export_scope import ExportScope
+
+        vid_in = uuid.uuid4()
+        vid_out = uuid.uuid4()
+        scope = ExportScope(package_ids=set(), variant_ids={vid_in})
+
+        ctrl = AssessmentsController(PackagesController(), scope=scope)
+
+        a_in = Assessment.new_dto("CVE-2099-SCOPE-IN")
+        a_in.variant_id = vid_in
+
+        a_out = Assessment.new_dto("CVE-2099-SCOPE-OUT")
+        a_out.variant_id = vid_out
+
+        a_none = Assessment.new_dto("CVE-2099-SCOPE-NONE")
+        a_none.variant_id = None
+
+        result = ctrl._apply_scope([a_in, a_out, a_none])
+        assert a_in in result
+        assert a_out not in result
+        # None variant_id is not in variant_ids set → excluded
+        assert a_none not in result
+
+
+# ---------------------------------------------------------------------------
+# AssessmentsController.gets_by_vuln_pkg — current_variant_id skip (line 192)
+# and exception path (lines 197-198)
+# ---------------------------------------------------------------------------
+
+class TestAssessmentsControllerGetsByVulnPkgVariantFilter:
+    def test_cross_variant_assessment_is_skipped(self, app):
+        """Line 192: assessment for a different variant is skipped by continue."""
+        import uuid
+        from src.models.vulnerability import Vulnerability
+        from src.models.package import Package
+        from src.models.finding import Finding
+        from src.models.assessment import Assessment as DBAssessment
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+
+        v = Vulnerability.create_record("CVE-2099-XVAR")
+        p = Package.create("xvar-lib", "1.0")
+        f = Finding.create(p.id, v.id)
+        other_variant_id = uuid.uuid4()
+        a = DBAssessment.create(status="affected", finding_id=f.id)
+        # Assign the assessment to a different variant
+        a.variant_id = other_variant_id
+        from src.extensions import db
+        db.session.commit()
+
+        ctrl = AssessmentsController(PackagesController())
+        # Restrict ingestion to yet another variant
+        ctrl.current_variant_id = uuid.uuid4()
+
+        result = ctrl.gets_by_vuln_pkg(v.id, p.string_id)
+        # The cross-variant assessment should be excluded (continue branch)
+        assert all(str(r.id) != str(a.id) for r in result)
+
+    def test_gets_by_vuln_pkg_exception_is_caught(self, app):
+        """Lines 197-198: exception in gets_by_vuln_pkg is caught silently."""
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+        from unittest.mock import patch
+
+        ctrl = AssessmentsController(PackagesController())
+        with patch("src.controllers.assessments.Finding.get_by_package_and_vulnerability",
+                   side_effect=RuntimeError("db gone")):
+            result = ctrl.gets_by_vuln_pkg("CVE-2099-EXCVP", "some-pkg@1.0")
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Vulnerability.to_dict — effort _h() helper: None branch (line 300) and
+# except branch (lines 303-304)
+# ---------------------------------------------------------------------------
+
+class TestVulnerabilityEffortHelper:
+    def test_effort_helper_none_value_returns_none(self, app):
+        """Line 300: _h(None) returns None inside effort formatting."""
+        from src.models.vulnerability import Vulnerability
+        from src.models.time_estimate import TimeEstimate
+        from src.models.finding import Finding
+        from src.models.package import Package
+        from src.extensions import db
+
+        v = Vulnerability.create_record("CVE-2099-EFFORT-NONE")
+        p = Package.create("effort-none-pkg", "1.0")
+        f = Finding.create(p.id, v.id)
+        # All three effort fields are None → _h is called with None for each
+        TimeEstimate.create(
+            finding_id=f.id,
+            optimistic=None, likely=None, pessimistic=None,
+        )
+        db.session.commit()
+
+        record = db.session.get(Vulnerability, v.id)
+        record.effort = {"optimistic": None, "likely": None, "pessimistic": None}
+        record.effort_variant_loaded = False
+        record.severity_cvss = []
+
+        d = record.to_dict()
+        assert d["effort"]["optimistic"] is None
+
+    def test_effort_helper_invalid_hours_returns_fallback(self, app):
+        """Lines 303-304: _h raises ValueError → returns 'PT{v}H' fallback."""
+        from src.models.vulnerability import Vulnerability
+        from src.models.time_estimate import TimeEstimate
+        from src.models.finding import Finding
+        from src.models.package import Package
+        from src.extensions import db
+        from unittest.mock import patch
+
+        v = Vulnerability.create_record("CVE-2099-EFFORT-ERR")
+        p = Package.create("effort-err-pkg", "1.0")
+        f = Finding.create(p.id, v.id)
+        TimeEstimate.create(
+            finding_id=f.id,
+            optimistic=8, likely=16, pessimistic=24,
+        )
+        db.session.commit()
+
+        record = db.session.get(Vulnerability, v.id)
+        record.effort = {"optimistic": None, "likely": None, "pessimistic": None}
+        record.effort_variant_loaded = False
+        record.severity_cvss = []
+
+        # Make Iso8601Duration raise so _h falls into the except branch
+        with patch("src.models.vulnerability.Iso8601Duration",
+                   side_effect=ValueError("bad duration")):
+            d = record.to_dict()
+        # Fallback: PT<n>H strings
+        assert d["effort"]["optimistic"] == "PT8H"
+        assert d["effort"]["likely"] == "PT16H"
+
+
+# ---------------------------------------------------------------------------
+# Metrics.from_cvss — unique-constraint retry path (line 218: raise exc when
+# existing is None after IntegrityError)
+# ---------------------------------------------------------------------------
+
+class TestMetricsFromCvssRaiseOnNoExisting:
+    def test_integrity_error_reraises_when_no_existing(self, app):
+        """Line 218: after IntegrityError inside flush(), if fallback SELECT
+        finds no existing row, the original exception is re-raised."""
+        from src.models.metrics import Metrics
+        from src.models.vulnerability import Vulnerability
+        from src.models.cvss import CVSS
+        from sqlalchemy.exc import IntegrityError
+        from unittest.mock import patch
+        from src.extensions import db as _db
+
+        v = Vulnerability.create_record("CVE-2099-METRAISE")
+
+        cvss = CVSS(
+            version="3.1",
+            vector_string="AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L",
+            author=None,
+            base_score=5.0,
+            exploitability_score=3.9,
+            impact_score=3.4,
+            origin="scanner",
+        )
+
+        # Force cache miss so we reach the insert branch
+        Metrics._seen.discard(("CVE-2099-METRAISE", None, "3.1", 5.0))
+
+        fake_exc = IntegrityError("unique", {}, Exception())
+
+        # Patch flush() so it raises inside the begin_nested() block.
+        # SQLAlchemy's savepoint context manager will rollback and re-raise,
+        # landing in the except Exception as exc: handler.
+        # The fallback execute().scalar_one_or_none() returns None → raise exc.
+        with patch.object(_db.session, "flush", side_effect=fake_exc):
+            with patch.object(_db.session, "execute") as mock_exec:
+                mock_exec.return_value.scalar_one_or_none.return_value = None
+                with pytest.raises(IntegrityError):
+                    Metrics.from_cvss(cvss, "CVE-2099-METRAISE")

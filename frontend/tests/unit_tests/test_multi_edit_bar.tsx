@@ -20,10 +20,16 @@ jest.mock('../../src/handlers/bulkRefresh', () => ({
     BulkEpssRefreshCancelHandler: {
         trigger: jest.fn(),
     },
+    BulkGhsaRefreshHandler: {
+        trigger: jest.fn(),
+    },
+    BulkGhsaRefreshCancelHandler: {
+        trigger: jest.fn(),
+    },
 }));
 
 import MultiEditBar from '../../src/components/MultiEditBar';
-import { BulkNvdRefreshHandler, BulkEpssRefreshHandler, BulkNvdRefreshCancelHandler, BulkEpssRefreshCancelHandler } from '../../src/handlers/bulkRefresh';
+import { BulkNvdRefreshHandler, BulkEpssRefreshHandler, BulkNvdRefreshCancelHandler, BulkEpssRefreshCancelHandler, BulkGhsaRefreshHandler } from '../../src/handlers/bulkRefresh';
 import type { Vulnerability } from '../../src/handlers/vulnerabilities';
 
 describe('MultiEditBar', () => {
@@ -110,9 +116,46 @@ describe('MultiEditBar', () => {
         fetchMock.resetMocks();
     });
 
-    test('renders nothing when no selection', () => {
-        const { container } = render(<MultiEditBar {...mockProps} />);
-        expect(container.firstChild).toBeNull();
+    test('renders the action bar with disabled buttons when no selection', () => {
+        const { getByText } = render(<MultiEditBar {...mockProps} />);
+        expect(getByText('Selected vulnerabilities')).toBeInTheDocument();
+        expect(getByText('Reset selection').closest('button')).toBeDisabled();
+        expect(getByText('Change status').closest('button')).toBeDisabled();
+        expect(getByText('Change time estimate').closest('button')).toBeDisabled();
+    });
+
+    test('renders the renamed "Change time estimate" button label', () => {
+        const props = { ...mockProps, selectedVulns: ['vuln-1'] };
+        const { getByText, queryByText } = render(<MultiEditBar {...props} />);
+        expect(getByText('Change time estimate')).toBeInTheDocument();
+        expect(queryByText('Change estimated time')).toBeNull();
+    });
+
+    test('toggle buttons expose aria-pressed reflecting the open panel', async () => {
+        const props = { ...mockProps, selectedVulns: ['vuln-1'] };
+        const { getByText } = render(<MultiEditBar {...props} />);
+
+        const statusButton = getByText('Change status').closest('button') as HTMLButtonElement;
+        const timeButton = getByText('Change time estimate').closest('button') as HTMLButtonElement;
+
+        // No panel open initially
+        expect(statusButton).toHaveAttribute('aria-pressed', 'false');
+        expect(timeButton).toHaveAttribute('aria-pressed', 'false');
+
+        // Opening the status panel sets aria-pressed only on the status button
+        await act(async () => { statusButton.click(); });
+        expect(statusButton).toHaveAttribute('aria-pressed', 'true');
+        expect(timeButton).toHaveAttribute('aria-pressed', 'false');
+
+        // Opening the time panel moves aria-pressed to the time button
+        await act(async () => { timeButton.click(); });
+        expect(statusButton).toHaveAttribute('aria-pressed', 'false');
+        expect(timeButton).toHaveAttribute('aria-pressed', 'true');
+
+        // Clicking the open button again closes the panel and clears aria-pressed
+        await act(async () => { timeButton.click(); });
+        expect(statusButton).toHaveAttribute('aria-pressed', 'false');
+        expect(timeButton).toHaveAttribute('aria-pressed', 'false');
     });
 
     test('renders with selection', () => {
@@ -129,14 +172,14 @@ describe('MultiEditBar', () => {
             selectedVulns: ['vuln-2']
         };
 
-        const { getByText } = render(<MultiEditBar {...props} />);
+        const { getByText, getByTestId } = render(<MultiEditBar {...props} />);
 
         await act(async () => { getByText('Change status').click(); });
         await act(async () => { getByText('Add assessment').click(); });
 
         await waitFor(() => {
             expect(getByText('Editing selected CVE...')).toBeInTheDocument();
-            expect(getByText('Selected vulnerabilities: 1')).toBeInTheDocument();
+            expect(getByTestId('selected-vulns-count')).toHaveTextContent('1');
         });
     });
 
@@ -148,14 +191,14 @@ describe('MultiEditBar', () => {
             selectedVulns: ['vuln-1', 'vuln-2']
         };
 
-        const { getByText } = render(<MultiEditBar {...props} />);
+        const { getByText, getByTestId } = render(<MultiEditBar {...props} />);
 
         await act(async () => { getByText('Change status').click(); });
         await act(async () => { getByText('Add assessment').click(); });
 
         await waitFor(() => {
             expect(getByText('Editing selected CVEs...')).toBeInTheDocument();
-            expect(getByText('Selected vulnerabilities: 2')).toBeInTheDocument();
+            expect(getByTestId('selected-vulns-count')).toHaveTextContent('2');
         });
     });
 
@@ -227,7 +270,7 @@ describe('MultiEditBar', () => {
         };
 
         const { getByText, getByPlaceholderText } = render(<MultiEditBar {...props} />);
-        const changeTimeButton = getByText('Change estimated time');
+        const changeTimeButton = getByText('Change time estimate');
         act(() => { changeTimeButton.click(); });
 
         // TimeEstimateEditor should be visible (check by finding an input with its placeholder)
@@ -242,7 +285,7 @@ describe('MultiEditBar', () => {
         };
 
         const { getByText, getByPlaceholderText, getByTestId } = render(<MultiEditBar {...props} />);
-        await act(async () => { getByText('Change estimated time').click(); });
+        await act(async () => { getByText('Change time estimate').click(); });
 
         expect(getByPlaceholderText('shortest estimate [eg: 5h]')).toBeInTheDocument();
         expect(getByTestId('multi-edit-time-panel')).toHaveClass('block');
@@ -280,7 +323,7 @@ describe('MultiEditBar', () => {
 
         const props = {
             ...mockProps,
-            selectedVulns: ['vuln-1', 'vuln-2'],
+            selectedVulns: ['CVE-2024-0001', 'CVE-2024-0002'],
             triggerBanner: mockTriggerBanner,
             hideBanner: mockHideBanner
         };
@@ -296,13 +339,13 @@ describe('MultiEditBar', () => {
         });
 
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('NVD refresh started for 2 CVE(s)', 'success');
-            expect(mockTriggerBanner).toHaveBeenCalledWith('EPSS refresh started for 2 CVE(s)', 'success');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('NVD refresh started for 2 CVE(s)', 'success', 'nvd', true);
+            expect(mockTriggerBanner).toHaveBeenCalledWith('EPSS refresh started for 2 CVE(s)', 'success', 'epss', true);
         });
 
         expect(mockHideBanner).toHaveBeenCalledTimes(1);
-        expect(mockBulkNvdTrigger).toHaveBeenCalledWith(['vuln-1', 'vuln-2']);
-        expect(mockBulkEpssTrigger).toHaveBeenCalledWith(['vuln-1', 'vuln-2']);
+        expect(mockBulkNvdTrigger).toHaveBeenCalledWith(['CVE-2024-0001', 'CVE-2024-0002']);
+        expect(mockBulkEpssTrigger).toHaveBeenCalledWith(['CVE-2024-0001', 'CVE-2024-0002']);
     });
 
     test('does not trigger NVD refresh when NVD is already in progress', async () => {
@@ -314,7 +357,7 @@ describe('MultiEditBar', () => {
 
         const props = {
             ...mockProps,
-            selectedVulns: ['vuln-1', 'vuln-2'],
+            selectedVulns: ['CVE-2024-0001', 'CVE-2024-0002'],
             triggerBanner: mockTriggerBanner,
             hideBanner: jest.fn(),
             nvdProgress: { in_progress: true, phase: 'bulk_nvd_refresh', current: 1, total: 10, message: '' },
@@ -331,7 +374,7 @@ describe('MultiEditBar', () => {
         });
 
         await waitFor(() => {
-            expect(mockBulkEpssTrigger).toHaveBeenCalledWith(['vuln-1', 'vuln-2']);
+            expect(mockBulkEpssTrigger).toHaveBeenCalledWith(['CVE-2024-0001', 'CVE-2024-0002']);
         });
         expect(mockBulkNvdTrigger).not.toHaveBeenCalled();
     });
@@ -345,7 +388,7 @@ describe('MultiEditBar', () => {
 
         const props = {
             ...mockProps,
-            selectedVulns: ['vuln-1', 'vuln-2'],
+            selectedVulns: ['CVE-2024-0001', 'CVE-2024-0002'],
             triggerBanner: mockTriggerBanner,
             hideBanner: jest.fn(),
             epssProgress: { in_progress: true, phase: 'bulk_epss_refresh', current: 1, total: 10, message: '' },
@@ -362,7 +405,7 @@ describe('MultiEditBar', () => {
         });
 
         await waitFor(() => {
-            expect(mockBulkNvdTrigger).toHaveBeenCalledWith(['vuln-1', 'vuln-2']);
+            expect(mockBulkNvdTrigger).toHaveBeenCalledWith(['CVE-2024-0001', 'CVE-2024-0002']);
         });
         expect(mockBulkEpssTrigger).not.toHaveBeenCalled();
     });
@@ -463,7 +506,7 @@ describe('MultiEditBar', () => {
 
         const { getByText, getByPlaceholderText } = render(<MultiEditBar {...props} />);
 
-        await act(async () => { getByText('Change estimated time').click(); });
+        await act(async () => { getByText('Change time estimate').click(); });
 
         fireEvent.input(getByPlaceholderText('shortest estimate [eg: 5h]'), { target: { value: '1h' } });
         fireEvent.input(getByPlaceholderText('balanced estimate [eg: 2d 4h, or 2.5d]'), { target: { value: '2h' } });
@@ -590,7 +633,7 @@ describe('MultiEditBar', () => {
 
         const { getByText, getByPlaceholderText } = render(<MultiEditBar {...props} />);
 
-        await act(async () => { getByText('Change estimated time').click(); });
+        await act(async () => { getByText('Change time estimate').click(); });
 
         fireEvent.input(getByPlaceholderText('shortest estimate [eg: 5h]'), { target: { value: '1h' } });
         fireEvent.input(getByPlaceholderText('balanced estimate [eg: 2d 4h, or 2.5d]'), { target: { value: '2h' } });
@@ -627,7 +670,7 @@ describe('MultiEditBar', () => {
 
         const { getByText, getByPlaceholderText } = render(<MultiEditBar {...props} />);
 
-        await act(async () => { getByText('Change estimated time').click(); });
+        await act(async () => { getByText('Change time estimate').click(); });
 
         fireEvent.input(getByPlaceholderText('shortest estimate [eg: 5h]'), { target: { value: '1h' } });
         fireEvent.input(getByPlaceholderText('balanced estimate [eg: 2d 4h, or 2.5d]'), { target: { value: '2h' } });
@@ -662,7 +705,7 @@ describe('MultiEditBar', () => {
 
         const { getByText, getByPlaceholderText } = render(<MultiEditBar {...props} />);
 
-        await act(async () => { getByText('Change estimated time').click(); });
+        await act(async () => { getByText('Change time estimate').click(); });
 
         fireEvent.input(getByPlaceholderText('shortest estimate [eg: 5h]'), { target: { value: '1h' } });
         fireEvent.input(getByPlaceholderText('balanced estimate [eg: 2d 4h, or 2.5d]'), { target: { value: '2h' } });
@@ -972,7 +1015,7 @@ describe('MultiEditBar', () => {
 
         await waitFor(() => {
             expect(mockCancelTrigger).toHaveBeenCalled();
-            expect(mockTriggerBanner).toHaveBeenCalledWith('NVD refresh cancellation requested', 'success');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('NVD refresh cancellation requested', 'success', 'nvd', true);
         });
     });
 
@@ -998,7 +1041,7 @@ describe('MultiEditBar', () => {
 
         await waitFor(() => {
             expect(mockCancelTrigger).toHaveBeenCalled();
-            expect(mockTriggerBanner).toHaveBeenCalledWith('EPSS refresh cancellation requested', 'success');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('EPSS refresh cancellation requested', 'success', 'epss', true);
         });
     });
 
@@ -1031,7 +1074,7 @@ describe('MultiEditBar', () => {
     // ---- Refresh dropdown: checkbox toggles ----
 
     test('unchecking NVD keeps Start button present and enabled', async () => {
-        const props = { ...mockProps, selectedVulns: ['vuln-1'] };
+        const props = { ...mockProps, selectedVulns: ['CVE-2024-0001'] };
         render(<MultiEditBar {...props} />);
         await act(async () => {
             await userEvent.click(screen.getByTestId('refresh-dropdown-toggle'));
@@ -1046,7 +1089,7 @@ describe('MultiEditBar', () => {
     });
 
     test('unchecking EPSS keeps Start button present and enabled', async () => {
-        const props = { ...mockProps, selectedVulns: ['vuln-1'] };
+        const props = { ...mockProps, selectedVulns: ['CVE-2024-0001'] };
         render(<MultiEditBar {...props} />);
         await act(async () => {
             await userEvent.click(screen.getByTestId('refresh-dropdown-toggle'));
@@ -1057,7 +1100,7 @@ describe('MultiEditBar', () => {
     });
 
     test('refresh button is disabled when all targets are unchecked', async () => {
-        const props = { ...mockProps, selectedVulns: ['vuln-1'] };
+        const props = { ...mockProps, selectedVulns: ['CVE-2024-0001'] };
         render(<MultiEditBar {...props} />);
         await act(async () => {
             await userEvent.click(screen.getByTestId('refresh-dropdown-toggle'));
@@ -1086,6 +1129,43 @@ describe('MultiEditBar', () => {
         expect(screen.queryByRole('button', { name: /^Start$/i })).toBeNull();
     });
 
+    // ---- Refresh dropdown: GHSA-only / CVE-only selection ----
+
+    test('NVD and EPSS checkboxes are disabled when only GHSA rows are selected', async () => {
+        const props = { ...mockProps, selectedVulns: ['GHSA-1234-5678-9012'] };
+        render(<MultiEditBar {...props} />);
+        await act(async () => {
+            await userEvent.click(screen.getByTestId('refresh-dropdown-toggle'));
+        });
+        expect(screen.getByRole('checkbox', { name: /NVD/i })).toBeDisabled();
+        expect(screen.getByRole('checkbox', { name: /EPSS/i })).toBeDisabled();
+        // Start button enabled because GHSA row is present and GHSA checkbox is checked
+        expect(screen.getByRole('button', { name: /^Start$/i })).toBeEnabled();
+    });
+
+    test('GHSA-only selection calls only GHSA handler on Start', async () => {
+        const mockTriggerBanner = jest.fn();
+        const mockBulkNvdTrigger = BulkNvdRefreshHandler.trigger as jest.Mock;
+        const mockBulkEpssTrigger = BulkEpssRefreshHandler.trigger as jest.Mock;
+        const mockBulkGhsaTrigger = BulkGhsaRefreshHandler.trigger as jest.Mock;
+        mockBulkGhsaTrigger.mockResolvedValue({ status: 'success', total: 1 });
+
+        const props = { ...mockProps, selectedVulns: ['GHSA-1234-5678-9012'], triggerBanner: mockTriggerBanner, hideBanner: jest.fn() };
+        render(<MultiEditBar {...props} />);
+        await act(async () => {
+            await userEvent.click(screen.getByTestId('refresh-dropdown-toggle'));
+        });
+        await act(async () => {
+            await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
+        });
+
+        await waitFor(() => {
+            expect(mockBulkGhsaTrigger).toHaveBeenCalledWith(['GHSA-1234-5678-9012']);
+        });
+        expect(mockBulkNvdTrigger).not.toHaveBeenCalled();
+        expect(mockBulkEpssTrigger).not.toHaveBeenCalled();
+    });
+
     // ---- Refresh handler: failure and catch paths ----
 
     test('shows error banner when NVD refresh trigger returns null', async () => {
@@ -1093,7 +1173,7 @@ describe('MultiEditBar', () => {
         (BulkNvdRefreshHandler.trigger as jest.Mock).mockResolvedValue(null);
         (BulkEpssRefreshHandler.trigger as jest.Mock).mockResolvedValue({ status: 'success', total: 1 });
 
-        const props = { ...mockProps, selectedVulns: ['vuln-1'], triggerBanner: mockTriggerBanner, hideBanner: jest.fn() };
+        const props = { ...mockProps, selectedVulns: ['CVE-2024-0001'], triggerBanner: mockTriggerBanner, hideBanner: jest.fn() };
         render(<MultiEditBar {...props} />);
         await act(async () => {
             await userEvent.click(screen.getByTestId('refresh-dropdown-toggle'));
@@ -1106,7 +1186,7 @@ describe('MultiEditBar', () => {
             await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
         });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start NVD refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start NVD refresh', 'error', 'nvd');
         });
     });
 
@@ -1114,7 +1194,7 @@ describe('MultiEditBar', () => {
         const mockTriggerBanner = jest.fn();
         (BulkNvdRefreshHandler.trigger as jest.Mock).mockRejectedValue(new Error('network'));
 
-        const props = { ...mockProps, selectedVulns: ['vuln-1'], triggerBanner: mockTriggerBanner, hideBanner: jest.fn() };
+        const props = { ...mockProps, selectedVulns: ['CVE-2024-0001'], triggerBanner: mockTriggerBanner, hideBanner: jest.fn() };
         render(<MultiEditBar {...props} />);
         await act(async () => {
             await userEvent.click(screen.getByTestId('refresh-dropdown-toggle'));
@@ -1126,7 +1206,7 @@ describe('MultiEditBar', () => {
             await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
         });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start NVD refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start NVD refresh', 'error', 'nvd');
         });
     });
 
@@ -1134,7 +1214,7 @@ describe('MultiEditBar', () => {
         const mockTriggerBanner = jest.fn();
         (BulkEpssRefreshHandler.trigger as jest.Mock).mockResolvedValue(null);
 
-        const props = { ...mockProps, selectedVulns: ['vuln-1'], triggerBanner: mockTriggerBanner, hideBanner: jest.fn() };
+        const props = { ...mockProps, selectedVulns: ['CVE-2024-0001'], triggerBanner: mockTriggerBanner, hideBanner: jest.fn() };
         render(<MultiEditBar {...props} />);
         await act(async () => {
             await userEvent.click(screen.getByTestId('refresh-dropdown-toggle'));
@@ -1146,7 +1226,7 @@ describe('MultiEditBar', () => {
             await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
         });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start EPSS refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start EPSS refresh', 'error', 'epss');
         });
     });
 
@@ -1154,7 +1234,7 @@ describe('MultiEditBar', () => {
         const mockTriggerBanner = jest.fn();
         (BulkEpssRefreshHandler.trigger as jest.Mock).mockRejectedValue(new Error('network'));
 
-        const props = { ...mockProps, selectedVulns: ['vuln-1'], triggerBanner: mockTriggerBanner, hideBanner: jest.fn() };
+        const props = { ...mockProps, selectedVulns: ['CVE-2024-0001'], triggerBanner: mockTriggerBanner, hideBanner: jest.fn() };
         render(<MultiEditBar {...props} />);
         await act(async () => {
             await userEvent.click(screen.getByTestId('refresh-dropdown-toggle'));
@@ -1166,7 +1246,7 @@ describe('MultiEditBar', () => {
             await userEvent.click(screen.getByRole('button', { name: /^Start$/i }));
         });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start EPSS refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to start EPSS refresh', 'error', 'epss');
         });
     });
 
@@ -1186,7 +1266,7 @@ describe('MultiEditBar', () => {
         await act(async () => { await userEvent.click(screen.getByTestId('refresh-dropdown-toggle')); });
         await act(async () => { await userEvent.click(screen.getByTestId('cancel-nvd-refresh')); });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel NVD refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel NVD refresh', 'error', 'nvd');
         });
         // Cancelling flag should reset so button is enabled again
         expect(screen.getByTestId('cancel-nvd-refresh')).not.toBeDisabled();
@@ -1206,7 +1286,7 @@ describe('MultiEditBar', () => {
         await act(async () => { await userEvent.click(screen.getByTestId('refresh-dropdown-toggle')); });
         await act(async () => { await userEvent.click(screen.getByTestId('cancel-nvd-refresh')); });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel NVD refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel NVD refresh', 'error', 'nvd');
         });
         expect(screen.getByTestId('cancel-nvd-refresh')).not.toBeDisabled();
     });
@@ -1225,7 +1305,7 @@ describe('MultiEditBar', () => {
         await act(async () => { await userEvent.click(screen.getByTestId('refresh-dropdown-toggle')); });
         await act(async () => { await userEvent.click(screen.getByTestId('cancel-epss-refresh')); });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel EPSS refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel EPSS refresh', 'error', 'epss');
         });
         expect(screen.getByTestId('cancel-epss-refresh')).not.toBeDisabled();
     });
@@ -1244,7 +1324,7 @@ describe('MultiEditBar', () => {
         await act(async () => { await userEvent.click(screen.getByTestId('refresh-dropdown-toggle')); });
         await act(async () => { await userEvent.click(screen.getByTestId('cancel-epss-refresh')); });
         await waitFor(() => {
-            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel EPSS refresh', 'error');
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel EPSS refresh', 'error', 'epss');
         });
         expect(screen.getByTestId('cancel-epss-refresh')).not.toBeDisabled();
     });

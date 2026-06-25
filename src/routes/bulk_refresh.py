@@ -10,12 +10,15 @@ singletons, which are already polled by /api/nvd/progress and /api/epss/progress
 """
 
 import datetime
+import decimal
 import os
 import re
 import threading
 import time
+import urllib.error
 
-from flask import jsonify, request
+from flask import jsonify, request, Flask
+from flask.typing import ResponseReturnValue
 
 from ..models import Vulnerability
 from ..extensions import db
@@ -24,6 +27,8 @@ from ..controllers.nvd_apply import apply_nvd_update, apply_cvss_update
 from ..controllers.epss_db import EPSS_DB
 from ..controllers.nvd_progress import NVDProgressTracker
 from ..controllers.epss_progress import EPSSProgressTracker
+from ..controllers.ghsa_progress import GHSAProgressTracker
+from ..controllers.vulnerabilities import VulnerabilitiesController
 
 _EPSS_BATCH_SIZE = 100
 _NVD_COMMIT_EVERY = 50
@@ -31,6 +36,10 @@ _NVD_COMMIT_EVERY = 50
 _MAX_CVE_IDS = 1000
 # HIGH: only accept well-formed CVE identifiers to avoid wasting rate-limit quota
 _CVE_RE = re.compile(r'^CVE-\d{4}-\d{4,}$')
+_MAX_GHSA_IDS = 500
+_GHSA_RE = re.compile(r'^GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$')
+_GHSA_COMMIT_EVERY = 20
+_GHSA_SLEEP_INTERVAL = 1.0
 
 
 def _nvd_sleep_interval() -> float:
@@ -60,10 +69,10 @@ def _safe_commit(label: str) -> None:
         db.session.expunge_all()
 
 
-def init_app(app):
+def init_app(app: Flask) -> None:
 
     @app.route('/api/vulnerabilities/bulk-nvd-refresh', methods=['POST'])
-    def bulk_nvd_refresh():
+    def bulk_nvd_refresh() -> ResponseReturnValue:
         """Trigger a bulk NVD refresh for a list of CVE IDs.
 
         Body: ``{"cve_ids": ["CVE-A", "CVE-B", ...]}``
@@ -89,7 +98,7 @@ def init_app(app):
             return jsonify({"error": "A bulk NVD refresh is already in progress"}), 409
         NVDProgressTracker.update("bulk_nvd_refresh", 0, total, f"Starting bulk NVD refresh: 0/{total}")
 
-        def _run():
+        def _run() -> None:
             with app.app_context():
                 sleep_between = _nvd_sleep_interval()
                 nvd_api_key = os.getenv("NVD_API_KEY")
@@ -141,7 +150,7 @@ def init_app(app):
         return jsonify({"status": "started", "total": total}), 202
 
     @app.route('/api/vulnerabilities/cancel-nvd-refresh', methods=['POST'])
-    def cancel_nvd_refresh():
+    def cancel_nvd_refresh() -> ResponseReturnValue:
         """Request cancellation of an in-progress bulk NVD refresh.
 
         Returns 200 when the cancellation was accepted (refresh was running).
@@ -152,7 +161,7 @@ def init_app(app):
         return jsonify({"error": "No bulk NVD refresh is currently in progress"}), 409
 
     @app.route('/api/vulnerabilities/bulk-epss-refresh', methods=['POST'])
-    def bulk_epss_refresh():
+    def bulk_epss_refresh() -> ResponseReturnValue:
         """Trigger a bulk EPSS refresh for a list of CVE IDs.
 
         Body: ``{"cve_ids": ["CVE-A", "CVE-B", ...]}``
@@ -178,7 +187,7 @@ def init_app(app):
             return jsonify({"error": "A bulk EPSS refresh is already in progress"}), 409
         EPSSProgressTracker.update("bulk_epss_refresh", 0, total, f"Starting bulk EPSS refresh: 0/{total}")
 
-        def _run():
+        def _run() -> None:
             with app.app_context():
                 epss = EPSS_DB()
                 now = datetime.datetime.now(datetime.timezone.utc)
@@ -211,11 +220,15 @@ def init_app(app):
                                 try:
                                     rec = db.session.get(Vulnerability, cve_id)
                                     if rec is not None:
-                                        rec.update_record(
-                                            epss_score=result["score"],
-                                            epss_fetched_at=now,
-                                            commit=False,
-                                        )
+                                        new_score = decimal.Decimal(str(result["score"]))
+                                        ek: dict = {
+                                            "epss_score": new_score,
+                                            "epss_fetched_at": now,
+                                            "commit": False,
+                                        }
+                                        if rec.epss_score is None or rec.epss_score != new_score:
+                                            ek["epss_data_updated_at"] = now
+                                        rec.update_record(**ek)
                                 except Exception as exc:
                                     print(
                                         f"[bulk EPSS refresh] error updating {cve_id}: {exc}",
@@ -238,7 +251,7 @@ def init_app(app):
         return jsonify({"status": "started", "total": total}), 202
 
     @app.route('/api/vulnerabilities/cancel-epss-refresh', methods=['POST'])
-    def cancel_epss_refresh():
+    def cancel_epss_refresh() -> ResponseReturnValue:
         """Request cancellation of an in-progress bulk EPSS refresh.
 
         Returns 200 when the cancellation was accepted (refresh was running).
@@ -247,3 +260,112 @@ def init_app(app):
         if EPSSProgressTracker.cancel():
             return jsonify({"status": "cancelling"}), 200
         return jsonify({"error": "No bulk EPSS refresh is currently in progress"}), 409
+
+    @app.route('/api/vulnerabilities/bulk-ghsa-refresh', methods=['POST'])
+    def bulk_ghsa_refresh() -> ResponseReturnValue:
+        """Trigger a bulk GHSA refresh for a list of GHSA IDs.
+
+        Body: ``{"ghsa_ids": ["GHSA-xxxx-xxxx-xxxx", ...]}``
+
+        Only GHSA-prefixed identifiers are accepted; CVE IDs are rejected.
+        Returns 202 immediately and runs the refresh in a background thread.
+        Returns 409 if a refresh is already in progress.
+        Returns 400 if ghsa_ids is empty or contains no valid GHSA identifiers.
+        """
+        body = request.get_json(force=True, silent=True) or {}
+        raw_ids = body.get("ghsa_ids", [])
+        if not raw_ids or not isinstance(raw_ids, list):
+            return jsonify({"error": "ghsa_ids must be a non-empty list"}), 400
+
+        ghsa_ids = [c.strip().upper() for c in raw_ids if isinstance(c, str) and c.strip()]
+        ghsa_ids = [c for c in ghsa_ids if _GHSA_RE.match(c)]
+        if not ghsa_ids:
+            return jsonify({"error": "ghsa_ids must contain valid GHSA identifiers (e.g. GHSA-xxxx-xxxx-xxxx)"}), 400
+        if len(ghsa_ids) > _MAX_GHSA_IDS:
+            return jsonify({"error": f"ghsa_ids must contain at most {_MAX_GHSA_IDS} entries"}), 400
+
+        total = len(ghsa_ids)
+        if not GHSAProgressTracker.start_if_idle("bulk_ghsa_refresh"):
+            return jsonify({"error": "A bulk GHSA refresh is already in progress"}), 409
+        GHSAProgressTracker.update("bulk_ghsa_refresh", 0, total, f"Starting bulk GHSA refresh: 0/{total}")
+
+        def _run() -> None:
+            with app.app_context():
+                now = datetime.datetime.now(datetime.timezone.utc)
+                done = 0
+                failed = 0
+                try:
+                    for ghsa_id in ghsa_ids:
+                        if GHSAProgressTracker.is_cancelled():
+                            _safe_commit("bulk GHSA refresh cancel")
+                            GHSAProgressTracker.mark_cancelled()
+                            return
+
+                        try:
+                            published_at = VulnerabilitiesController._fetch_ghsa_published(ghsa_id)
+                            if published_at:
+                                rec = db.session.get(Vulnerability, ghsa_id)
+                                if rec is not None:
+                                    try:
+                                        publish_date = datetime.date.fromisoformat(
+                                            str(published_at)[:10]
+                                        )
+                                    except ValueError:
+                                        publish_date = None
+                                    gk: dict = {
+                                        "ghsa_fetched_at": now,
+                                        "commit": False,
+                                    }
+                                    if publish_date is not None:
+                                        gk["publish_date"] = publish_date
+                                        if rec.publish_date != publish_date:
+                                            gk["ghsa_data_updated_at"] = now
+                                    rec.update_record(**gk)
+                        except urllib.error.HTTPError as exc:
+                            if exc.code in (403, 429):
+                                _safe_commit("bulk GHSA refresh rate-limited")
+                                GHSAProgressTracker.error(
+                                    f"GitHub rate limit reached after {done} IDs (HTTP {exc.code})."
+                                    " Set GITHUB_TOKEN env var to increase quota."
+                                )
+                                return
+                            print(f"[bulk GHSA refresh] error for {ghsa_id}: {exc}", flush=True)
+                            failed += 1
+                        except Exception as exc:
+                            print(f"[bulk GHSA refresh] error for {ghsa_id}: {exc}", flush=True)
+                            failed += 1
+
+                        done += 1
+                        GHSAProgressTracker.update(
+                            "bulk_ghsa_refresh", done, total,
+                            f"GHSA refresh: {done}/{total} ({ghsa_id})",
+                        )
+                        if done % _GHSA_COMMIT_EVERY == 0:
+                            _safe_commit("bulk GHSA refresh")
+                        if done < total:
+                            time.sleep(_GHSA_SLEEP_INTERVAL)
+
+                    _safe_commit("bulk GHSA refresh final")
+                    if failed:
+                        GHSAProgressTracker.complete(
+                            f"GHSA refresh complete ({total} IDs, {failed} failed)"
+                        )
+                    else:
+                        GHSAProgressTracker.complete()
+                except Exception as exc:
+                    print(f"[bulk GHSA refresh] unhandled error: {exc}", flush=True)
+                    GHSAProgressTracker.error(str(exc)[:200])
+
+        threading.Thread(target=_run, name="bulk-ghsa-refresh", daemon=True).start()
+        return jsonify({"status": "started", "total": total}), 202
+
+    @app.route('/api/vulnerabilities/cancel-ghsa-refresh', methods=['POST'])
+    def cancel_ghsa_refresh() -> ResponseReturnValue:
+        """Request cancellation of an in-progress bulk GHSA refresh.
+
+        Returns 200 when the cancellation was accepted (refresh was running).
+        Returns 409 when no bulk GHSA refresh is currently in progress.
+        """
+        if GHSAProgressTracker.cancel():
+            return jsonify({"status": "cancelling"}), 200
+        return jsonify({"error": "No bulk GHSA refresh is currently in progress"}), 409

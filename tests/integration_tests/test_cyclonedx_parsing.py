@@ -6,19 +6,13 @@
 import pytest
 from src.views.cyclonedx import CycloneDx
 from src.models.assessment import Assessment
-from src.controllers.packages import PackagesController
-from src.controllers.vulnerabilities import VulnerabilitiesController
-from src.controllers.assessments import AssessmentsController
+from src.controllers import ControllersCache
 import json
 
 
 @pytest.fixture
 def cdx_parser():
-    controllers = {}
-    controllers["packages"] = PackagesController()
-    controllers["vulnerabilities"] = VulnerabilitiesController(controllers["packages"])
-    controllers["assessments"] = AssessmentsController(controllers["packages"], controllers["vulnerabilities"])
-    return CycloneDx(controllers)
+    return CycloneDx(ControllersCache())
 
 
 def test_parse_empty_json(cdx_parser):

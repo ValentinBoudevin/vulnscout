@@ -185,6 +185,24 @@ This can be chained with other inputs to scan newly added files immediately:
 
 ---
 
+## Performing an sbom-cve-check Scan
+
+The `--perform-sbom-cve-check-scan` flag runs a CVE scan powered by [sbom-cve-check](https://github.com/savoirfairelinux/sbom-cve-check). Unlike the NVD and OSV scanners, and once the databases are synced, this scan never makes network calls during analysis,it queries locally-cloned advisory databases (NVD-FKIE JSON feeds and CVEList V5).
+
+```bash
+./vulnscout --project demo --variant x86 --perform-sbom-cve-check-scan
+```
+
+The scan can be chained with other inputs:
+
+```bash
+./vulnscout --project demo \
+  --add-spdx example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+  --perform-sbom-cve-check-scan
+```
+
+---
+
 ## Non-Interactive Mode (CI / Automation)
 
 For CI pipelines or automated scans, use the `--match-condition` argument instead of the web UI:

@@ -9,15 +9,20 @@ import {
   faSpinner,
   faTriangleExclamation,
   faTrash,
-  faLayerGroup,
   faXmark,
   faKey,
   faPenToSquare,
+  faCopy,
+  faRightLeft,
 } from "@fortawesome/free-solid-svg-icons";
 import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
 import Variants from "../handlers/variant";
-import type { Variant } from "../handlers/variant";
+import type {
+  Variant,
+  CopyAssessmentsPreview,
+  CopyAssessmentsPreviewUnsupported,
+} from "../handlers/variant";
 import Config from "../handlers/config";
 import ConfirmationModal from "../components/ConfirmationModal";
 import MessageBanner from "../components/MessageBanner";
@@ -28,7 +33,12 @@ type Props = {
   onLoadingMessage?: (message: string | null) => void;
 };
 
+type SettingsTab = "general" | "projects" | "variants" | "customData" | "scan";
+
 function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
+  // ---- Active category tab ----
+  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+
   // ---- Unmount guard for async operations ----
   const unmountedRef = useRef(false);
   useEffect(() => {
@@ -168,6 +178,12 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         setRenameProjectId("");
         setRenameProjectName("");
       }
+      if (customProjectId === deleteProjectId) {
+        setCustomProjectId("");
+        setCustomProjectVariants([]);
+        setCopySourceId("");
+        setCopyTargetId("");
+      }
       setDeleteProjectId("");
       setConfirmDeleteProject(false);
       loadProjects();
@@ -193,6 +209,19 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   const [confirmDeleteVariant, setConfirmDeleteVariant] = useState(false);
   const [deleteVariantBusy, setDeleteVariantBusy] = useState(false);
 
+  // ---- Copy Custom Assessments ----
+  const [customProjectId, setCustomProjectId] = useState<string>("");
+  const [customProjectVariants, setCustomProjectVariants] = useState<Variant[]>([]);
+  const [copySourceId, setCopySourceId] = useState<string>("");
+  const [copyTargetId, setCopyTargetId] = useState<string>("");
+  const [copyIgnorePackageVersion, setCopyIgnorePackageVersion] = useState(false);
+  const [copyBusy, setCopyBusy] = useState(false);
+  const [copyMsg, setCopyMsg] = useState<string | null>(null);
+  const [copyPreviewBusy, setCopyPreviewBusy] = useState(false);
+  const [copyPreviewError, setCopyPreviewError] = useState<string | null>(null);
+  const [copyPreview, setCopyPreview] = useState<CopyAssessmentsPreview | null>(null);
+  const [copyPreviewUnavailableMsg, setCopyPreviewUnavailableMsg] = useState<string | null>(null);
+
   const reloadVariants = useCallback((projectId: string) => {
     if (!projectId) { setVariantProjectVariants([]); return; }
     Variants.list(projectId)
@@ -211,6 +240,11 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     try {
       await Variants.rename(renameVariantId, renameVariantName.trim());
       reloadVariants(variantProjectId);
+      if (customProjectId === variantProjectId) {
+        Variants.list(customProjectId)
+          .then(setCustomProjectVariants)
+          .catch(() => setCustomProjectVariants([]));
+      }
       onDataChanged?.("Renaming variant...");
     } catch (e: any) {
       setVariantMsg(e.message);
@@ -227,6 +261,11 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       await Variants.create(variantProjectId, newVariantName.trim());
       setNewVariantName("");
       reloadVariants(variantProjectId);
+      if (customProjectId === variantProjectId) {
+        Variants.list(customProjectId)
+          .then(setCustomProjectVariants)
+          .catch(() => setCustomProjectVariants([]));
+      }
       onDataChanged?.("Creating variant...");
     } catch (e: any) {
       setVariantMsg(e.message);
@@ -244,10 +283,18 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       if (renameVariantId === deleteVariantId) {
         setRenameVariantId("");
         setRenameVariantName("");
+        setCopyPreview(null);
+        setCopyPreviewError(null);
+        setCopyPreviewBusy(false);
       }
       setDeleteVariantId("");
       setConfirmDeleteVariant(false);
       reloadVariants(variantProjectId);
+      if (customProjectId === variantProjectId) {
+        Variants.list(customProjectId)
+          .then(setCustomProjectVariants)
+          .catch(() => setCustomProjectVariants([]));
+      }
       onDataChanged?.("Deleting variant...");
     } catch (e: any) {
       setVariantMsg(e.message);
@@ -256,6 +303,85 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       setDeleteVariantBusy(false);
     }
   };
+
+  const handleCopyAssessments = async () => {
+    if (!copySourceId || !copyTargetId || copyBusy) return;
+    if (copySourceId === copyTargetId) {
+      setCopyMsg("Source and target variants must be different.");
+      return;
+    }
+    setCopyBusy(true);
+    setCopyMsg(null);
+    try {
+      const result = await Variants.copyAssessments(
+        copySourceId,
+        copyTargetId,
+        copyIgnorePackageVersion,
+      );
+      setCopyMsg(result.message);
+      onDataChanged?.("Copying assessments...");
+    } catch (e: any) {
+      setCopyMsg(e.message);
+    } finally {
+      setCopyBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!customProjectId) {
+      setCustomProjectVariants([]);
+      setCopySourceId("");
+      setCopyTargetId("");
+      setCopyPreview(null);
+      setCopyPreviewError(null);
+      setCopyPreviewUnavailableMsg(null);
+      setCopyPreviewBusy(false);
+      return;
+    }
+    Variants.list(customProjectId)
+      .then(setCustomProjectVariants)
+      .catch(() => setCustomProjectVariants([]));
+  }, [customProjectId]);
+
+  useEffect(() => {
+    if (!customProjectId || !copySourceId || !copyTargetId || copySourceId === copyTargetId) {
+      setCopyPreview(null);
+      setCopyPreviewError(null);
+      setCopyPreviewUnavailableMsg(null);
+      setCopyPreviewBusy(false);
+      return;
+    }
+
+    let cancelled = false;
+    setCopyPreviewBusy(true);
+    setCopyPreviewError(null);
+    setCopyPreviewUnavailableMsg(null);
+
+    Variants.previewCopyAssessments(copySourceId, copyTargetId, copyIgnorePackageVersion)
+      .then((data) => {
+        if (cancelled || unmountedRef.current) return;
+        if ((data as CopyAssessmentsPreviewUnsupported).unsupported) {
+          setCopyPreview(null);
+          setCopyPreviewUnavailableMsg(data.message);
+          return;
+        }
+        setCopyPreview(data as CopyAssessmentsPreview);
+      })
+      .catch((e: any) => {
+        if (cancelled || unmountedRef.current) return;
+        setCopyPreview(null);
+        setCopyPreviewUnavailableMsg(null);
+        setCopyPreviewError(e?.message || "Failed to generate preview.");
+      })
+      .finally(() => {
+        if (cancelled || unmountedRef.current) return;
+        setCopyPreviewBusy(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [customProjectId, copySourceId, copyTargetId, copyIgnorePackageVersion]);
 
   // ---- Import SBOM ----
   const [importProjectId, setImportProjectId] = useState<string>("");
@@ -404,28 +530,87 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     }
   };
 
-  // ---- Styles matching Metrics.tsx (zinc-700 dark cards) ----
+  // ---- Styles ----
   const inputClass =
-    "w-full rounded px-2 py-1.5 text-sm bg-zinc-800 border border-zinc-600 text-white focus:outline-none focus:border-cyan-400";
+    "w-full rounded px-2 py-1.5 text-sm bg-slate-900/60 border border-slate-600 text-white focus:outline-none focus:border-cyan-400";
   const selectClass = inputClass;
   const btnPrimary =
     "px-4 py-2 rounded-lg bg-cyan-800 hover:bg-cyan-700 focus:ring-4 focus:outline-none focus:ring-blue-800 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150";
+  // ---- Card styles: gradient header + slate body with ring & shadow ----
+  const cardHeader =
+    "bg-gradient-to-r from-slate-700 to-slate-800 px-4 py-2.5 flex items-center gap-2 rounded-t-lg border-b border-slate-600/60";
+  const cardBody =
+    "bg-slate-800/60 p-4 rounded-b-lg ring-1 ring-slate-700/70 shadow-lg shadow-black/20";
 
   return (
-    <div className="w-full flex justify-center pt-8">
-      <div className="w-full max-w-3xl space-y-6">
+    <div className="w-full">
+      <div className="w-full space-y-6">
         <h1 className="text-3xl font-bold text-white mb-2">Settings</h1>
-        <p className="text-zinc-400 mb-4">
-          Manage projects, variants, and import SBOM files.
-        </p>
 
+        {/* ======== Category tabs ======== */}
+        <div className="mb-3 flex items-center gap-1 border-b border-gray-700">
+          <button
+            className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+              activeTab === "general"
+                ? "bg-sky-800 text-white border-b-2 border-sky-400"
+                : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+            }`}
+            onClick={() => setActiveTab("general")}
+          >
+            General Settings
+          </button>
+          <button
+            className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+              activeTab === "projects"
+                ? "bg-sky-800 text-white border-b-2 border-sky-400"
+                : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+            }`}
+            onClick={() => setActiveTab("projects")}
+          >
+            Projects Settings
+          </button>
+          <button
+            className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+              activeTab === "variants"
+                ? "bg-sky-800 text-white border-b-2 border-sky-400"
+                : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+            }`}
+            onClick={() => setActiveTab("variants")}
+          >
+            Variants Settings
+          </button>
+          <button
+            className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+              activeTab === "scan"
+                ? "bg-sky-800 text-white border-b-2 border-sky-400"
+                : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+            }`}
+            onClick={() => setActiveTab("scan")}
+          >
+            Scan Settings
+          </button>
+          <button
+            className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+              activeTab === "customData"
+                ? "bg-sky-800 text-white border-b-2 border-sky-400"
+                : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+            }`}
+            onClick={() => setActiveTab("customData")}
+          >
+            Custom Data Settings
+          </button>
+        </div>
+
+        {/* ======== General Settings tab ======== */}
+        {activeTab === "general" && (
+        <>
         {/* ======== Report Metadata ======== */}
         <div>
-          <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
+          <div className={cardHeader}>
             <FontAwesomeIcon icon={faFileLines} className="text-cyan-400" />
             <h2 className="text-xl font-bold text-white">Report Metadata</h2>
           </div>
-          <div className="bg-zinc-700 p-4 rounded-b-md space-y-3">
+          <div className={cardBody + " space-y-3"}>
             <div>
               <label className="block text-sm text-zinc-300 mb-1">PRODUCT_NAME</label>
               <input
@@ -510,393 +695,13 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
           </div>
         </div>
 
-        {/* ======== Manage Projects ======== */}
-        <section aria-labelledby="settings-heading-projects">
-          <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
-            <FontAwesomeIcon icon={faLayerGroup} className="text-cyan-400" aria-hidden="true" />
-            <h2 id="settings-heading-projects" className="text-xl font-bold text-white">Manage Projects</h2>
-          </div>
-          <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
-
-            {/* -- Create project -- */}
-            <div className="space-y-2">
-              <label htmlFor="new-project-name" className="block text-sm text-zinc-300 font-semibold">Add Project</label>
-              <div className="flex gap-2">
-                <input
-                  id="new-project-name"
-                  type="text"
-                  value={newProjectName}
-                  onChange={(e) => { setNewProjectName(e.target.value); setProjectMsg(null); }}
-                  placeholder="New project name"
-                  className={inputClass + " flex-1"}
-                  aria-required="true"
-                  onKeyDown={(e) => e.key === "Enter" && handleCreateProject()}
-                />
-                <button
-                  onClick={handleCreateProject}
-                  disabled={createProjectBusy || !newProjectName.trim()}
-                  className={btnPrimary}
-                  aria-busy={createProjectBusy}
-                >
-                  {createProjectBusy ? (
-                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
-                  ) : (
-                    <FontAwesomeIcon icon={faPlus} className="mr-1" aria-hidden="true" />
-                  )}
-                  Add
-                </button>
-              </div>
-            </div>
-
-            {/* -- Rename project -- */}
-            <div className="border-t border-zinc-600 pt-4 space-y-2">
-              <label htmlFor="rename-project-select" className="block text-sm text-zinc-300 font-semibold">Rename Project</label>
-              <select
-                id="rename-project-select"
-                value={renameProjectId}
-                onChange={(e) => {
-                  setRenameProjectId(e.target.value);
-                  setProjectMsg(null);
-                  const p = projects.find((x) => x.id === e.target.value);
-                  setRenameProjectName(p?.name ?? "");
-                }}
-                className={selectClass}
-              >
-                <option value="">— select a project —</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-
-              <div className="flex gap-2">
-                <label htmlFor="rename-project-name" className="sr-only">New project name</label>
-                <input
-                  id="rename-project-name"
-                  type="text"
-                  value={renameProjectName}
-                  onChange={(e) => setRenameProjectName(e.target.value)}
-                  placeholder="Enter new name"
-                  className={inputClass + " flex-1"}
-                  disabled={!renameProjectId}
-                  aria-required="true"
-                  onKeyDown={(e) => e.key === "Enter" && handleRenameProject()}
-                />
-                <button
-                  onClick={handleRenameProject}
-                  disabled={renameProjectBusy || !renameProjectId || !renameProjectName.trim()}
-                  className={btnPrimary}
-                  aria-busy={renameProjectBusy}
-                >
-                  {renameProjectBusy ? (
-                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
-                  ) : (
-                    <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
-                  )}
-                  Rename
-                </button>
-              </div>
-            </div>
-
-            {/* -- Delete project -- */}
-            <div className="border-t border-zinc-600 pt-4 space-y-2">
-              <label htmlFor="delete-project-select" className="block text-sm text-zinc-300 font-semibold">Delete Project</label>
-              <div className="flex gap-2">
-                <select
-                  id="delete-project-select"
-                  value={deleteProjectId}
-                  onChange={(e) => { setDeleteProjectId(e.target.value); setProjectMsg(null); }}
-                  className={selectClass + " flex-1"}
-                >
-                  <option value="">— select a project —</option>
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => setConfirmDeleteProject(true)}
-                  disabled={!deleteProjectId}
-                  className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
-                >
-                  <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
-                  Delete
-                </button>
-              </div>
-            </div>
-
-            {/* -- Feedback -- */}
-            {projectMsg && (
-              <span role="alert" className="text-red-400 text-sm">
-                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
-                {projectMsg}
-              </span>
-            )}
-          </div>
-        </section>
-
-        {/* ======== Manage Variants ======== */}
-        <section aria-labelledby="settings-heading-variants">
-          <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
-            <FontAwesomeIcon icon={faFolderOpen} className="text-cyan-400" aria-hidden="true" />
-            <h2 id="settings-heading-variants" className="text-xl font-bold text-white">Manage Variants</h2>
-          </div>
-          <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
-
-            {/* -- Project picker -- */}
-            <div>
-              <label htmlFor="variant-project-select" className="block text-sm text-zinc-300 mb-1">Project</label>
-              <select
-                id="variant-project-select"
-                value={variantProjectId}
-                onChange={(e) => {
-                  setVariantProjectId(e.target.value);
-                  setRenameVariantId("");
-                  setRenameVariantName("");
-                  setDeleteVariantId("");
-                  setVariantMsg(null);
-                  setConfirmDeleteVariant(false);
-                }}
-                className={selectClass}
-              >
-                <option value="">— select a project —</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* -- Create variant -- */}
-            {variantProjectId && (
-              <div className="space-y-2">
-                <label htmlFor="new-variant-name" className="block text-sm text-zinc-300 font-semibold">Add Variant</label>
-                <div className="flex gap-2">
-                  <input
-                    id="new-variant-name"
-                    type="text"
-                    value={newVariantName}
-                    onChange={(e) => { setNewVariantName(e.target.value); setVariantMsg(null); }}
-                    placeholder="New variant name"
-                    className={inputClass + " flex-1"}
-                    aria-required="true"
-                    onKeyDown={(e) => e.key === "Enter" && handleCreateVariant()}
-                  />
-                  <button
-                    onClick={handleCreateVariant}
-                    disabled={createVariantBusy || !newVariantName.trim()}
-                    className={btnPrimary}
-                    aria-busy={createVariantBusy}
-                  >
-                    {createVariantBusy ? (
-                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
-                    ) : (
-                      <FontAwesomeIcon icon={faPlus} className="mr-1" aria-hidden="true" />
-                    )}
-                    Add
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* -- Rename variant -- */}
-            {variantProjectId && (
-              <div className="border-t border-zinc-600 pt-4 space-y-2">
-                <label htmlFor="rename-variant-select" className="block text-sm text-zinc-300 font-semibold">Rename Variant</label>
-                <select
-                  id="rename-variant-select"
-                  value={renameVariantId}
-                  onChange={(e) => {
-                    setRenameVariantId(e.target.value);
-                    setVariantMsg(null);
-                    const v = variantProjectVariants.find((x) => x.id === e.target.value);
-                    setRenameVariantName(v?.name ?? "");
-                  }}
-                  className={selectClass}
-                >
-                  <option value="">— select a variant —</option>
-                  {variantProjectVariants.map((v) => (
-                    <option key={v.id} value={v.id}>{v.name}</option>
-                  ))}
-                </select>
-
-                <div className="flex gap-2">
-                  <label htmlFor="rename-variant-name" className="sr-only">New variant name</label>
-                  <input
-                    id="rename-variant-name"
-                    type="text"
-                    value={renameVariantName}
-                    onChange={(e) => setRenameVariantName(e.target.value)}
-                    placeholder="Enter new name"
-                    className={inputClass + " flex-1"}
-                    disabled={!renameVariantId}
-                    aria-required="true"
-                    onKeyDown={(e) => e.key === "Enter" && handleRenameVariant()}
-                  />
-                  <button
-                    onClick={handleRenameVariant}
-                    disabled={renameVariantBusy || !renameVariantId || !renameVariantName.trim()}
-                    className={btnPrimary}
-                    aria-busy={renameVariantBusy}
-                  >
-                    {renameVariantBusy ? (
-                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
-                    ) : (
-                      <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
-                    )}
-                    Rename
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* -- Delete variant -- */}
-            {variantProjectId && (
-              <div className="border-t border-zinc-600 pt-4 space-y-2">
-                <label htmlFor="delete-variant-select" className="block text-sm text-zinc-300 font-semibold">Delete Variant</label>
-                <div className="flex gap-2">
-                  <select
-                    id="delete-variant-select"
-                    value={deleteVariantId}
-                    onChange={(e) => { setDeleteVariantId(e.target.value); setVariantMsg(null); }}
-                    className={selectClass + " flex-1"}
-                  >
-                    <option value="">— select a variant —</option>
-                    {variantProjectVariants.map((v) => (
-                      <option key={v.id} value={v.id}>{v.name}</option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => setConfirmDeleteVariant(true)}
-                    disabled={!deleteVariantId}
-                    className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
-                  >
-                    <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
-                    Delete
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* -- Feedback -- */}
-            {variantMsg && (
-              <span role="alert" className="text-red-400 text-sm">
-                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
-                {variantMsg}
-              </span>
-            )}
-          </div>
-        </section>
-
-        {/* ======== Import SBOM ======== */}
-        <section aria-labelledby="settings-heading-import">
-          <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
-            <FontAwesomeIcon icon={faFileImport} className="text-cyan-400" aria-hidden="true" />
-            <h2 id="settings-heading-import" className="text-xl font-bold text-white">Import SBOM</h2>
-          </div>
-          <div className="bg-zinc-700 p-4 rounded-b-md space-y-3">
-
-            {/* ---- Project selector ---- */}
-            <div>
-              <label htmlFor="import-project-select" className="block text-sm text-zinc-300 mb-1">Project</label>
-              <select
-                id="import-project-select"
-                value={importProjectId}
-                onChange={(e) => {
-                  setImportProjectId(e.target.value);
-                  setImportVariantId("");
-                  setImportMsg(null);
-                }}
-                className={selectClass}
-              >
-                <option value="">— select a project —</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* ---- Variant selector ---- */}
-            <div>
-              <label htmlFor="import-variant-select" className="block text-sm text-zinc-300 mb-1">Variant</label>
-              <select
-                id="import-variant-select"
-                value={importVariantId}
-                onChange={(e) => { setImportVariantId(e.target.value); setImportMsg(null); }}
-                disabled={!importProjectId}
-                className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
-              >
-                <option value="">— select a variant —</option>
-                {importVariants.map((v) => (
-                  <option key={v.id} value={v.id}>{v.name}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* ---- File picker(s) ---- */}
-            <div className="space-y-2">
-              <label className="block text-sm text-zinc-300 mb-1" id="sbom-files-label">SBOM Files</label>
-              {/* Existing files */}
-              {importFiles.map((file, idx) => (
-                <div key={idx} className="flex items-center gap-2">
-                  <span className="flex-1 truncate text-sm text-zinc-200 bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5">
-                    {file.name}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveFile(idx)}
-                    disabled={importBusy}
-                    className="p-1.5 rounded text-zinc-400 hover:text-red-400 hover:bg-zinc-600 disabled:opacity-40 transition-colors"
-                    aria-label={`Remove file ${file.name}`}
-                  >
-                    <FontAwesomeIcon icon={faXmark} aria-hidden="true" />
-                  </button>
-                </div>
-              ))}
-              {/* New file browse row */}
-              <input
-                key={importFiles.length}
-                type="file"
-                accept=".json,.spdx,.cdx,.xml"
-                onChange={(e) => handleFileSelected(importFiles.length, e.target.files?.[0] ?? null)}
-                disabled={importBusy}
-                aria-labelledby="sbom-files-label"
-                className={
-                  inputClass +
-                  " file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-cyan-900 file:text-cyan-300 hover:file:bg-cyan-800"
-                }
-              />
-            </div>
-
-            {/* ---- Submit ---- */}
-            <div className="flex items-center gap-3 pt-1">
-              <button
-                onClick={handleUploadSBOM}
-                disabled={importBusy || !importProjectId || !importVariantId || importFiles.length === 0}
-                className={btnPrimary}
-                aria-busy={importBusy}
-              >
-                {importBusy ? (
-                  <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
-                ) : (
-                  <FontAwesomeIcon icon={faFileImport} className="mr-1" aria-hidden="true" />
-                )}
-                Import
-              </button>
-              {importMsg && (
-                <span role="alert" className="text-red-400 text-sm">
-                  <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
-                  {importMsg}
-                </span>
-              )}
-            </div>
-          </div>
-        </section>
-
         {/* ======== NVD API Key ======== */}
         <section aria-labelledby="settings-heading-nvd">
-          <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
+          <div className={cardHeader}>
             <FontAwesomeIcon icon={faKey} className="text-cyan-400" aria-hidden="true" />
             <h2 id="settings-heading-nvd" className="text-xl font-bold text-white">NVD API Key</h2>
           </div>
-          <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
+          <div className={cardBody + " space-y-4"}>
             <p id="nvd-key-description" className="text-zinc-400 text-sm">
               An NVD API key increases the rate limit for vulnerability enrichment from 5 to 50 requests per 30 seconds.
               Get a free key at{" "}
@@ -925,7 +730,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                 {/* -- Key is set: show masked key + modify / remove buttons -- */}
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-zinc-300">NVD API key:</span>
-                  <code className="text-sm text-zinc-300 bg-zinc-900 px-2 py-0.5 rounded font-mono">{nvdMaskedKey}</code>
+                  <code className="text-sm text-zinc-300 bg-slate-900 px-2 py-0.5 rounded font-mono">{nvdMaskedKey}</code>
                 </div>
 
                 <div className="flex items-center gap-3 pt-1">
@@ -984,7 +789,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                   {nvdEditing && (
                     <button
                       onClick={() => { setNvdEditing(false); setNvdKeyInput(""); setNvdMsg(null); }}
-                      className="px-4 py-2 rounded-lg bg-zinc-600 hover:bg-zinc-500 text-white text-sm font-medium transition-colors duration-150"
+                      className="px-4 py-2 rounded-lg bg-slate-600 hover:bg-slate-500 text-white text-sm font-medium transition-colors duration-150"
                     >
                       <FontAwesomeIcon icon={faXmark} className="mr-1" aria-hidden="true" />
                       Cancel
@@ -995,6 +800,712 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             )}
           </div>
         </section>
+        </>
+        )}
+
+        {/* ======== Projects Settings tab ======== */}
+        {activeTab === "projects" && (
+        <>
+        {/* ======== Add Project ======== */}
+        <section aria-labelledby="settings-heading-project-add">
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faPlus} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-project-add" className="text-xl font-bold text-white">Add Project</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+
+            {/* -- Create project -- */}
+            <div className="space-y-2">
+              <label htmlFor="new-project-name" className="block text-sm text-zinc-300 font-semibold">Add Project</label>
+              <div className="flex gap-2">
+                <input
+                  id="new-project-name"
+                  type="text"
+                  value={newProjectName}
+                  onChange={(e) => { setNewProjectName(e.target.value); setProjectMsg(null); }}
+                  placeholder="New project name"
+                  className={inputClass + " flex-1"}
+                  aria-required="true"
+                  onKeyDown={(e) => e.key === "Enter" && handleCreateProject()}
+                />
+                <button
+                  onClick={handleCreateProject}
+                  disabled={createProjectBusy || !newProjectName.trim()}
+                  className={btnPrimary}
+                  aria-busy={createProjectBusy}
+                >
+                  {createProjectBusy ? (
+                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
+                  ) : (
+                    <FontAwesomeIcon icon={faPlus} className="mr-1" aria-hidden="true" />
+                  )}
+                  Add
+                </button>
+              </div>
+            </div>
+
+            {/* -- Feedback -- */}
+            {projectMsg && (
+              <span role="alert" className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
+                {projectMsg}
+              </span>
+            )}
+          </div>
+        </section>
+
+        {/* ======== Rename Project ======== */}
+        <section aria-labelledby="settings-heading-project-rename">
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faPenToSquare} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-project-rename" className="text-xl font-bold text-white">Rename Project</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+
+            {/* -- Rename project -- */}
+            <div className="space-y-2">
+              <label htmlFor="rename-project-select" className="block text-sm text-zinc-300 font-semibold">Rename Project</label>
+              <select
+                id="rename-project-select"
+                value={renameProjectId}
+                onChange={(e) => {
+                  setRenameProjectId(e.target.value);
+                  setProjectMsg(null);
+                  const p = projects.find((x) => x.id === e.target.value);
+                  setRenameProjectName(p?.name ?? "");
+                }}
+                className={selectClass}
+              >
+                <option value="">— select a project —</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+
+              <div className="flex gap-2">
+                <label htmlFor="rename-project-name" className="sr-only">New project name</label>
+                <input
+                  id="rename-project-name"
+                  type="text"
+                  value={renameProjectName}
+                  onChange={(e) => setRenameProjectName(e.target.value)}
+                  placeholder="Enter new name"
+                  className={inputClass + " flex-1"}
+                  disabled={!renameProjectId}
+                  aria-required="true"
+                  onKeyDown={(e) => e.key === "Enter" && handleRenameProject()}
+                />
+                <button
+                  onClick={handleRenameProject}
+                  disabled={renameProjectBusy || !renameProjectId || !renameProjectName.trim()}
+                  className={btnPrimary}
+                  aria-busy={renameProjectBusy}
+                >
+                  {renameProjectBusy ? (
+                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
+                  ) : (
+                    <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
+                  )}
+                  Rename
+                </button>
+              </div>
+            </div>
+
+            {/* -- Feedback -- */}
+            {projectMsg && (
+              <span role="alert" className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
+                {projectMsg}
+              </span>
+            )}
+          </div>
+        </section>
+
+        {/* ======== Delete Project ======== */}
+        <section aria-labelledby="settings-heading-project-delete">
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faTrash} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-project-delete" className="text-xl font-bold text-white">Delete Project</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+
+            {/* -- Delete project -- */}
+            <div className="space-y-2">
+              <label htmlFor="delete-project-select" className="block text-sm text-zinc-300 font-semibold">Delete Project</label>
+              <div className="flex gap-2">
+                <select
+                  id="delete-project-select"
+                  value={deleteProjectId}
+                  onChange={(e) => { setDeleteProjectId(e.target.value); setProjectMsg(null); }}
+                  className={selectClass + " flex-1"}
+                >
+                  <option value="">— select a project —</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => setConfirmDeleteProject(true)}
+                  disabled={!deleteProjectId}
+                  className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
+                >
+                  <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
+                  Delete
+                </button>
+              </div>
+            </div>
+
+            {/* -- Feedback -- */}
+            {projectMsg && (
+              <span role="alert" className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
+                {projectMsg}
+              </span>
+            )}
+          </div>
+        </section>
+        </>
+        )}
+
+        {/* ======== Variants Settings tab ======== */}
+        {activeTab === "variants" && (
+        <>
+        {/* ======== Select Project ======== */}
+        <section aria-labelledby="settings-heading-variant-project">
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faFolderOpen} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-variant-project" className="text-xl font-bold text-white">Select Project</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+
+            {/* -- Project picker -- */}
+            <div>
+              <label htmlFor="variant-project-select" className="block text-sm text-zinc-300 mb-1">Project</label>
+              <select
+                id="variant-project-select"
+                value={variantProjectId}
+                onChange={(e) => {
+                  setVariantProjectId(e.target.value);
+                  setRenameVariantId("");
+                  setRenameVariantName("");
+                  setDeleteVariantId("");
+                  setVariantMsg(null);
+                  setConfirmDeleteVariant(false);
+                }}
+                className={selectClass}
+              >
+                <option value="">— select a project —</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              {!variantProjectId && (
+                <p className="text-zinc-400 text-sm mt-2">
+                  Select a project to manage its variants.
+                </p>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* ======== Add Variant ======== */}
+        <section
+          aria-labelledby="settings-heading-variant-add"
+          aria-disabled={!variantProjectId}
+          className={!variantProjectId ? "opacity-50" : ""}
+        >
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faPlus} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-variant-add" className="text-xl font-bold text-white">Add Variant</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+            <div className="space-y-2">
+              <label htmlFor="new-variant-name" className="block text-sm text-zinc-300 font-semibold">Add Variant</label>
+              <div className="flex gap-2">
+                <input
+                  id="new-variant-name"
+                  type="text"
+                  value={newVariantName}
+                  onChange={(e) => { setNewVariantName(e.target.value); setVariantMsg(null); }}
+                  placeholder="New variant name"
+                  className={inputClass + " flex-1 disabled:opacity-50 disabled:cursor-not-allowed"}
+                  disabled={!variantProjectId}
+                  aria-required="true"
+                  onKeyDown={(e) => e.key === "Enter" && handleCreateVariant()}
+                />
+                <button
+                  onClick={handleCreateVariant}
+                  disabled={!variantProjectId || createVariantBusy || !newVariantName.trim()}
+                  className={btnPrimary}
+                  aria-busy={createVariantBusy}
+                >
+                  {createVariantBusy ? (
+                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
+                  ) : (
+                    <FontAwesomeIcon icon={faPlus} className="mr-1" aria-hidden="true" />
+                  )}
+                  Add
+                </button>
+              </div>
+            </div>
+
+            {/* -- Feedback -- */}
+            {variantMsg && (
+              <span role="alert" className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
+                {variantMsg}
+              </span>
+            )}
+          </div>
+        </section>
+
+        {/* ======== Rename Variant ======== */}
+        <section
+          aria-labelledby="settings-heading-variant-rename"
+          aria-disabled={!variantProjectId}
+          className={!variantProjectId ? "opacity-50" : ""}
+        >
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faPenToSquare} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-variant-rename" className="text-xl font-bold text-white">Rename Variant</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+            <div className="space-y-2">
+              <label htmlFor="rename-variant-select" className="block text-sm text-zinc-300 font-semibold">Rename Variant</label>
+              <select
+                id="rename-variant-select"
+                value={renameVariantId}
+                onChange={(e) => {
+                  setRenameVariantId(e.target.value);
+                  setVariantMsg(null);
+                  const v = variantProjectVariants.find((x) => x.id === e.target.value);
+                  setRenameVariantName(v?.name ?? "");
+                }}
+                className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
+                disabled={!variantProjectId}
+              >
+                <option value="">— select a variant —</option>
+                {variantProjectVariants.map((v) => (
+                  <option key={v.id} value={v.id}>{v.name}</option>
+                ))}
+              </select>
+
+              <div className="flex gap-2">
+                <label htmlFor="rename-variant-name" className="sr-only">New variant name</label>
+                <input
+                  id="rename-variant-name"
+                  type="text"
+                  value={renameVariantName}
+                  onChange={(e) => setRenameVariantName(e.target.value)}
+                  placeholder="Enter new name"
+                  className={inputClass + " flex-1 disabled:opacity-50 disabled:cursor-not-allowed"}
+                  disabled={!variantProjectId || !renameVariantId}
+                  aria-required="true"
+                  onKeyDown={(e) => e.key === "Enter" && handleRenameVariant()}
+                />
+                <button
+                  onClick={handleRenameVariant}
+                  disabled={!variantProjectId || renameVariantBusy || !renameVariantId || !renameVariantName.trim()}
+                  className={btnPrimary}
+                  aria-busy={renameVariantBusy}
+                >
+                  {renameVariantBusy ? (
+                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
+                  ) : (
+                    <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
+                  )}
+                  Rename
+                </button>
+              </div>
+            </div>
+
+            {/* -- Feedback -- */}
+            {variantMsg && (
+              <span role="alert" className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
+                {variantMsg}
+              </span>
+            )}
+          </div>
+        </section>
+
+        {/* ======== Delete Variant ======== */}
+        <section
+          aria-labelledby="settings-heading-variant-delete"
+          aria-disabled={!variantProjectId}
+          className={!variantProjectId ? "opacity-50" : ""}
+        >
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faTrash} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-variant-delete" className="text-xl font-bold text-white">Delete Variant</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+            <div className="space-y-2">
+              <label htmlFor="delete-variant-select" className="block text-sm text-zinc-300 font-semibold">Delete Variant</label>
+              <div className="flex gap-2">
+                <select
+                  id="delete-variant-select"
+                  value={deleteVariantId}
+                  onChange={(e) => { setDeleteVariantId(e.target.value); setVariantMsg(null); }}
+                  className={selectClass + " flex-1 disabled:opacity-50 disabled:cursor-not-allowed"}
+                  disabled={!variantProjectId}
+                >
+                  <option value="">— select a variant —</option>
+                  {variantProjectVariants.map((v) => (
+                    <option key={v.id} value={v.id}>{v.name}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => setConfirmDeleteVariant(true)}
+                  disabled={!variantProjectId || !deleteVariantId}
+                  className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
+                >
+                  <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
+                  Delete
+                </button>
+              </div>
+            </div>
+
+            {/* -- Feedback -- */}
+            {variantMsg && (
+              <span role="alert" className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
+                {variantMsg}
+              </span>
+            )}
+          </div>
+        </section>
+
+        </>
+        )}
+
+        {/* ======== Custom Data Settings tab ======== */}
+        {activeTab === "customData" && (
+        <>
+        {/* ======== Select Project ======== */}
+        <section aria-labelledby="settings-heading-custom-project">
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faFolderOpen} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-custom-project" className="text-xl font-bold text-white">Select Project</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+            <div>
+              <label htmlFor="custom-project-select" className="block text-sm text-zinc-300 mb-1">Project</label>
+              <select
+                id="custom-project-select"
+                value={customProjectId}
+                onChange={(e) => {
+                  setCustomProjectId(e.target.value);
+                  setCopyMsg(null);
+                  setCopyPreview(null);
+                  setCopyPreviewError(null);
+                  setCopyPreviewUnavailableMsg(null);
+                }}
+                className={selectClass}
+              >
+                <option value="">— select a project —</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              {!customProjectId && (
+                <p className="text-zinc-400 text-sm mt-2">
+                  Select a project to manage custom data operations.
+                </p>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* ======== Copy Custom Assessments ======== */}
+        <section
+          aria-labelledby="settings-heading-copy-assessments"
+          aria-disabled={!customProjectId}
+          className={!customProjectId ? "opacity-50" : ""}
+        >
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faCopy} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-copy-assessments" className="text-xl font-bold text-white">Copy Custom Assessments</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+            <p className="text-sm text-zinc-400">
+              Copy custom assessments from a source variant to a target variant in the selected project.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label htmlFor="copy-source-select" className="block text-sm text-zinc-300 font-semibold">Source</label>
+                <select
+                  id="copy-source-select"
+                  value={copySourceId}
+                  onChange={(e) => {
+                    setCopySourceId(e.target.value);
+                    setCopyMsg(null);
+                    setCopyPreviewError(null);
+                    setCopyPreviewUnavailableMsg(null);
+                  }}
+                  className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
+                  disabled={!customProjectId}
+                >
+                  <option value="">— select a variant —</option>
+                  {customProjectVariants.map((v) => (
+                    <option key={v.id} value={v.id}>{v.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-end justify-center sm:justify-start">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!customProjectId || copyBusy) return;
+                    setCopySourceId(copyTargetId);
+                    setCopyTargetId(copySourceId);
+                    setCopyMsg(null);
+                    setCopyPreviewError(null);
+                    setCopyPreviewUnavailableMsg(null);
+                  }}
+                  disabled={!customProjectId || copyBusy || !copySourceId || !copyTargetId}
+                  className="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
+                  title="Swap source and target variants"
+                  aria-label="Swap source and target variants"
+                >
+                  <FontAwesomeIcon icon={faRightLeft} className="mr-2" aria-hidden="true" />
+                  Swap
+                </button>
+              </div>
+              <div className="space-y-2">
+                <label htmlFor="copy-target-select" className="block text-sm text-zinc-300 font-semibold">Copy to</label>
+                <select
+                  id="copy-target-select"
+                  value={copyTargetId}
+                  onChange={(e) => {
+                    setCopyTargetId(e.target.value);
+                    setCopyMsg(null);
+                    setCopyPreviewError(null);
+                    setCopyPreviewUnavailableMsg(null);
+                  }}
+                  className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
+                  disabled={!customProjectId}
+                >
+                  <option value="">— select a variant —</option>
+                  {customProjectVariants.map((v) => (
+                    <option key={v.id} value={v.id}>{v.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <label className="inline-flex items-center gap-2 text-sm text-zinc-300">
+              <input
+                type="checkbox"
+                checked={copyIgnorePackageVersion}
+                onChange={(e) => {
+                  setCopyIgnorePackageVersion(e.target.checked);
+                  setCopyMsg(null);
+                  setCopyPreviewError(null);
+                  setCopyPreviewUnavailableMsg(null);
+                }}
+                disabled={!customProjectId || copyBusy}
+                className="rounded border-slate-500 bg-slate-900"
+              />
+              Ignore packages version
+            </label>
+
+            <p className="text-xs text-zinc-400">
+              When enabled, copy by vulnerabilities in common, regardless of package name/version differences.
+            </p>
+
+            <div className="rounded-md border border-slate-600/70 bg-slate-900/40 p-3 space-y-2">
+              <h3 className="text-sm font-semibold text-zinc-200">Preview</h3>
+              {(!customProjectId || !copySourceId || !copyTargetId) && (
+                <p className="text-xs text-zinc-400">Select a source and a target variant to generate a preview.</p>
+              )}
+              {copySourceId && copyTargetId && copySourceId === copyTargetId && (
+                <p className="text-xs text-amber-300">Source and target variants must be different.</p>
+              )}
+              {copyPreviewBusy && (
+                <p className="text-xs text-zinc-300">
+                  <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
+                  Computing preview...
+                </p>
+              )}
+              {copyPreviewError && (
+                <p className="text-xs text-red-300">
+                  <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
+                  {copyPreviewError}
+                </p>
+              )}
+              {copyPreviewUnavailableMsg && (
+                <p className="text-xs text-amber-300">
+                  <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
+                  {copyPreviewUnavailableMsg}
+                </p>
+              )}
+              {!copyPreviewBusy && !copyPreviewError && copyPreview && (
+                <>
+                  <p className="text-xs text-cyan-300">{copyPreview.message}</p>
+                  {copyPreview.entries.length > 0 && (
+                    <div className="max-h-56 overflow-auto rounded border border-slate-700/80">
+                      <table className="min-w-full text-xs text-zinc-200">
+                        <thead className="bg-slate-800/80 text-zinc-300">
+                          <tr>
+                            <th className="px-2 py-1 text-left">Vulnerability</th>
+                            <th className="px-2 py-1 text-left">Source package</th>
+                            <th className="px-2 py-1 text-left">Target package</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {copyPreview.entries.map((entry) => (
+                            <tr key={`${entry.source_assessment_id}-${entry.target_finding_id}`} className="border-t border-slate-700/70">
+                              <td className="px-2 py-1 font-mono">{entry.vulnerability_id}</td>
+                              <td className="px-2 py-1">{entry.source_package || "-"}</td>
+                              <td className="px-2 py-1">{entry.target_package || "-"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <button
+              onClick={handleCopyAssessments}
+              disabled={!customProjectId || !copySourceId || !copyTargetId || copySourceId === copyTargetId || copyBusy}
+              className={btnPrimary}
+            >
+              {copyBusy ? (
+                <FontAwesomeIcon icon={faSpinner} spin className="mr-2" aria-hidden="true" />
+              ) : (
+                <FontAwesomeIcon icon={faCopy} className="mr-2" aria-hidden="true" />
+              )}
+              Copy Assessments
+            </button>
+
+            {copyMsg && (
+              <span role="alert" className="block text-sm text-cyan-300">
+                <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
+                {copyMsg}
+              </span>
+            )}
+          </div>
+        </section>
+        </>
+        )}
+
+        {/* ======== Scan Settings tab ======== */}
+        {activeTab === "scan" && (
+        <>
+        {/* ======== Import SBOM ======== */}
+        <section aria-labelledby="settings-heading-import">
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faFileImport} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-import" className="text-xl font-bold text-white">Import SBOM</h2>
+          </div>
+          <div className={cardBody + " space-y-3"}>
+
+            {/* ---- Project selector ---- */}
+            <div>
+              <label htmlFor="import-project-select" className="block text-sm text-zinc-300 mb-1">Project</label>
+              <select
+                id="import-project-select"
+                value={importProjectId}
+                onChange={(e) => {
+                  setImportProjectId(e.target.value);
+                  setImportVariantId("");
+                  setImportMsg(null);
+                }}
+                className={selectClass}
+              >
+                <option value="">— select a project —</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* ---- Variant selector ---- */}
+            <div>
+              <label htmlFor="import-variant-select" className="block text-sm text-zinc-300 mb-1">Variant</label>
+              <select
+                id="import-variant-select"
+                value={importVariantId}
+                onChange={(e) => { setImportVariantId(e.target.value); setImportMsg(null); }}
+                disabled={!importProjectId}
+                className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
+              >
+                <option value="">— select a variant —</option>
+                {importVariants.map((v) => (
+                  <option key={v.id} value={v.id}>{v.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* ---- File picker(s) ---- */}
+            <div className="space-y-2">
+              <label className="block text-sm text-zinc-300 mb-1" id="sbom-files-label">SBOM Files</label>
+              {/* Existing files */}
+              {importFiles.map((file, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <span className="flex-1 truncate text-sm text-zinc-200 bg-slate-900/60 border border-slate-600 rounded px-2 py-1.5">
+                    {file.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveFile(idx)}
+                    disabled={importBusy}
+                    className="p-1.5 rounded text-zinc-400 hover:text-red-400 hover:bg-slate-600 disabled:opacity-40 transition-colors"
+                    aria-label={`Remove file ${file.name}`}
+                  >
+                    <FontAwesomeIcon icon={faXmark} aria-hidden="true" />
+                  </button>
+                </div>
+              ))}
+              {/* New file browse row */}
+              <input
+                key={importFiles.length}
+                type="file"
+                accept=".json,.spdx,.cdx,.xml,.tar,.tar.gz,.tgz,.tar.zst"
+                onChange={(e) => handleFileSelected(importFiles.length, e.target.files?.[0] ?? null)}
+                disabled={importBusy}
+                aria-labelledby="sbom-files-label"
+                className={
+                  inputClass +
+                  " file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-cyan-900 file:text-cyan-300 hover:file:bg-cyan-800"
+                }
+              />
+              <p className="text-xs text-zinc-400">
+                Accepts JSON SBOMs (SPDX, CycloneDX, OpenVEX, Grype, Yocto) or tar archives
+                (<code>.tar</code>, <code>.tar.gz</code>, <code>.tar.zst</code>) used for SPDX2.
+              </p>
+            </div>
+
+            {/* ---- Submit ---- */}
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                onClick={handleUploadSBOM}
+                disabled={importBusy || !importProjectId || !importVariantId || importFiles.length === 0}
+                className={btnPrimary}
+                aria-busy={importBusy}
+              >
+                {importBusy ? (
+                  <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
+                ) : (
+                  <FontAwesomeIcon icon={faFileImport} className="mr-1" aria-hidden="true" />
+                )}
+                Import
+              </button>
+              {importMsg && (
+                <span role="alert" className="text-red-400 text-sm">
+                  <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
+                  {importMsg}
+                </span>
+              )}
+            </div>
+          </div>
+        </section>
+        </>
+        )}
       </div>
 
       {/* ======== Confirmation Modals ======== */}

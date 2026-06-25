@@ -19,6 +19,7 @@ import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
 import Variants from '../handlers/variant';
+import Packages from '../handlers/packages';
 import { formatSourceName } from '../helpers/sourceNames';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, formatPkgId, extractSupplierName } from '../helpers/pkgId';
@@ -26,6 +27,7 @@ import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback } from "react";
 import NvdRefreshHandler from "../handlers/nvdRefresh";
 import EpssRefreshHandler from "../handlers/epssRefresh";
+import GhsaRefreshHandler from "../handlers/ghsaRefresh";
 
 type Props = {
     vuln: Vulnerability;
@@ -89,6 +91,7 @@ type VariantScopedSnapshot = {
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
     const [selectedTargetVariantIds, setSelectedTargetVariantIds] = useState<string[]>([]);
     const [variantSnapshots, setVariantSnapshots] = useState<VariantScopedSnapshot[]>([]);
+    const [variantPackageMap, setVariantPackageMap] = useState<Record<string, string[]>>({});
     const [snapshotVersion, setSnapshotVersion] = useState(0);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
     const [editingGroup, setEditingGroup] = useState<AssessmentGroup | null>(null);
@@ -205,6 +208,35 @@ type VariantScopedSnapshot = {
         return () => { cancelled = true; };
     }, [variantId, availableVariants, vuln.id, projectId, snapshotVersion]);
 
+    // Build variant -> package compatibility map using the same source as the
+    // SBOM tab: GET /api/packages?variant_id=<id> returns the active SBOM
+    // packages for that variant, whose ids match vuln.packages entries.
+    useEffect(() => {
+        let cancelled = false;
+        if (availableVariants.length === 0) {
+            setVariantPackageMap({});
+            return;
+        }
+        (async () => {
+            const entries: [string, string[]][] = await Promise.all(
+                availableVariants.map(async (variant): Promise<[string, string[]]> => {
+                    try {
+                        const pkgs = await Packages.list(variant.id);
+                        // Build the same key format as vuln.packages:
+                        // "name@version::supplier" when supplier present, else "name@version"
+                        return [variant.id, pkgs.map(p =>
+                            p.supplier ? `${p.name}@${p.version}::${p.supplier}` : `${p.name}@${p.version}`
+                        )];
+                    } catch {
+                        return [variant.id, []];
+                    }
+                })
+            );
+            if (!cancelled) setVariantPackageMap(Object.fromEntries(entries));
+        })();
+        return () => { cancelled = true; };
+    }, [availableVariants]);
+
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
     const hasUnsavedChanges = hasTimeChanges || hasAssessmentChanges;
@@ -313,61 +345,74 @@ type VariantScopedSnapshot = {
         ? `Vulnerability ${currentIndex + 1} of ${vulnerabilities.length}`
         : null;
 
+    const isGhsaVuln = vuln.id.toUpperCase().startsWith('GHSA-');
+
     const handleRefresh = useCallback(async () => {
         setRefreshing(true);
         setRefreshError(null);
         setRefreshedList([]);
         try {
-            const [nvdResult, epssResult] = await Promise.allSettled([
-                NvdRefreshHandler.triggerSingleRefresh(vuln.id),
-                EpssRefreshHandler.triggerSingleRefresh(vuln.id),
-            ]);
-
-            const errors: string[] = [];
-            const nvdValue = nvdResult.status === "fulfilled" ? nvdResult.value : null;
-            const nvdUpdated = nvdValue?.kind === "success";
-            if (!nvdUpdated) {
-                if (nvdValue?.kind === "error" && nvdValue.code === "rate_limited") {
-                    errors.push(nvdValue.apiKeyConfigured
-                        ? "NVD rate-limited. Your NVD API key may be exhausted, please try again later."
-                        : "NVD rate-limited. Set NVD API key in settings to reduce throttling.");
+            if (vuln.id.toUpperCase().startsWith('GHSA-')) {
+                const result = await GhsaRefreshHandler.triggerSingleRefresh(vuln.id);
+                if (result) {
+                    const { simplified_status: _ss, assessments: _a, packages_current: _pc, variants: _v, found_by: _fb, ...ghsaUpdates } = result;
+                    patchVuln(vuln.id, { ...vuln, ...ghsaUpdates });
+                    setRefreshedList(['GHSA']);
                 } else {
-                    errors.push("NVD API unavailable");
+                    setRefreshError("GitHub Advisory Database refresh failed. Please try again later.");
                 }
-            }
-            if (epssResult.status === "rejected" || epssResult.value === null) {
-                errors.push("EPSS API unavailable");
-            }
+            } else {
+                const [nvdResult, epssResult] = await Promise.allSettled([
+                    NvdRefreshHandler.triggerSingleRefresh(vuln.id),
+                    EpssRefreshHandler.triggerSingleRefresh(vuln.id),
+                ]);
 
-            const epssUpdated = epssResult.status === "fulfilled" && epssResult.value !== null;
-
-            let merged = { ...vuln };
-
-            if (nvdUpdated || epssUpdated) {
-                if (nvdUpdated) {
-                    const {
-                        simplified_status: _ss,
-                        assessments: _a,
-                        packages_current: _pc,
-                        variants: _v,
-                        found_by: _fb,
-                        ...nvdUpdates
-                    } = nvdValue.vuln;
-
-                    merged = { ...merged, ...nvdUpdates };
-                    setRefreshedList(prev => [...prev, "NVD"]);
+                const errors: string[] = [];
+                const nvdValue = nvdResult.status === "fulfilled" ? nvdResult.value : null;
+                const nvdUpdated = nvdValue?.kind === "success";
+                if (!nvdUpdated) {
+                    if (nvdValue?.kind === "error" && nvdValue.code === "rate_limited") {
+                        errors.push(nvdValue.apiKeyConfigured
+                            ? "NVD rate-limited. Your NVD API key may be exhausted, please try again later."
+                            : "NVD rate-limited. Set NVD API key in settings to reduce throttling.");
+                    } else {
+                        errors.push("NVD API unavailable");
+                    }
+                }
+                if (epssResult.status === "rejected" || epssResult.value === null) {
+                    errors.push("EPSS API unavailable");
                 }
 
-                if (epssUpdated) {
-                    merged = { ...merged, epss: epssResult.value!.epss };
-                    setRefreshedList(prev => [...prev, "EPSS"]);
+                const epssUpdated = epssResult.status === "fulfilled" && epssResult.value !== null;
+
+                let merged = { ...vuln };
+
+                if (nvdUpdated || epssUpdated) {
+                    if (nvdUpdated) {
+                        const {
+                            simplified_status: _ss,
+                            assessments: _a,
+                            packages_current: _pc,
+                            variants: _v,
+                            found_by: _fb,
+                            ...nvdUpdates
+                        } = nvdValue.vuln;
+
+                        merged = { ...merged, ...nvdUpdates };
+                        setRefreshedList(prev => [...prev, "NVD"]);
+                    }
+
+                    if (epssUpdated) {
+                        merged = { ...merged, epss: epssResult.value!.epss };
+                        setRefreshedList(prev => [...prev, "EPSS"]);
+                    }
+
+                    patchVuln(vuln.id, merged);
                 }
 
-                patchVuln(vuln.id, merged);
-            }
-
-            if (errors.length > 0) {
-                setRefreshError(errors.join(". ") + ". Please try again later.");
+                if (errors.length > 0) {
+                    setRefreshError(errors.join(". ") + ". Please try again later.");
+                }
             }
         } catch (error) {
             setRefreshError(String(error) + " Please try again later.");
@@ -678,7 +723,9 @@ type VariantScopedSnapshot = {
 
     const groupedAssessments = groupAssessments(vuln.assessments);
 
-    const bothRefreshed = refreshedList.includes('NVD') && refreshedList.includes('EPSS');
+    const bothRefreshed = isGhsaVuln
+        ? refreshedList.includes('GHSA')
+        : refreshedList.includes('NVD') && refreshedList.includes('EPSS');
     const partialRefreshed = refreshedList.length > 0 && !bothRefreshed;
 
     // Get the default status for new assessments
@@ -714,6 +761,8 @@ type VariantScopedSnapshot = {
 
         let successCount = 0;
         let lastCasted: Assessment | null = null;
+        const touchedVariantIds = new Set<string>();
+        const touchedPackages = new Set<string>();
 
         setSubmittingMessage('Adding assessment...');
         try {
@@ -736,6 +785,8 @@ type VariantScopedSnapshot = {
                     if (!Array.isArray(casted) && typeof casted === 'object') {
                         successCount++;
                         lastCasted = casted;
+                        if (casted.variant_id) touchedVariantIds.add(casted.variant_id);
+                        for (const pkg of casted.packages ?? []) touchedPackages.add(pkg);
 
                         // Highlight the very first created assessment
                         if (successCount === 1) {
@@ -770,9 +821,26 @@ type VariantScopedSnapshot = {
                 simplified_status: statusSummary.dominant_status,
                 status_summary: statusSummary,
             });
-            const msg = successCount > 1
-                ? `Successfully added assessment to ${successCount} variants.`
-                : 'Successfully added assessment.';
+
+            const variantCount = touchedVariantIds.size;
+            const packageCount = touchedPackages.size;
+            const variantPart = variantCount > 0
+                ? `${variantCount} variant${variantCount === 1 ? '' : 's'}`
+                : '';
+            const packagePart = packageCount > 0
+                ? `${packageCount} package${packageCount === 1 ? '' : 's'}`
+                : '';
+
+            let msg = 'Successfully added assessment.';
+            if (packagePart && variantPart) {
+                msg = `Successfully added assessment to ${packagePart} across ${variantPart}.`;
+            } else if (packagePart) {
+                msg = `Successfully added assessment to ${packagePart}.`;
+            } else if (variantPart) {
+                msg = `Successfully added assessment to ${variantPart}.`;
+            } else if (successCount > 1) {
+                msg = `Successfully added ${successCount} assessments.`;
+            }
             showMessage(msg, 'success');
             setClearAssessmentFields(true);
             setTimeout(() => setClearAssessmentFields(false), 100);
@@ -1010,7 +1078,7 @@ type VariantScopedSnapshot = {
                                     <button
                                         onClick={handleRefresh}
                                         disabled={refreshing}
-                                        title="Refresh from NVD & EPSS"
+                                        title={isGhsaVuln ? "Refresh from GitHub Advisory Database" : "Refresh from NVD & EPSS"}
                                         type="button"
                                         className={`px-3 py-2 text-sm font-medium focus:outline-none rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                                             bothRefreshed
@@ -1262,6 +1330,7 @@ type VariantScopedSnapshot = {
                                             variants={availableVariants}
                                             availablePackages={projectPackages}
                                             defaultSelectedPackages={vuln.packages_current}
+                                            variantPackageMap={Object.keys(variantPackageMap).length > 0 ? variantPackageMap : undefined}
                                         />
                                     </li>
                                 )}

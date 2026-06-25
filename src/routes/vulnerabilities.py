@@ -2,8 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import datetime
+import decimal
 import os
 import dataclasses
+import typing
+import re
+import urllib.error
+import uuid
 
 from flask import jsonify, request
 from sqlalchemy import func, select
@@ -18,6 +23,7 @@ from ..models import (
     Metrics,
     SBOMDocument,
     SBOMPackage,
+    SBOMObservation,
     Iso8601Duration
 )
 from ..helpers.datetime_utils import ensure_utc_iso
@@ -25,20 +31,23 @@ from ..extensions import db
 from ..controllers.nvd_db import NVD_DB
 from ..controllers.nvd_apply import apply_nvd_update
 from ..controllers.epss_db import EPSS_DB
+from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..helpers.active_scans import (
     active_scan_ids_for_variant,
     active_scan_ids_for_project,
     active_package_ids_for_scans,
 )
 from ..helpers.vuln_helpers import (
-    _validate_effort,
-    _validate_and_apply_cvss,
-    _apply_effort,
+    validate_effort,
+    validate_and_apply_cvss,
+    apply_effort,
+    Effort
 )
 from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
 
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
+_GHSA_RE = re.compile(r'^GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$')
 
 
 def _sbom_pkg_filter(pkg_ids):
@@ -57,11 +66,10 @@ def _sbom_pkg_filter(pkg_ids):
 
 
 # Formats that are exclusively vulnerability scanners (never pure package BOMs)
-_DEDICATED_SCANNER_FORMATS = frozenset({"grype", "yocto_cve_check"})
-
 # Mapping from SBOMDocument.format to the found_by string exposed by the API
 _FORMAT_TO_FOUND_BY: dict[str, str] = {
     "grype": "grype",
+    "yocto_cve_check": "yocto_cve_check",
     "spdx": "spdx3",
     "cdx": "cyclonedx",
     "openvex": "openvex",
@@ -74,24 +82,18 @@ _TOOL_SOURCE_TO_FOUND_BY: dict[str, str] = {
 }
 
 
-@dataclasses.dataclass
-class _Effort:
-    optimistic: int | None
-    likely: int | None
-    pessimistic: int | None
-
-    def to_dict(self):
-        return {
-            "optimistic": str(Iso8601Duration(f"PT{self.optimistic}H")) if self.optimistic else None,
-            "likely": str(Iso8601Duration(f"PT{self.likely}H")) if self.likely else None,
-            "pessimistic": str(Iso8601Duration(f"PT{self.pessimistic}H")) if self.pessimistic else None,
-        }
+def effort_to_dict(effort: Effort) -> dict[typing.Literal["optimistic", "likely", "pessimistic"], str | None]:
+    return {
+        "optimistic": str(Iso8601Duration(f"PT{effort.optimistic}H")) if effort.optimistic else None,
+        "likely": str(Iso8601Duration(f"PT{effort.likely}H")) if effort.likely else None,
+        "pessimistic": str(Iso8601Duration(f"PT{effort.pessimistic}H")) if effort.pessimistic else None,
+    }
 
 
 @dataclasses.dataclass
 class _ScopedOverrides:
     cvss: list[Metrics]
-    effort: _Effort
+    effort: Effort
 
 
 def _variant_scoped_metrics_and_effort_overrides(
@@ -140,10 +142,10 @@ def _variant_scoped_metrics_and_effort_overrides(
         )
     ).all()
 
-    effort_by_vuln: dict[str, _Effort] = {}
-    fallback_effort_by_vuln: dict[str, _Effort] = {}
+    effort_by_vuln: dict[str, Effort] = {}
+    fallback_effort_by_vuln: dict[str, Effort] = {}
     for vuln_id, te_variant_id, opti, like, pess in raw_te_rows:
-        packed = _Effort(opti, like, pess)
+        packed = Effort(opti, like, pess)
         if te_variant_id == variant_uuid and vuln_id not in effort_by_vuln:
             effort_by_vuln[vuln_id] = packed
         elif te_variant_id is None and vuln_id not in fallback_effort_by_vuln:
@@ -160,7 +162,7 @@ def _variant_scoped_metrics_and_effort_overrides(
         # Effort is a single value per vuln: a variant-scoped estimate overrides
         # the global one, falling back to global when none is set.
         chosen_effort = effort_by_vuln.get(r.id) or fallback_effort_by_vuln.get(r.id)
-        overrides[str(r.id)] = _ScopedOverrides(selected_metrics, chosen_effort or _Effort(None, None, None))
+        overrides[str(r.id)] = _ScopedOverrides(selected_metrics, chosen_effort or Effort(None, None, None))
 
     return overrides
 
@@ -177,7 +179,7 @@ def _apply_variant_scoped_overrides_to_vuln_dicts(
         if scoped is None:
             continue
         vuln.setdefault("severity", {})["cvss"] = [m.to_dict() for m in scoped.cvss]
-        vuln["effort"] = scoped.effort.to_dict()
+        vuln["effort"] = effort_to_dict(scoped.effort)
 
 
 def _variant_ids_for_vulnerability(vulnerability_id: str) -> list:
@@ -198,86 +200,70 @@ def _populate_found_by(
     project_uuid=None,
     active_scan_ids: list | None = None,
 ) -> None:
-    """Populate the transient found_by list on each record.
+    """Populate transient found_by with factual provenance.
 
-    For each vulnerability, find the **earliest** scan that first observed
-    it and attribute it to that scan's source (SBOMDocument format or
-    tool scan_source).  The first scan that introduced a CVE gets credit.
+    Attribution strategy:
+      1) Exact per-file provenance from SBOMObservation -> SBOMDocument.format
+      2) Fallback for vulns without an observation-backed format: derive from
+         observing scans/documents in scope, without preference heuristics.
     """
     if not records:
         return
 
     vuln_ids = [r.id for r in records]
 
-    # For every vuln, get the scan that first observed it (min timestamp).
-    first_scan_subq = (
-        db.select(
-            Finding.vulnerability_id,
-            func.min(Scan.timestamp).label("min_ts"),
-        )
-        .join(Observation, Observation.finding_id == Finding.id)
-        .join(Scan, Scan.id == Observation.scan_id)
-        .where(Finding.vulnerability_id.in_(vuln_ids))
-        .group_by(Finding.vulnerability_id)
-    ).subquery()
-
-    # Now join back to get the scan details for that earliest observation.
-    rows = db.session.execute(
-        db.select(
-            Finding.vulnerability_id,
-            Scan.scan_type,
-            Scan.scan_source,
-            SBOMDocument.format.label("doc_format"),
-        )
-        .select_from(Finding)
-        .join(Observation, Observation.finding_id == Finding.id)
-        .join(Scan, Scan.id == Observation.scan_id)
-        .join(
-            first_scan_subq,
-            db.and_(
-                first_scan_subq.c.vulnerability_id == Finding.vulnerability_id,
-                first_scan_subq.c.min_ts == Scan.timestamp,
-            ),
-        )
-        .outerjoin(
-            SBOMDocument,
-            db.and_(
-                SBOMDocument.scan_id == Scan.id,
-                SBOMDocument.format.isnot(None),
-            ),
-        )
-        .distinct()
-    ).all()
-
-    # When a scan has multiple SBOMDocuments (e.g. spdx + grype in same
-    # merge), collect all formats and prefer non-dedicated scanner formats
-    # (spdx, cdx) over dedicated ones (grype) for attribution.
-    vuln_formats: dict[str, dict] = {}
-    for vuln_id, scan_type, scan_source, doc_format in rows:
-        entry = vuln_formats.setdefault(vuln_id, {
-            "doc_formats": set(),
-            "scan_type": scan_type,
-            "scan_source": scan_source,
-        })
-        if doc_format is not None:
-            entry["doc_formats"].add(doc_format)
-
     found_by_map: dict[str, set[str]] = {}
-    for vuln_id, entry in vuln_formats.items():
-        doc_formats = entry["doc_formats"]
-        scan_source = entry["scan_source"]
-        if doc_formats:
-            # Prefer non-dedicated (spdx, cdx, openvex) over dedicated (grype, yocto)
-            non_dedicated = doc_formats - _DEDICATED_SCANNER_FORMATS
-            chosen = non_dedicated if non_dedicated else doc_formats
-            for fmt in chosen:
-                if not isinstance(fmt, str):
-                    continue
-                mapped = _FORMAT_TO_FOUND_BY.get(fmt, fmt)
+
+    # 1) Exact provenance from existing SBOMObservations.
+    provenance_q = (
+        db.select(SBOMObservation.vulnerability_id, SBOMDocument.format)
+        .join(SBOMDocument, SBOMObservation.sbom_document_id == SBOMDocument.id)
+        .where(SBOMObservation.vulnerability_id.in_(vuln_ids))
+        .where(SBOMDocument.format.isnot(None))
+    )
+    if active_scan_ids:
+        provenance_q = provenance_q.where(SBOMDocument.scan_id.in_(active_scan_ids))
+    provenance_rows = db.session.execute(provenance_q.distinct()).all()
+
+    for vuln_id, doc_format in provenance_rows:
+        if not isinstance(doc_format, str):
+            continue
+        mapped = _FORMAT_TO_FOUND_BY.get(doc_format, doc_format)
+        found_by_map.setdefault(vuln_id, set()).add(mapped)
+
+    unresolved_vuln_ids = [vid for vid in vuln_ids if vid not in found_by_map]
+
+    # 2) Fallback: derive from observing scans/documents in scope.
+    if unresolved_vuln_ids:
+        fallback_q = (
+            db.select(
+                Finding.vulnerability_id,
+                Scan.scan_source,
+                SBOMDocument.format.label("doc_format"),
+            )
+            .select_from(Finding)
+            .join(Observation, Observation.finding_id == Finding.id)
+            .join(Scan, Scan.id == Observation.scan_id)
+            .outerjoin(
+                SBOMDocument,
+                db.and_(
+                    SBOMDocument.scan_id == Scan.id,
+                    SBOMDocument.format.isnot(None),
+                ),
+            )
+            .where(Finding.vulnerability_id.in_(unresolved_vuln_ids))
+        )
+        if active_scan_ids:
+            fallback_q = fallback_q.where(Observation.scan_id.in_(active_scan_ids))
+        fallback_rows = db.session.execute(fallback_q.distinct()).all()
+
+        for vuln_id, scan_source, doc_format in fallback_rows:
+            if isinstance(doc_format, str):
+                mapped = _FORMAT_TO_FOUND_BY.get(doc_format, doc_format)
                 found_by_map.setdefault(vuln_id, set()).add(mapped)
-        elif isinstance(scan_source, str):
-            mapped = _TOOL_SOURCE_TO_FOUND_BY.get(scan_source, scan_source)
-            found_by_map.setdefault(vuln_id, set()).add(mapped)
+            elif isinstance(scan_source, str):
+                mapped = _TOOL_SOURCE_TO_FOUND_BY.get(scan_source, scan_source)
+                found_by_map.setdefault(vuln_id, set()).add(mapped)
 
     for record in records:
         for scanner in found_by_map.get(record.id, set()):
@@ -300,9 +286,13 @@ def init_app(app):
             base_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
+            if base_uuid is None:
+                return {"error": "Internal error"}, 500
             compare_uuid, err = parse_uuid_or_400(compare_variant_id, "compare_variant_id")
             if err:
                 return err
+            if compare_uuid is None:
+                return {"error": "Internal error"}, 500
             base_latest_ids = active_scan_ids_for_variant(base_uuid)
             compare_latest_ids = active_scan_ids_for_variant(compare_uuid)
             current_scan_ids = compare_latest_ids
@@ -370,6 +360,8 @@ def init_app(app):
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
+            if variant_uuid is None:
+                return {"error": "Internal error"}, 500
             _scope_variant = variant_uuid
             _scope_project = None
             latest_ids = active_scan_ids_for_variant(variant_uuid)
@@ -436,6 +428,8 @@ def init_app(app):
             project_uuid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
+            if project_uuid is None:
+                return {"error": "Internal error"}, 500
             _scope_variant = None
             _scope_project = project_uuid
             latest_ids = active_scan_ids_for_project(project_uuid)
@@ -648,14 +642,14 @@ def init_app(app):
                     active_scan_ids = active_scan_ids_for_project(_scope_project)
                 else:
                     # All variants across all projects
-                    all_variant_ids = [
+                    all_variant_ids: list[uuid.UUID] = [
                         vid for (vid,) in db.session.execute(
                             db.select(Variant.id)
                         ).all()
                     ]
                     active_scan_ids = []
-                    for vid in all_variant_ids:
-                        active_scan_ids.extend(active_scan_ids_for_variant(vid))
+                    for variant_uuid_item in all_variant_ids:
+                        active_scan_ids.extend(active_scan_ids_for_variant(variant_uuid_item))
             if active_scan_ids:
                 rows = db.session.execute(
                     db.select(Finding.vulnerability_id, Variant.name)
@@ -765,7 +759,7 @@ def init_app(app):
             ]
             snapshots.append({
                 "variant_id": str(variant_uuid),
-                "effort": scoped.effort.to_dict(),
+                "effort": effort_to_dict(scoped.effort),
                 "custom_cvss": custom_cvss,
             })
 
@@ -781,43 +775,49 @@ def init_app(app):
         if payload_data is None:
             return {"error": "Invalid request data"}, 400
         response_variant_id = None
-        _updated_effort: dict | None = None
+        _updated_effort: Effort | None = None
 
         if "effort" in payload_data:
             eff = payload_data["effort"]
-            opt, lik, pes, err = _validate_effort(eff)
+            _updated_effort, err = validate_effort(eff)
             if err:
                 return err, 400
+            if _updated_effort is None:
+                return {"error": "Internal error"}, 500
+
             variant_id = payload_data.get("variant_id")
             if variant_id is not None:
-                variant_id, err = parse_uuid_or_400(variant_id, "variant_id")
-                if err:
-                    return err
-                target_variant_ids = [variant_id]
+                variant_uuid, uuid_err = parse_uuid_or_400(variant_id, "variant_id")
+                if uuid_err:
+                    return uuid_err
+                if variant_uuid is None:
+                    return {"error": "Internal error"}, 500
+                target_variant_ids: list[uuid.UUID | None] = [variant_uuid]
             else:
                 target_variant_ids = _variant_ids_for_vulnerability(record.id)
                 if not target_variant_ids:
                     target_variant_ids = [None]
 
             for target_variant_id in target_variant_ids:
-                _apply_effort(record, target_variant_id, opt, lik, pes,
-                              log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
+                apply_effort(
+                    record,
+                    target_variant_id,
+                    _updated_effort,
+                    log_prefix=f"PATCH /api/vulnerabilities/{record.id}",
+                )
 
             if len(target_variant_ids) == 1 and target_variant_ids[0] is not None:
                 response_variant_id = target_variant_ids[0]
-            _updated_effort = {
-                "optimistic": str(Iso8601Duration(f"PT{opt}H")),
-                "likely": str(Iso8601Duration(f"PT{lik}H")),
-                "pessimistic": str(Iso8601Duration(f"PT{pes}H")),
-            }
 
         if "cvss" in payload_data:
             variant_id = payload_data.get("variant_id")
             if variant_id is not None:
-                variant_id, err = parse_uuid_or_400(variant_id, "variant_id")
-                if err:
-                    return err
-                target_variant_ids = [variant_id]
+                variant_uuid, uuid_err = parse_uuid_or_400(variant_id, "variant_id")
+                if uuid_err:
+                    return uuid_err
+                if variant_uuid is None:
+                    return {"error": "Internal error"}, 500
+                target_variant_ids = [variant_uuid]
             else:
                 target_variant_ids = _variant_ids_for_vulnerability(record.id)
                 if not target_variant_ids:
@@ -827,7 +827,7 @@ def init_app(app):
                 payload_data["cvss"].setdefault("origin", "custom")
 
             for target_variant_id in target_variant_ids:
-                cvss_err = _validate_and_apply_cvss(
+                cvss_err = validate_and_apply_cvss(
                     payload_data["cvss"], record.id, target_variant_id,
                     log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
                 if cvss_err:
@@ -842,7 +842,7 @@ def init_app(app):
             overrides = _variant_scoped_metrics_and_effort_overrides([record], response_variant_id)
             _apply_variant_scoped_overrides_to_vuln_dicts({response["id"]: response}, overrides)
         if _updated_effort is not None and response_variant_id is None:
-            response["effort"] = _updated_effort
+            response["effort"] = effort_to_dict(_updated_effort)
         return response
 
     @app.route('/api/vulnerabilities/batch', methods=['PATCH'])
@@ -867,46 +867,54 @@ def init_app(app):
                 continue
 
             response_variant_id = None
-            _updated_effort: dict | None = None
+            _updated_effort: Effort | None = None
 
             if "effort" in item:
                 eff = item["effort"]
-                opt, lik, pes, err = _validate_effort(eff)
+                _updated_effort, err = validate_effort(eff)
                 if err:
                     errors.append({"id": item["id"], "error": err})
                     continue
+                if _updated_effort is None:
+                    errors.append({"id": item["id"], "error": "Internal error"})
+                    continue
                 item_variant_id = item.get("variant_id")
                 if item_variant_id is not None:
-                    item_variant_id, err = parse_uuid_or_400(item_variant_id, "variant_id")
-                    if err:
+                    item_variant_uuid, uuid_err = parse_uuid_or_400(item_variant_id, "variant_id")
+                    if uuid_err:
                         errors.append({"id": item["id"], "error": "Invalid variant_id"})
                         continue
-                    target_variant_ids = [item_variant_id]
+                    if item_variant_uuid is None:
+                        errors.append({"id": item["id"], "error": "Internal error"})
+                        continue
+                    target_variant_ids: list[uuid.UUID | None] = [item_variant_uuid]
                 else:
                     target_variant_ids = _variant_ids_for_vulnerability(record.id)
                     if not target_variant_ids:
                         target_variant_ids = [None]
 
                 for target_variant_id in target_variant_ids:
-                    _apply_effort(record, target_variant_id, opt, lik, pes,
-                                  log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}")
+                    apply_effort(
+                        record,
+                        target_variant_id,
+                        _updated_effort,
+                        log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}",
+                    )
 
                 if len(target_variant_ids) == 1 and target_variant_ids[0] is not None:
                     response_variant_id = target_variant_ids[0]
-                _updated_effort = {
-                    "optimistic": str(Iso8601Duration(f"PT{opt}H")),
-                    "likely": str(Iso8601Duration(f"PT{lik}H")),
-                    "pessimistic": str(Iso8601Duration(f"PT{pes}H")),
-                }
 
             if "cvss" in item:
                 cvss_variant_id = item.get("variant_id")
                 if cvss_variant_id is not None:
-                    cvss_variant_id, err = parse_uuid_or_400(cvss_variant_id, "variant_id")
-                    if err:
+                    cvss_variant_uuid, uuid_err = parse_uuid_or_400(cvss_variant_id, "variant_id")
+                    if uuid_err:
                         errors.append({"id": item["id"], "error": "Invalid variant_id"})
                         continue
-                    target_variant_ids = [cvss_variant_id]
+                    if cvss_variant_uuid is None:
+                        errors.append({"id": item["id"], "error": "Internal error"})
+                        continue
+                    target_variant_ids = [cvss_variant_uuid]
                 else:
                     target_variant_ids = _variant_ids_for_vulnerability(record.id)
                     if not target_variant_ids:
@@ -917,7 +925,7 @@ def init_app(app):
 
                 cvss_failed = False
                 for target_variant_id in target_variant_ids:
-                    cvss_err = _validate_and_apply_cvss(
+                    cvss_err = validate_and_apply_cvss(
                         item["cvss"], record.id, target_variant_id,
                         log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}")
                     if cvss_err:
@@ -937,7 +945,7 @@ def init_app(app):
                 overrides = _variant_scoped_metrics_and_effort_overrides([record], response_variant_id)
                 _apply_variant_scoped_overrides_to_vuln_dicts({result_dict["id"]: result_dict}, overrides)
             if _updated_effort is not None and response_variant_id is None:
-                result_dict["effort"] = _updated_effort
+                result_dict["effort"] = effort_to_dict(_updated_effort)
             results.append(result_dict)
 
         response = {
@@ -1056,11 +1064,11 @@ def init_app(app):
             return jsonify({"error": "EPSS API returned no data for this CVE"}), 503
 
         now = datetime.datetime.now(datetime.timezone.utc)
-        rec.update_record(
-            epss_score=epss_data["score"],
-            epss_fetched_at=now,
-            commit=False,
-        )
+        new_score = decimal.Decimal(str(epss_data["score"]))
+        update_kwargs: dict = {"epss_score": new_score, "epss_fetched_at": now, "commit": False}
+        if rec.epss_score is None or rec.epss_score != new_score:
+            update_kwargs["epss_data_updated_at"] = now
+        rec.update_record(**update_kwargs)
         db.session.commit()
 
         db.session.refresh(rec)
@@ -1078,3 +1086,55 @@ def init_app(app):
                     rec.severity_max_score = score
 
         return jsonify({"vulnerabilities": [rec.to_dict()]}), 200
+
+    @app.route('/api/vulnerabilities/<ghsa_id>/ghsa-refresh', methods=['POST'])
+    def refresh_single_ghsa(ghsa_id):
+        ghsa_id_upper = ghsa_id.upper()
+        if not _GHSA_RE.match(ghsa_id_upper):
+            return jsonify({"error": "Only valid GHSA identifiers (GHSA-xxxx-xxxx-xxxx) are supported"}), 400
+        rec = db.session.get(Vulnerability, ghsa_id_upper)
+        if rec is None:
+            return jsonify({"error": "GHSA advisory not found"}), 404
+
+        try:
+            published_at = VulnerabilitiesController._fetch_ghsa_published(ghsa_id_upper)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return jsonify({"error": "Advisory not found in GitHub Advisory Database"}), 404
+            return jsonify({"error": f"GitHub Advisory Database returned HTTP {e.code}"}), 502
+        except urllib.error.URLError:
+            return jsonify({"error": "Failed to reach GitHub Advisory Database"}), 503
+        if published_at is None:
+            return jsonify({"error": "GitHub Advisory Database returned no published date"}), 503
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        try:
+            publish_date = datetime.date.fromisoformat(published_at[:10])
+        except (ValueError, AttributeError):
+            return jsonify({"error": "GitHub Advisory Database returned an unparseable date"}), 503
+        update_kwargs: dict = {
+            "publish_date": publish_date,
+            "ghsa_fetched_at": now,
+            "commit": False,
+        }
+        if rec.publish_date != publish_date:
+            update_kwargs["ghsa_data_updated_at"] = now
+        rec.update_record(**update_kwargs)
+        db.session.commit()
+
+        db.session.refresh(rec)
+        rec._init_transient()
+
+        for m in (rec.metrics or []):
+            if m.score is not None:
+                score = float(m.score)
+                if rec.severity_min_score is None or score < rec.severity_min_score:
+                    rec.severity_min_score = score
+                if rec.severity_max_score is None or score > rec.severity_max_score:
+                    rec.severity_max_score = score
+
+        data = rec.to_dict()
+        vuln_texts = fetch_vulnerabilities_texts([ghsa_id_upper], variant_ids=None)
+        data["texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[ghsa_id_upper]))
+
+        return jsonify({"vulnerabilities": [data]}), 200

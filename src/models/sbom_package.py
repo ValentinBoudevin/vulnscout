@@ -1,8 +1,16 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import typing
 import uuid
+
+from sqlalchemy import ForeignKey
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from ..extensions import db, Base
+
+if typing.TYPE_CHECKING:
+    from ..models import SBOMDocument, Package
 
 
 class SBOMPackage(Base):
@@ -10,11 +18,11 @@ class SBOMPackage(Base):
 
     __tablename__ = "sbom_packages"
 
-    sbom_document_id = db.Column(db.Uuid, db.ForeignKey("sbom_documents.id"), primary_key=True)
-    package_id = db.Column(db.Uuid, db.ForeignKey("packages.id"), primary_key=True, index=True)
+    sbom_document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sbom_documents.id"), primary_key=True)
+    package_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("packages.id"), primary_key=True, index=True)
 
-    sbom_document = db.relationship("SBOMDocument", back_populates="sbom_packages")
-    package = db.relationship("Package", back_populates="sbom_packages")
+    sbom_document: Mapped["SBOMDocument"] = relationship(back_populates="sbom_packages")
+    package: Mapped["Package"] = relationship(back_populates="sbom_packages")
 
     def __repr__(self) -> str:
         return f"<SBOMPackage sbom_document_id={self.sbom_document_id} package_id={self.package_id}>"
