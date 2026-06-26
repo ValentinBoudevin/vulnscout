@@ -10,10 +10,11 @@ import threading
 import tarfile
 import subprocess
 import shutil
-from typing import Callable, TypeVar, cast
+from typing import Callable, Protocol, TypeVar, cast
 import io as _io
 
-from flask import jsonify, request
+from flask import jsonify, request, Flask
+from flask.typing import ResponseReturnValue
 from sqlalchemy.exc import OperationalError
 
 from ..controllers import (
@@ -28,16 +29,28 @@ from ..models.scan import Scan as ScanModel
 from ..models.project import Project
 from ..models.variant import Variant
 from ..helpers.verbose import verbose
-from ._scan_helpers import parse_uuid_or_400
+from ._scan_helpers import parse_uuid_or_400, ErrorResponse
 
 T = TypeVar("T")
+_C = TypeVar("_C")
+
+
+class _CrudController(Protocol[_C]):
+    @staticmethod
+    def get(entity_id: uuid.UUID | str) -> "_C | None":
+        ...
+
+    @staticmethod
+    def delete(entity: _C) -> None:
+        ...
+
 
 # Tracks in-progress SBOM uploads: upload_id → {status, message, ts}
 _upload_status: dict[str, dict] = {}
 _UPLOAD_STATUS_TTL = 3600  # seconds – entries older than this are pruned
 
 
-def _prune_upload_status():
+def _prune_upload_status() -> None:
     """Remove completed/errored entries older than _UPLOAD_STATUS_TTL."""
     now = time.time()
     stale = [
@@ -49,7 +62,7 @@ def _prune_upload_status():
         _upload_status.pop(uid, None)
 
 
-def _regenerate_openvex(app):
+def _regenerate_openvex(app: Flask) -> None:
     """Re-generate and save the OpenVEX file from current DB state."""
     try:
         from ..views.openvex import OpenVex
@@ -156,7 +169,10 @@ def _extract_spdx_archive(archive_path: str, filename: str) -> list[tuple[str, s
         shutil.rmtree(extract_dir, ignore_errors=True)
 
 
-def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id, variant_id):
+def _process_sbom_background(
+    app: Flask, upload_id: str, file_paths: list[str],
+    scan_id: uuid.UUID, variant_id: uuid.UUID,
+) -> None:
     """Run SBOM parsing in a background thread for one or more files."""
     with app.app_context():
         try:
@@ -211,9 +227,9 @@ def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id
                     pass
 
 
-def init_app(app):
+def init_app(app: Flask) -> None:
 
-    def _validate_name_from_request(entity_label: str):
+    def _validate_name_from_request(entity_label: str) -> tuple[str, None] | tuple[None, ErrorResponse]:
         """Parse and validate the ``name`` field from a JSON request body.
 
         Returns ``(name, None)`` on success or ``(None, Response)`` on failure.
@@ -226,7 +242,10 @@ def init_app(app):
             return None, (jsonify({"error": f"{entity_label} name must not be empty."}), 400)
         return name, None
 
-    def _delete_entity(entity_id, controller, id_label, entity_label):
+    def _delete_entity(
+        entity_id: str, controller: "_CrudController[_C]",
+        id_label: str, entity_label: str,
+    ) -> ResponseReturnValue:
         """Validate, look up and delete an entity by UUID.
 
         Returns a Flask response tuple.
@@ -239,7 +258,7 @@ def init_app(app):
         if entity is None:
             return jsonify({"error": f"{entity_label} not found."}), 404
 
-        def _do_delete():
+        def _do_delete() -> None:
             e = controller.get(entity_id)
             if e is not None:
                 controller.delete(e)
@@ -251,10 +270,12 @@ def init_app(app):
     # Rename project
     # ------------------------------------------------------------------
     @app.route('/api/projects/<project_id>/rename', methods=['PATCH'])
-    def rename_project(project_id):
+    def rename_project(project_id: str) -> ResponseReturnValue:
         new_name, err = _validate_name_from_request("Project")
         if err:
             return err
+        if new_name is None:
+            return jsonify({"error": "Internal error"}), 500
 
         _, err = parse_uuid_or_400(project_id, "project ID")
         if err:
@@ -282,10 +303,12 @@ def init_app(app):
     # Rename variant
     # ------------------------------------------------------------------
     @app.route('/api/variants/<variant_id>/rename', methods=['PATCH'])
-    def rename_variant(variant_id):
+    def rename_variant(variant_id: str) -> ResponseReturnValue:
         new_name, err = _validate_name_from_request("Variant")
         if err:
             return err
+        if new_name is None:
+            return jsonify({"error": "Internal error"}), 500
 
         _, err = parse_uuid_or_400(variant_id, "variant ID")
         if err:
@@ -313,10 +336,12 @@ def init_app(app):
     # Create project
     # ------------------------------------------------------------------
     @app.route('/api/projects', methods=['POST'])
-    def create_project():
+    def create_project() -> ResponseReturnValue:
         new_name, err = _validate_name_from_request("Project")
         if err:
             return err
+        if new_name is None:
+            return jsonify({"error": "Internal error"}), 500
 
         # Check uniqueness
         existing = ProjectController.get_all()
@@ -331,7 +356,7 @@ def init_app(app):
     # Create variant
     # ------------------------------------------------------------------
     @app.route('/api/projects/<project_id>/variants', methods=['POST'])
-    def create_variant(project_id):
+    def create_variant(project_id: str) -> ResponseReturnValue:
         _, err = parse_uuid_or_400(project_id, "project ID")
         if err:
             return err
@@ -339,6 +364,8 @@ def init_app(app):
         new_name, err = _validate_name_from_request("Variant")
         if err:
             return err
+        if new_name is None:
+            return jsonify({"error": "Internal error"}), 500
 
         project = ProjectController.get(project_id)
         if project is None:
@@ -356,7 +383,9 @@ def init_app(app):
     # ------------------------------------------------------------------
     # Copy custom assessments between two variants
     # ------------------------------------------------------------------
-    def _compute_copy_assessment_operations(source_id, target_id, ignore_package_version):
+    def _compute_copy_assessment_operations(
+        source_id: str, target_id: str, ignore_package_version: bool,
+    ) -> tuple[dict, None] | tuple[None, ErrorResponse]:
         from ..models.assessment import Assessment as DBAssessment
         from ..models.finding import Finding
         from ..helpers.active_scans import (
@@ -469,10 +498,12 @@ def init_app(app):
         }, None
 
     @app.route('/api/variants/copy-assessments/preview', methods=['POST'])
-    def preview_copy_variant_assessments():
+    def preview_copy_variant_assessments() -> ResponseReturnValue:
         payload = request.get_json(silent=True) or {}
         source_id = payload.get("source_variant_id")
         target_id = payload.get("target_variant_id")
+        if not isinstance(source_id, str) or not isinstance(target_id, str):
+            return jsonify({"error": "source_variant_id and target_variant_id are required strings."}), 400
         ignore_package_version = bool(payload.get("ignore_package_version", False))
 
         result, err = _compute_copy_assessment_operations(
@@ -512,12 +543,14 @@ def init_app(app):
         }), 200
 
     @app.route('/api/variants/copy-assessments', methods=['POST'])
-    def copy_variant_assessments():
+    def copy_variant_assessments() -> ResponseReturnValue:
         from ..models.assessment import Assessment as DBAssessment
 
         payload = request.get_json(silent=True) or {}
         source_id = payload.get("source_variant_id")
         target_id = payload.get("target_variant_id")
+        if not isinstance(source_id, str) or not isinstance(target_id, str):
+            return jsonify({"error": "source_variant_id and target_variant_id are required strings."}), 400
         ignore_package_version = bool(payload.get("ignore_package_version", False))
 
         result, err = _compute_copy_assessment_operations(
@@ -575,21 +608,21 @@ def init_app(app):
     # Delete project
     # ------------------------------------------------------------------
     @app.route('/api/projects/<project_id>', methods=['DELETE'])
-    def delete_project(project_id):
+    def delete_project(project_id: str) -> ResponseReturnValue:
         return _delete_entity(project_id, ProjectController, "project ID", "Project")
 
     # ------------------------------------------------------------------
     # Delete variant
     # ------------------------------------------------------------------
     @app.route('/api/variants/<variant_id>', methods=['DELETE'])
-    def delete_variant(variant_id):
+    def delete_variant(variant_id: str) -> ResponseReturnValue:
         return _delete_entity(variant_id, VariantController, "variant ID", "Variant")
 
     # ------------------------------------------------------------------
     # Upload SBOM
     # ------------------------------------------------------------------
     @app.route('/api/sbom/upload', methods=['POST'])
-    def upload_sbom():
+    def upload_sbom() -> ResponseReturnValue:
         """Upload one or more SBOM files and process them asynchronously.
 
         All files are registered under a single scan so they are treated as
@@ -628,7 +661,7 @@ def init_app(app):
         # Validate all files and detect formats before creating the scan
         validated_files: list[tuple[str, str, str]] = []  # (tmp_path, filename, fmt)
 
-        def _cleanup_validated():
+        def _cleanup_validated() -> None:
             for p, _, _ in validated_files:
                 try:
                     os.unlink(p)
@@ -727,7 +760,7 @@ def init_app(app):
     # Upload SBOM status
     # ------------------------------------------------------------------
     @app.route('/api/sbom/upload/<upload_id>/status')
-    def upload_sbom_status(upload_id):
+    def upload_sbom_status(upload_id: str) -> ResponseReturnValue:
         status = _upload_status.get(upload_id)
         if status is None:
             return jsonify({"error": "Unknown upload ID."}), 404

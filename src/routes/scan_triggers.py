@@ -49,7 +49,7 @@ def init_app(app: Flask) -> None:
     # Grype Scan
     # ------------------------------------------------------------------
 
-    _grype_scans_in_progress: dict = {}
+    _grype_scans_in_progress: dict[str, dict] = {}
 
     @app.route('/api/variants/<variant_id>/grype-scan', methods=['POST'])
     def trigger_grype_scan(variant_id: str) -> ResponseReturnValue:
@@ -82,7 +82,7 @@ def init_app(app: Flask) -> None:
         # filter the grype output to only this variant's packages.  We query
         # here (in request context) because the background thread has no DB
         # session.
-        sbom_pkg_set: set = set()
+        sbom_pkg_set: set[tuple[str, str]] = set()
         sbom_scan_id = db.session.execute(
             db.select(Scan.id)
             .where(Scan.variant_id == variant_uuid)
@@ -157,7 +157,7 @@ def init_app(app: Flask) -> None:
                         orig_components = len(components)
                         kept = []
                         kept_refs = set()
-                        seen_nv: set = set()
+                        seen_nv: set[tuple[str, str]] = set()
                         kernel_modules_dropped = 0
                         for comp in components:
                             name = comp.get("name", "")
@@ -310,7 +310,7 @@ def init_app(app: Flask) -> None:
     # NVD CPE Scan
     # ------------------------------------------------------------------
 
-    _nvd_scans_in_progress: dict = {}
+    _nvd_scans_in_progress: dict[str, dict] = {}
 
     @app.route('/api/variants/<variant_id>/nvd-scan', methods=['POST'])
     def trigger_nvd_scan(variant_id: str) -> ResponseReturnValue:
@@ -356,7 +356,7 @@ def init_app(app: Flask) -> None:
                     return
 
                 # 2. Collect CPE names from packages
-                cpe_to_pkgs: dict = {}
+                cpe_to_pkgs: dict[str, list[Package]] = {}
                 for pkg in packages:
                     for cpe in (pkg.cpe or []):
                         parts = cpe.split(":")
@@ -382,9 +382,9 @@ def init_app(app: Flask) -> None:
                 )
                 total_cpes = len(cpe_to_pkgs)
                 _nvd_scans_in_progress[vid_str]["total"] = total_cpes
-                cves_found: set = set()
-                observation_pairs: set = set()
-                assessed_findings: set = set()
+                cves_found: set[str] = set()
+                observation_pairs: set[tuple[uuid.UUID, uuid.UUID]] = set()
+                assessed_findings: set[tuple[uuid.UUID, uuid.UUID]] = set()
 
                 for idx, (cpe_name, pkgs) in enumerate(
                     cpe_to_pkgs.items(), 1
@@ -555,7 +555,7 @@ def init_app(app: Flask) -> None:
     # OSV Scan
     # ------------------------------------------------------------------
 
-    _osv_scans_in_progress: dict = {}
+    _osv_scans_in_progress: dict[str, dict] = {}
 
     @app.route('/api/variants/<variant_id>/osv-scan', methods=['POST'])
     def trigger_osv_scan(variant_id: str) -> ResponseReturnValue:
@@ -601,8 +601,8 @@ def init_app(app: Flask) -> None:
                 # A package may carry several PURLs (e.g. generic + apk);
                 # query ALL of them so we don't miss vulnerabilities that
                 # are only indexed under a specific ecosystem PURL.
-                purl_to_pkgs: dict[str, list] = {}
-                pkgs_with_purls: set = set()
+                purl_to_pkgs: dict[str, list[Package]] = {}
+                pkgs_with_purls: set[uuid.UUID] = set()
                 for pkg in packages:
                     for purl in (pkg.purl or []):
                         purl_str = str(purl).strip()
@@ -631,9 +631,9 @@ def init_app(app: Flask) -> None:
                     scan_type="tool",
                     scan_source="osv",
                 )
-                vulns_found: set = set()
-                observation_pairs: set = set()
-                assessed_findings: set = set()
+                vulns_found: set[str] = set()
+                observation_pairs: set[tuple[uuid.UUID, uuid.UUID]] = set()
+                assessed_findings: set[tuple[uuid.UUID, uuid.UUID]] = set()
 
                 for idx, (purl_str, pkgs) in enumerate(
                     purl_to_pkgs.items(), 1
@@ -757,7 +757,7 @@ def init_app(app: Flask) -> None:
     # sbom-cve-check Scan — local NVD-FKIE + CVEList with VEX
     # ------------------------------------------------------------------
 
-    _sbom_cve_check_scans_in_progress: dict = {}
+    _sbom_cve_check_scans_in_progress: dict[str, dict] = {}
 
     @app.route('/api/variants/<variant_id>/sbom-cve-check-scan', methods=['POST'])
     def trigger_sbom_cve_check_scan(variant_id: str) -> ResponseReturnValue:
@@ -860,8 +860,8 @@ def init_app(app: Flask) -> None:
                         f"{idx}/{total_pkgs} packages"
                     )
 
-                    persisted_ids: list = []
-                    seen_keys: set = set()
+                    persisted_ids: list[str] = []
+                    seen_keys: set[tuple[uuid.UUID, str]] = set()
                     try:
                         for computed, status in engine.applicable_vulns(pkg):
                             cve_id = writer.add(pkg, computed, status, seen_keys)
