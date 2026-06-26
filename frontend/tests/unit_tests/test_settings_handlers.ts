@@ -409,3 +409,163 @@ describe('Variants.getUploadStatus', () => {
         );
     });
 });
+
+
+// ---------------------------------------------------------------------------
+// Variants.copyAssessments
+// ---------------------------------------------------------------------------
+
+describe('Variants.copyAssessments', () => {
+    beforeEach(() => { fetchMock.resetMocks(); });
+
+    test('copies assessments from source to target variant', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({
+            copied: 5,
+            skipped: 2,
+            message: 'Copied 5 assessments.',
+        }));
+
+        const result = await Variants.copyAssessments('source-v1', 'target-v2');
+
+        expect(result.copied).toBe(5);
+        expect(result.skipped).toBe(2);
+        expect(result.message).toBe('Copied 5 assessments.');
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/variants/copy-assessments'),
+            expect.objectContaining({
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    source_variant_id: 'source-v1',
+                    target_variant_id: 'target-v2',
+                    ignore_package_version: false,
+                }),
+            })
+        );
+    });
+
+    test('passes ignore_package_version flag when true', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ copied: 3, skipped: 0, message: 'ok' }));
+
+        await Variants.copyAssessments('src', 'tgt', true);
+
+        const body = JSON.parse((fetchMock.mock.calls[0] as any[])[1].body as string);
+        expect(body.ignore_package_version).toBe(true);
+    });
+
+    test('throws on error response', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ error: 'Not found' }), { status: 404 });
+
+        await expect(Variants.copyAssessments('src', 'tgt')).rejects.toThrow('Not found');
+    });
+
+    test('throws generic message when error body cannot be parsed', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: false,
+                status: 500,
+                json: () => Promise.reject(new Error('invalid json')),
+            } as Response)
+        );
+
+        await expect(Variants.copyAssessments('src', 'tgt')).rejects.toThrow('Copy failed (500)');
+    });
+});
+
+
+// ---------------------------------------------------------------------------
+// Variants.previewCopyAssessments
+// ---------------------------------------------------------------------------
+
+describe('Variants.previewCopyAssessments', () => {
+    beforeEach(() => { fetchMock.resetMocks(); });
+
+    test('returns preview data on success', async () => {
+        const previewData = {
+            count: 3,
+            skipped: 1,
+            message: 'Preview ready.',
+            entries: [
+                {
+                    source_assessment_id: 'a1',
+                    source_finding_id: 'f1',
+                    target_finding_id: 'f2',
+                    vulnerability_id: 'CVE-2023-1234',
+                    source_package: 'pkg@1.0.0',
+                    target_package: 'pkg@2.0.0',
+                }
+            ],
+        };
+        fetchMock.mockResponseOnce(JSON.stringify(previewData));
+
+        const result = await Variants.previewCopyAssessments('src', 'tgt');
+
+        expect('unsupported' in result).toBe(false);
+        if (!('unsupported' in result)) {
+            expect(result.count).toBe(3);
+            expect(result.entries).toHaveLength(1);
+            expect(result.entries[0].vulnerability_id).toBe('CVE-2023-1234');
+        }
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/variants/copy-assessments/preview'),
+            expect.objectContaining({
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+            })
+        );
+    });
+
+    test('returns unsupported result on 404', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) } as Response)
+        );
+
+        const result = await Variants.previewCopyAssessments('src', 'tgt');
+
+        expect('unsupported' in result && result.unsupported).toBe(true);
+        if ('unsupported' in result) {
+            expect(result.status).toBe(404);
+            expect(result.message).toContain('Preview is unavailable');
+        }
+    });
+
+    test('returns unsupported result on 405', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ ok: false, status: 405, json: () => Promise.resolve({}) } as Response)
+        );
+
+        const result = await Variants.previewCopyAssessments('src', 'tgt');
+
+        expect('unsupported' in result && result.unsupported).toBe(true);
+        if ('unsupported' in result) {
+            expect(result.status).toBe(405);
+        }
+    });
+
+    test('throws on other error responses', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ error: 'Server error' }), { status: 500 });
+
+        await expect(Variants.previewCopyAssessments('src', 'tgt')).rejects.toThrow('Server error');
+    });
+
+    test('throws generic message when error body cannot be parsed', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: false,
+                status: 503,
+                json: () => Promise.reject(new Error('invalid json')),
+            } as Response)
+        );
+
+        await expect(Variants.previewCopyAssessments('src', 'tgt')).rejects.toThrow('Preview failed (503)');
+    });
+
+    test('passes ignore_package_version flag', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ count: 0, skipped: 0, message: '', entries: [] }));
+
+        await Variants.previewCopyAssessments('src', 'tgt', true);
+
+        const body = JSON.parse((fetchMock.mock.calls[0] as any[])[1].body as string);
+        expect(body.ignore_package_version).toBe(true);
+    });
+});
