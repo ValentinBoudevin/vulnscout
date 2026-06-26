@@ -1137,6 +1137,92 @@ def _seed_assessment(app, *, vuln_id, pkg_name, pkg_version, status, origin):
         )
 
 
+def test_import_custom_data_duplicate_multiple_existing_rows(app, client):
+    """Dedup must not crash when several matching assessments already exist.
+
+    ``--export-custom-assessments`` can yield an item whose finding/variant/
+    status matches more than one existing assessment row. The dedup query
+    previously used ``scalar_one_or_none()`` which raised
+    "Multiple rows were found when one or none was required" and dropped the
+    item. The import should skip it cleanly instead.
+    """
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.finding import Finding
+    from src.models.assessment import Assessment
+
+    with app.app_context():
+        pkg = Package.find_or_create("generic/glibc", "2.39", supplier="")
+        Vulnerability.get_or_create("CVE-2026-5450")
+        finding = Finding.get_or_create(pkg.id, "CVE-2026-5450")
+        # Two assessments sharing finding + variant + status.
+        for _ in range(2):
+            Assessment.create(
+                status="affected",
+                finding_id=finding.id,
+                variant_id=VARIANT_UUID,
+                origin="custom",
+            )
+
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2026-5450",
+        "status": "affected",
+        "packages": ["generic/glibc@2.39"],
+        "variant_id": VARIANT_UUID,
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload, content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["status"] == "success"
+    assert result["assessments_skipped"] >= 1
+    # No error entry for the CVE that previously triggered the crash.
+    assert all(e.get("vuln_id") != "CVE-2026-5450" for e in result["errors"])
+
+
+def test_import_statements_duplicate_multiple_existing_rows(app):
+    """OpenVEX import (import_statements) must not crash on multiple matches.
+
+    Files produced by ``--export-custom-assessments`` are OpenVEX documents
+    re-imported through ``import_statements``. When two existing assessments
+    share the same finding/variant/status, the dedup query previously used
+    ``scalar_one_or_none()`` which raised "Multiple rows were found when one
+    or none was required" and dropped the statement.
+    """
+    from src.helpers.assessment_io import import_statements
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.finding import Finding
+    from src.models.assessment import Assessment
+
+    with app.app_context():
+        pkg = Package.find_or_create("linux-stm32mp", "6.6.116-stm32mp-r3", supplier="")
+        Vulnerability.get_or_create("CVE-1999-0061")
+        finding = Finding.get_or_create(pkg.id, "CVE-1999-0061")
+        for _ in range(2):
+            Assessment.create(
+                status="fixed",
+                finding_id=finding.id,
+                variant_id=VARIANT_UUID,
+                origin="custom",
+            )
+
+        statements = [{
+            "vulnerability": {"name": "CVE-1999-0061"},
+            "status": "fixed",
+            "products": ["linux-stm32mp@6.6.116-stm32mp-r3"],
+        }]
+        created, errors, skipped = import_statements(statements, VARIANT_UUID)
+
+    assert skipped >= 1
+    # The statement must not be dropped with a "Multiple rows" error.
+    assert all(
+        "Multiple rows" not in str(e.get("error", "")) for e in errors
+    )
+
+
 def test_import_custom_data_not_skipped_when_only_scanner_assessment_exists(app, client):
     """A scanner-origin assessment must not block importing a custom one.
 

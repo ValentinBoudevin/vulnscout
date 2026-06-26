@@ -297,7 +297,7 @@ def import_statements(
                         DBAssessment.variant_id == variant_id,
                         DBAssessment.status == status,
                     )
-                ).scalar_one_or_none()
+                ).scalars().first()
                 if existing is not None:
                     skipped += 1
                     continue
@@ -749,7 +749,7 @@ def import_custom_data(
                             DBAssessment.status == status,
                             DBAssessment.origin == "custom",
                         )
-                    ).scalar_one_or_none()
+                    ).scalars().first()
                     if existing is not None:
                         result["assessments_skipped"] += 1
                         continue
