@@ -1119,6 +1119,78 @@ def test_import_custom_data_duplicate_skipped(client):
     assert r2["assessments_imported"] == 0
 
 
+def _seed_assessment(app, *, vuln_id, pkg_name, pkg_version, status, origin):
+    """Create an assessment with a specific origin directly in the DB."""
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.finding import Finding
+    from src.models.assessment import Assessment
+    with app.app_context():
+        pkg = Package.find_or_create(pkg_name, pkg_version, supplier="")
+        Vulnerability.get_or_create(vuln_id)
+        finding = Finding.get_or_create(pkg.id, vuln_id)
+        Assessment.create(
+            status=status,
+            finding_id=finding.id,
+            variant_id=VARIANT_UUID,
+            origin=origin,
+        )
+
+
+def test_import_custom_data_not_skipped_when_only_scanner_assessment_exists(app, client):
+    """A scanner-origin assessment must not block importing a custom one.
+
+    The dedup is origin-aware: importing custom data only deduplicates
+    against existing ``origin == "custom"`` assessments, so a deleted custom
+    assessment can be restored even when a scanner assessment with the same
+    finding/variant/status is still present.
+    """
+    _seed_assessment(
+        app, vuln_id="CVE-2099-00001", pkg_name="scannerpkg",
+        pkg_version="1.0.0", status="affected", origin="Imported SBOM",
+    )
+
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2099-00001",
+        "status": "affected",
+        "packages": ["scannerpkg@1.0.0"],
+        "variant_id": VARIANT_UUID,
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload, content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["status"] == "success"
+    assert result["assessments_imported"] == 1
+    assert result["assessments_skipped"] == 0
+
+
+def test_import_custom_data_skipped_when_custom_assessment_exists(app, client):
+    """An existing custom assessment with the same key is still deduplicated."""
+    _seed_assessment(
+        app, vuln_id="CVE-2099-00002", pkg_name="custompkg",
+        pkg_version="2.0.0", status="affected", origin="custom",
+    )
+
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2099-00002",
+        "status": "affected",
+        "packages": ["custompkg@2.0.0"],
+        "variant_id": VARIANT_UUID,
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload, content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["status"] == "success"
+    assert result["assessments_imported"] == 0
+    assert result["assessments_skipped"] == 1
+
+
 def test_import_custom_data_cvss(client):
     """Import CVSS via the custom-data endpoint."""
     payload = _custom_data_payload(cvss=[{

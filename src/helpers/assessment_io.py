@@ -747,6 +747,7 @@ def import_custom_data(
                             DBAssessment.finding_id == finding.id,
                             DBAssessment.variant_id == target_variant_id,
                             DBAssessment.status == status,
+                            DBAssessment.origin == "custom",
                         )
                     ).scalar_one_or_none()
                     if existing is not None:
