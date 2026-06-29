@@ -1223,6 +1223,43 @@ def test_import_statements_duplicate_multiple_existing_rows(app):
     )
 
 
+def test_import_statements_not_skipped_when_only_scanner_assessment_exists(app):
+    """A scanner-origin assessment must not block importing an OpenVEX one.
+
+    Like ``import_custom_data``, the OpenVEX import dedup is origin-aware: it
+    only deduplicates against existing ``origin == "custom"`` assessments, so a
+    scanner/SBOM assessment with the same finding/variant/status must not
+    prevent the custom statement from being created.
+    """
+    from src.helpers.assessment_io import import_statements
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.finding import Finding
+    from src.models.assessment import Assessment
+
+    with app.app_context():
+        pkg = Package.find_or_create("scannerpkg", "1.0.0", supplier="")
+        Vulnerability.get_or_create("CVE-2099-00003")
+        finding = Finding.get_or_create(pkg.id, "CVE-2099-00003")
+        Assessment.create(
+            status="fixed",
+            finding_id=finding.id,
+            variant_id=VARIANT_UUID,
+            origin="Imported SBOM",
+        )
+
+        statements = [{
+            "vulnerability": {"name": "CVE-2099-00003"},
+            "status": "fixed",
+            "products": ["scannerpkg@1.0.0"],
+        }]
+        created, errors, skipped = import_statements(statements, VARIANT_UUID)
+
+    assert errors == []
+    assert skipped == 0
+    assert len(created) == 1
+
+
 def test_import_custom_data_not_skipped_when_only_scanner_assessment_exists(app, client):
     """A scanner-origin assessment must not block importing a custom one.
 

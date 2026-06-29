@@ -296,6 +296,7 @@ def import_statements(
                         DBAssessment.finding_id == finding.id,
                         DBAssessment.variant_id == variant_id,
                         DBAssessment.status == status,
+                        DBAssessment.origin == "custom",
                     )
                 ).scalars().first()
                 if existing is not None:
