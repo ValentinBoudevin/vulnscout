@@ -468,10 +468,12 @@ cmd_import_custom_assessments() {
     raw_basename="$(basename "$file")"
     dest_name="${raw_basename#vulnscout_stage_}"
     if [[ "$dest_name" != "$raw_basename" ]]; then
+        # Strip the staging prefix added by the wrapper before importing.
         dest_file="$(dirname "$file")/$dest_name"
         mv "$file" "$dest_file"
-        import_args+=("$dest_file")
+        file="$dest_file"
     fi
+    import_args+=("$file")
 
     flask --app src.bin.webapp db upgrade
     flask --app src.bin.webapp import-custom-assessments "${import_args[@]}"
