@@ -260,6 +260,23 @@ describe("GHSAProgressHandler (smoke)", () => {
         expect(progress.total).toBe(0);
         expect(progress.message).toBe("");
     });
+
+    it("getProgress returns idleProgress when response is not ok (e.g. 404 on old backend)", async () => {
+        const { default: GHSAProgressHandler } = await import("../../src/handlers/ghsa_progress");
+        mockFetch.mockResolvedValueOnce({
+            ok: false,
+            status: 404,
+            json: async () => ({ error: "Not found" }),
+        } as Response);
+        const progress = await GHSAProgressHandler.getProgress();
+        expect(progress.in_progress).toBe(false);
+        expect(progress.phase).toBe("idle");
+        expect(progress.current).toBe(0);
+        expect(progress.total).toBe(0);
+        expect(progress.message).toBe("");
+        expect(progress.last_update).toBeUndefined();
+        expect(progress.started_at).toBeUndefined();
+    });
 });
 
 describe("BulkGhsaRefreshHandler.trigger", () => {

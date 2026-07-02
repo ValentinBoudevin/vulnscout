@@ -2573,3 +2573,195 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         expect(packageCheckbox('pkgB@1.0.0').disabled).toBe(false);
     });
 });
+
+// ---------------------------------------------------------------------------
+// Refresh button (NVD + EPSS for CVEs, GHSA for GHSA advisories)
+// ---------------------------------------------------------------------------
+
+describe('Refresh button', () => {
+    const baseVuln = {
+        id: 'CVE-2010-1234',
+        aliases: ['CVE-2008-3456'],
+        related_vulnerabilities: [],
+        namespace: 'nvd:cve',
+        found_by: ['hardcoded'],
+        datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2010-1234',
+        packages: ['aaabbbccc@1.0.0'],
+        packages_current: [],
+        urls: [],
+        texts: [],
+        severity: { severity: 'low', min_score: 3, max_score: 3, cvss: [] },
+        epss: { score: 0.356789, percentile: 0.7546 },
+        effort: {
+            optimistic: new Iso8601Duration('PT4H'),
+            likely: new Iso8601Duration('P1DT2H'),
+            pessimistic: new Iso8601Duration('P1W2D'),
+        },
+        fix: { state: 'unknown' },
+        simplified_status: 'active',
+        variants: [],
+        assessments: [],
+    };
+
+    const makeVulnBody = (id: string, epssScore: number) => ({
+        id,
+        found_by: [],
+        datasource: 'nvd',
+        namespace: 'nvd',
+        aliases: [],
+        related_vulnerabilities: [],
+        urls: [],
+        texts: [],
+        fix: {},
+        severity: { severity: 'low', min_score: 3, max_score: 3, cvss: [] },
+        epss: { score: epssScore, percentile: 0.9 },
+        effort: {},
+        packages: [],
+        packages_current: [],
+        variants: [],
+        assessments: [],
+        simplified_status: 'active',
+    });
+
+    beforeEach(() => { fetchMock.resetMocks(); });
+
+    test('NVD + EPSS refresh success calls patchVuln and shows Updated badge', async () => {
+        // Mount fetches
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
+        // NVD refresh
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: true, status: 200,
+            json: () => Promise.resolve({ vulnerabilities: [makeVulnBody('CVE-2010-1234', 0.4)] }),
+        } as Response));
+        // EPSS refresh
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: true, status: 200,
+            json: () => Promise.resolve({ vulnerabilities: [makeVulnBody('CVE-2010-1234', 0.4)] }),
+        } as Response));
+
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={baseVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        const refreshBtn = screen.getByTitle(/Refresh from NVD & EPSS/i);
+        await user.click(refreshBtn);
+
+        await waitFor(() => {
+            expect(patchVuln).toHaveBeenCalledTimes(1);
+        });
+
+        // After both NVD and EPSS succeed, "Updated" badge should appear
+        expect(await screen.findByText('Updated')).toBeInTheDocument();
+    });
+
+    test('NVD rate-limited shows error message', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
+        // NVD refresh → rate limited
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: false, status: 429,
+            json: () => Promise.resolve({ error: 'rate limited', error_code: 'rate_limited', api_key_configured: false }),
+        } as Response));
+        // EPSS refresh → success
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: true, status: 200,
+            json: () => Promise.resolve({ vulnerabilities: [makeVulnBody('CVE-2010-1234', 0.4)] }),
+        } as Response));
+
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={baseVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        await user.click(screen.getByTitle(/Refresh from NVD & EPSS/i));
+
+        await waitFor(() => {
+            expect(screen.getByText(/NVD rate-limited/i)).toBeInTheDocument();
+        });
+    });
+
+    test('NVD + EPSS both unavailable shows combined error', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
+        // NVD refresh → 503
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: false, status: 503,
+            json: () => Promise.resolve({ error_code: 'unavailable', api_key_configured: true }),
+        } as Response));
+        // EPSS refresh → fail
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: false, status: 503,
+            json: () => Promise.resolve({}),
+        } as Response));
+
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={baseVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        await user.click(screen.getByTitle(/Refresh from NVD & EPSS/i));
+
+        await waitFor(() => {
+            expect(screen.getByText(/NVD API unavailable/i)).toBeInTheDocument();
+        });
+        expect(patchVuln).not.toHaveBeenCalled();
+    });
+
+    test('GHSA refresh success calls patchVuln', async () => {
+        const ghsaVuln = {
+            ...baseVuln,
+            id: 'GHSA-abcd-1234-efgh',
+            namespace: 'github:advisory',
+        };
+
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
+        // GHSA refresh
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: true, status: 200,
+            json: () => Promise.resolve({
+                vulnerabilities: [{
+                    ...makeVulnBody('GHSA-abcd-1234-efgh', 0.3),
+                    id: 'GHSA-abcd-1234-efgh',
+                }]
+            }),
+        } as Response));
+
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={ghsaVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        const refreshBtn = screen.getByTitle(/Refresh from GitHub Advisory Database/i);
+        await user.click(refreshBtn);
+
+        await waitFor(() => {
+            expect(patchVuln).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    test('GHSA refresh failure shows error message', async () => {
+        const ghsaVuln = {
+            ...baseVuln,
+            id: 'GHSA-abcd-1234-efgh',
+            namespace: 'github:advisory',
+        };
+
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
+        // GHSA refresh → not ok → returns null → triggers error
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: false, status: 503,
+            json: () => Promise.resolve({}),
+        } as Response));
+
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={ghsaVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        await user.click(screen.getByTitle(/Refresh from GitHub Advisory Database/i));
+
+        await waitFor(() => {
+            expect(screen.getByText(/GitHub Advisory Database refresh failed/i)).toBeInTheDocument();
+        });
+        expect(patchVuln).not.toHaveBeenCalled();
+    });
+});

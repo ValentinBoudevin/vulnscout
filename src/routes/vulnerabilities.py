@@ -10,8 +10,9 @@ import re
 import urllib.error
 import uuid
 
-from flask import jsonify, request
-from sqlalchemy import func, select
+from flask import jsonify, request, Flask
+from flask.typing import ResponseReturnValue
+from sqlalchemy import func, select, ColumnElement
 from sqlalchemy.orm import selectinload, aliased, attributes as orm_attrs
 from ..models import (
     Vulnerability,
@@ -50,7 +51,7 @@ TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
 _GHSA_RE = re.compile(r'^GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$')
 
 
-def _sbom_pkg_filter(pkg_ids):
+def _sbom_pkg_filter(pkg_ids: set[uuid.UUID]) -> "ColumnElement[bool] | None":
     """Return a SQLAlchemy filter clause restricting tool-scan findings to SBOM packages.
 
     Assumes the query already joins ``Finding`` and ``Scan``.  When
@@ -97,7 +98,7 @@ class _ScopedOverrides:
 
 
 def _variant_scoped_metrics_and_effort_overrides(
-    records: list[Vulnerability], variant_uuid
+    records: list[Vulnerability], variant_uuid: uuid.UUID
 ) -> dict[str, _ScopedOverrides]:
     """Build response-level overrides for variant-scoped metrics/effort.
 
@@ -182,7 +183,7 @@ def _apply_variant_scoped_overrides_to_vuln_dicts(
         vuln["effort"] = effort_to_dict(scoped.effort)
 
 
-def _variant_ids_for_vulnerability(vulnerability_id: str) -> list:
+def _variant_ids_for_vulnerability(vulnerability_id: str) -> list[uuid.UUID | None]:
     """Return distinct variant IDs where a vulnerability is observed."""
     rows = db.session.execute(
         db.select(Scan.variant_id)
@@ -195,10 +196,10 @@ def _variant_ids_for_vulnerability(vulnerability_id: str) -> list:
 
 
 def _populate_found_by(
-    records: list,
-    variant_uuid=None,
-    project_uuid=None,
-    active_scan_ids: list | None = None,
+    records: list[Vulnerability],
+    variant_uuid: uuid.UUID | None = None,
+    project_uuid: uuid.UUID | None = None,
+    active_scan_ids: list[uuid.UUID] | None = None,
 ) -> None:
     """Populate transient found_by with factual provenance.
 
@@ -270,18 +271,21 @@ def _populate_found_by(
             record.add_found_by(scanner)
 
 
-def init_app(app):
+def init_app(app: Flask) -> None:
 
     if "TIME_ESTIMATES_PATH" not in app.config:
         app.config["TIME_ESTIMATES_PATH"] = TIME_ESTIMATES_PATH
 
     @app.route('/api/vulnerabilities')
-    def index_vulns():
+    def index_vulns() -> ResponseReturnValue:
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         compare_variant_id = request.args.get('compare_variant_id')
         variant_scoped_overrides: dict[str, _ScopedOverrides] = {}
-        current_scan_ids: list = []
+        current_scan_ids: list[uuid.UUID] = []
+        records: list[Vulnerability] = []
+        _scope_variant: uuid.UUID | None = None
+        _scope_project: uuid.UUID | None = None
         if variant_id and compare_variant_id:
             base_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
@@ -304,7 +308,7 @@ def init_app(app):
                 selectinload(Vulnerability.metrics),
             )
 
-            def _vuln_ids_for_scans(scan_ids):
+            def _vuln_ids_for_scans(scan_ids: list[uuid.UUID]) -> set[str]:
                 """Vuln IDs from *scan_ids*, filtering tool scans to active packages."""
                 if not scan_ids:
                     return set()
@@ -573,7 +577,7 @@ def init_app(app):
                     if te:
                         opti, like, pess = te
 
-                        def _h(v):
+                        def _h(v: int | None) -> Iso8601Duration | None:
                             if v is None:
                                 return None
                             return Iso8601Duration(f"PT{v}H")
@@ -697,7 +701,7 @@ def init_app(app):
                 raise ValueError("Unknown format", fmt)
 
     @app.get('/api/vulnerabilities/<id>')
-    def get_vuln(id):
+    def get_vuln(id: str) -> ResponseReturnValue:
         record = Vulnerability.get_by_id(id)
         if not record:
             return "Not found", 404
@@ -708,6 +712,8 @@ def init_app(app):
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
+            if variant_uuid is None:
+                return {"error": "Internal error"}, 500
             overrides = _variant_scoped_metrics_and_effort_overrides([record], variant_uuid)
             _apply_variant_scoped_overrides_to_vuln_dicts({response["id"]: response}, overrides)
         else:
@@ -723,7 +729,7 @@ def init_app(app):
         return response
 
     @app.get('/api/vulnerabilities/<id>/variant-snapshots')
-    def get_vuln_variant_snapshots(id):
+    def get_vuln_variant_snapshots(id: str) -> ResponseReturnValue:
         """Return variant-scoped effort and custom CVSS for every variant that
         observes this vulnerability, in a single response.
 
@@ -745,7 +751,7 @@ def init_app(app):
             ).scalars().all())
             variant_uuids = [v for v in variant_uuids if v in allowed]
 
-        snapshots = []
+        snapshots: list[dict] = []
         for variant_uuid in variant_uuids:
             if variant_uuid is None:
                 continue
@@ -766,7 +772,7 @@ def init_app(app):
         return jsonify(snapshots)
 
     @app.patch('/api/vulnerabilities/<id>')
-    def patch_vuln(id):
+    def patch_vuln(id: str) -> ResponseReturnValue:
         record = Vulnerability.get_by_id(id)
         if not record:
             return "Not found", 404
@@ -774,7 +780,7 @@ def init_app(app):
         payload_data = request.get_json()
         if payload_data is None:
             return {"error": "Invalid request data"}, 400
-        response_variant_id = None
+        response_variant_id: uuid.UUID | None = None
         _updated_effort: Effort | None = None
 
         if "effort" in payload_data:
@@ -846,15 +852,15 @@ def init_app(app):
         return response
 
     @app.route('/api/vulnerabilities/batch', methods=['PATCH'])
-    def update_vulns_batch():
+    def update_vulns_batch() -> ResponseReturnValue:
         payload_data = request.get_json()
         if (not payload_data
                 or "vulnerabilities" not in payload_data
                 or not isinstance(payload_data["vulnerabilities"], list)):
             return {"error": "Invalid request data. Expected: {vulnerabilities: [...]}"}, 400
 
-        results = []
-        errors = []
+        results: list[dict] = []
+        errors: list[dict] = []
 
         for item in payload_data["vulnerabilities"]:
             if not isinstance(item, dict) or "id" not in item:
@@ -866,7 +872,7 @@ def init_app(app):
                 errors.append({"id": item["id"], "error": "Vulnerability not found"})
                 continue
 
-            response_variant_id = None
+            response_variant_id: uuid.UUID | None = None
             _updated_effort: Effort | None = None
 
             if "effort" in item:
@@ -959,7 +965,7 @@ def init_app(app):
         return response, 200 if results else 400
 
     @app.route('/api/vulnerabilities/<cve_id>/nvd-refresh', methods=['POST'])
-    def refresh_single_cve(cve_id):
+    def refresh_single_cve(cve_id: str) -> ResponseReturnValue:
         cve_id_upper = cve_id.upper()
         rec = db.session.get(Vulnerability, cve_id_upper)
         if rec is None:
@@ -1053,7 +1059,7 @@ def init_app(app):
         return jsonify({"vulnerabilities": [data]}), 200
 
     @app.route('/api/vulnerabilities/<cve_id>/epss-refresh', methods=['POST'])
-    def refresh_single_cve_epss(cve_id):
+    def refresh_single_cve_epss(cve_id: str) -> ResponseReturnValue:
         cve_id_upper = cve_id.upper()
         rec = db.session.get(Vulnerability, cve_id_upper)
         if rec is None:
@@ -1088,7 +1094,7 @@ def init_app(app):
         return jsonify({"vulnerabilities": [rec.to_dict()]}), 200
 
     @app.route('/api/vulnerabilities/<ghsa_id>/ghsa-refresh', methods=['POST'])
-    def refresh_single_ghsa(ghsa_id):
+    def refresh_single_ghsa(ghsa_id: str) -> ResponseReturnValue:
         ghsa_id_upper = ghsa_id.upper()
         if not _GHSA_RE.match(ghsa_id_upper):
             return jsonify({"error": "Only valid GHSA identifiers (GHSA-xxxx-xxxx-xxxx) are supported"}), 400

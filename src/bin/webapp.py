@@ -98,7 +98,7 @@ def create_app():
         @_sa_event.listens_for(db.engine, "connect")
         def _set_sqlite_busy_timeout(dbapi_conn, _rec):
             dbapi_conn.execute("PRAGMA busy_timeout=30000")
-    except Exception:
+    except Exception:  # pragma: no cover
         pass
 
     def is_scan_finished():
