@@ -289,8 +289,15 @@ type VariantScopedSnapshot = {
         const signal = controller.signal;
         setVariantPackageMapLoaded(false);
         if (availableVariants.length === 0) {
-            setVariantPackageMap({});
-            setVariantPackageMapLoaded(true);
+            // Only mark as loaded once we know variants have been resolved.
+            // If variants are still loading (variantsLoadedForVulnId !== vuln.id),
+            // keep variantPackageMapLoaded = false to avoid a premature
+            // "all packages deprecated" flash when the map is empty but
+            // variants haven't arrived yet.
+            if (variantsLoadedForVulnId === vuln.id) {
+                setVariantPackageMap({});
+                setVariantPackageMapLoaded(true);
+            }
             return;
         }
         if (variantsLoadedForVulnId !== vuln.id) {
