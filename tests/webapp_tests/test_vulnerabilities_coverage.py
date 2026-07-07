@@ -1289,7 +1289,8 @@ def test_nvd_refresh_api_exception_returns_503(client):
     from unittest.mock import patch, MagicMock
     with patch("src.routes.vulnerabilities.NVD_DB") as mock_nvd_cls:
         mock_nvd_cls.return_value.api_get_cve.side_effect = Exception("Network error")
-        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh")
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
     assert response.status_code == 503
     data = json.loads(response.data)
     assert data["error_code"] == "unavailable"
@@ -1300,7 +1301,8 @@ def test_nvd_refresh_rate_limited_returns_429(client):
     from unittest.mock import patch
     with patch("src.routes.vulnerabilities.NVD_DB") as mock_nvd_cls:
         mock_nvd_cls.return_value.api_get_cve.return_value = (429, {})
-        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh")
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
     assert response.status_code == 429
     data = json.loads(response.data)
     assert data["error_code"] == "rate_limited"
@@ -1311,7 +1313,8 @@ def test_nvd_refresh_unauthorized_returns_401(client):
     from unittest.mock import patch
     with patch("src.routes.vulnerabilities.NVD_DB") as mock_nvd_cls:
         mock_nvd_cls.return_value.api_get_cve.return_value = (401, {})
-        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh")
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
     assert response.status_code == 401
     data = json.loads(response.data)
     assert data["error_code"] == "unauthorized"
@@ -1322,7 +1325,8 @@ def test_nvd_refresh_forbidden_returns_403(client):
     from unittest.mock import patch
     with patch("src.routes.vulnerabilities.NVD_DB") as mock_nvd_cls:
         mock_nvd_cls.return_value.api_get_cve.return_value = (403, {})
-        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh")
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
     assert response.status_code == 403
     data = json.loads(response.data)
     assert data["error_code"] == "unauthorized"
@@ -1333,7 +1337,8 @@ def test_nvd_refresh_no_data_returns_503(client):
     from unittest.mock import patch
     with patch("src.routes.vulnerabilities.NVD_DB") as mock_nvd_cls:
         mock_nvd_cls.return_value.api_get_cve.return_value = (200, {"vulnerabilities": []})
-        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh")
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
     assert response.status_code == 503
     data = json.loads(response.data)
     assert data["error_code"] == "unavailable"
@@ -1356,7 +1361,8 @@ def test_nvd_refresh_success_no_cvss(client):
             {"vulnerabilities": [{"cve": cve_payload}]},
         )
         mock_nvd_cls.extract_cve_details.return_value = fake_details
-        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh")
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
     assert response.status_code == 200
     data = json.loads(response.data)
     assert "vulnerabilities" in data
@@ -1401,7 +1407,8 @@ def test_nvd_refresh_success_updates_existing_metric(app, client):
             {"vulnerabilities": [{"cve": cve_payload}]},
         )
         mock_nvd_cls.extract_cve_details.return_value = fake_details
-        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh")
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
 
     assert response.status_code == 200
 
@@ -1424,7 +1431,8 @@ def test_nvd_refresh_success_adds_new_metric(app, client):
             {"vulnerabilities": [{"cve": cve_payload}]},
         )
         mock_nvd_cls.extract_cve_details.return_value = fake_details
-        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh")
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
 
     assert response.status_code == 200
 

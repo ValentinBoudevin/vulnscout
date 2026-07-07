@@ -21,11 +21,11 @@ if [ -f "$CONFIG_FILE" ]; then
 fi
 
 # The sbom-cve-check advisory databases live inside the VulnScout cache directory
-# (mounted at /cache/vulnscout), in a sbom_cve_check_databases sub-folder next to
+# (mounted at /cache/vulnscout), in a local_databases sub-folder next to
 # vulnscout.db.  Default SBOM_CVE_CHECK_DATABASES_DIR to that location so the engine
 # finds (and, with SBOM_CVE_CHECK_AUTO_UPDATE=1, clones) them without an explicit env
 # var; config.env (sourced above) or an explicit override may still change this.
-export SBOM_CVE_CHECK_DATABASES_DIR="${SBOM_CVE_CHECK_DATABASES_DIR:-/cache/vulnscout/sbom_cve_check_databases}"
+export SBOM_CVE_CHECK_DATABASES_DIR="${SBOM_CVE_CHECK_DATABASES_DIR:-/cache/vulnscout/local_databases}"
 
 # resolve_grype_memlimit  —  translate GRYPE_MEMLIMIT into a GOMEMLIMIT value.
 #
@@ -478,6 +478,7 @@ cmd_scan() {
         echo "------------------------------------------------------------------------------"
         echo "Initialization Done - Loading is over and WebUI is ready !!!"
         echo "Open  $_url in your browser to access VulnScout"
+        print_nvd_status
         echo "------------------------------------------------------------------------------"
         fg %?flask 2>/dev/null || true # Bring back process named 'flask' (flask run) to foreground.
     fi
@@ -609,9 +610,35 @@ cmd_delete_scan() {
     flask --app src.bin.webapp delete-scan "$scan_id"
 }
 
+#######################################
+# Print a one-line NVD configuration summary
+#######################################
+print_nvd_status() {
+    local nvd_db_dir="${SBOM_CVE_CHECK_DATABASES_DIR:-/cache/vulnscout/local_databases}"
+    local auto_update="${SBOM_CVE_CHECK_AUTO_UPDATE:-1}"
+
+    local db_status
+    if [[ -d "$nvd_db_dir/nvd-fkie" ]] && [[ -d "$nvd_db_dir/cvelist" ]]; then
+        db_status="databases present"
+    else
+        db_status="databases not yet cloned"
+    fi
+    local update_label
+    [[ "$auto_update" == "1" ]] && update_label="auto-update on" || update_label="auto-update off"
+
+    echo "  NVD local    : $nvd_db_dir  [$db_status, $update_label]"
+
+    if [[ -n "${NVD_API_KEY:-}" ]]; then
+        echo "  NVD API key  : configured (API mode available)"
+    else
+        echo "  NVD API key  : not set  (local mode is the default)"
+    fi
+}
+
 cmd_daemon() {
     setup_user
     echo "VulnScout ready. Use '/scan/src/entrypoint.sh --help' for available commands."
+    print_nvd_status
     tail -f /dev/null
 }
 

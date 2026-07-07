@@ -2640,7 +2640,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
 
         await waitFor(() => {
-            expect(screen.getByText(/NVD API unavailable.*EPSS API unavailable/i)).toBeInTheDocument();
+            expect(screen.getByText(/NVD.*unavailable.*EPSS API unavailable/i)).toBeInTheDocument();
         });
     });
 
@@ -2695,7 +2695,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         rerender(<VulnModal vuln={vuln2} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(screen.queryByText('Updated')).not.toBeInTheDocument();
-        expect(screen.queryByText(/NVD API unavailable/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/NVD.*unavailable/i)).not.toBeInTheDocument();
     });
 
     test('builds variantPackageMap and disables packages absent from the selected variant', async () => {
@@ -2996,7 +2996,7 @@ describe('Refresh button', () => {
         await user.click(screen.getByTitle(/Refresh from NVD & EPSS/i));
 
         await waitFor(() => {
-            expect(screen.getByText(/NVD API unavailable/i)).toBeInTheDocument();
+            expect(screen.getByText(/NVD.*unavailable/i)).toBeInTheDocument();
         });
         expect(patchVuln).not.toHaveBeenCalled();
     });

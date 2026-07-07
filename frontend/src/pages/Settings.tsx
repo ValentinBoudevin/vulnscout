@@ -10,7 +10,6 @@ import {
   faTriangleExclamation,
   faTrash,
   faXmark,
-  faKey,
   faPenToSquare,
   faBug,
 } from "@fortawesome/free-solid-svg-icons";
@@ -19,9 +18,8 @@ import type { Project } from "../handlers/project";
 import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
 import Config from "../handlers/config";
-import ConfirmationModal from "../components/ConfirmationModal";
-import MessageBanner from "../components/MessageBanner";
 import NvdApiKey from "../handlers/nvdApiKey";
+import ConfirmationModal from "../components/ConfirmationModal";
 
 type Props = {
   onDataChanged?: (message?: string) => void;
@@ -64,6 +62,15 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   const [grypeMemlimitInput, setGrypeMemlimitInput] = useState("");
   const [grypeMemlimitBusy, setGrypeMemlimitBusy] = useState(false);
   const [grypeMemlimitMsg, setGrypeMemlimitMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
+
+  // ---- NVD API Key ----
+  const [nvdKeyInput, setNvdKeyInput] = useState("");
+  const [nvdMaskedKey, setNvdMaskedKey] = useState("");
+  const [nvdHasKey, setNvdHasKey] = useState(false);
+  const [nvdBusy, setNvdBusy] = useState(false);
+  const [nvdMsg, setNvdMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
+  const [nvdEditing, setNvdEditing] = useState(false);
+  const [confirmRemoveNvdKey, setConfirmRemoveNvdKey] = useState(false);
 
   useEffect(() => {
     Config.get()
@@ -129,6 +136,68 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
+
+  // Load NVD API key status on mount
+  useEffect(() => {
+    NvdApiKey.get()
+      .then((data) => {
+        if (unmountedRef.current) return;
+        setNvdHasKey(data.has_key);
+        setNvdMaskedKey(data.masked_key);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleSaveNvdKey = async () => {
+    if (nvdBusy || !nvdKeyInput.trim()) return;
+    setNvdBusy(true);
+    setNvdMsg(null);
+    try {
+      const result = await NvdApiKey.set(nvdKeyInput.trim());
+      if (unmountedRef.current) return;
+      if (!result.ok) {
+        setNvdMsg({ text: result.error ?? "Failed to save NVD API key.", type: "error" });
+      } else {
+        setNvdHasKey(result.has_key);
+        setNvdMaskedKey(result.masked_key);
+        setNvdKeyInput("");
+        setNvdEditing(false);
+        setNvdMsg({
+          text: result.warning ?? "NVD API key saved.",
+          type: result.warning ? "error" : "success",
+        });
+      }
+    } catch {
+      if (unmountedRef.current) return;
+      setNvdMsg({ text: "Failed to save NVD API key.", type: "error" });
+    } finally {
+      if (!unmountedRef.current) setNvdBusy(false);
+    }
+  };
+
+  const handleRemoveNvdKey = async () => {
+    setConfirmRemoveNvdKey(false);
+    setNvdBusy(true);
+    setNvdMsg(null);
+    try {
+      const result = await NvdApiKey.remove();
+      if (unmountedRef.current) return;
+      if (!result.ok) {
+        setNvdMsg({ text: result.error ?? "Failed to remove NVD API key.", type: "error" });
+      } else {
+        setNvdHasKey(false);
+        setNvdMaskedKey("");
+        setNvdKeyInput("");
+        setNvdEditing(false);
+        setNvdMsg({ text: "NVD API key removed.", type: "success" });
+      }
+    } catch {
+      if (unmountedRef.current) return;
+      setNvdMsg({ text: "Failed to remove NVD API key.", type: "error" });
+    } finally {
+      if (!unmountedRef.current) setNvdBusy(false);
+    }
+  };
 
   // ---- Manage Projects ----
   const [renameProjectId, setRenameProjectId] = useState<string>("");
@@ -370,68 +439,6 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     }
   };
 
-  // ---- NVD API Key ----
-  const [nvdKeyInput, setNvdKeyInput] = useState("");
-  const [nvdMaskedKey, setNvdMaskedKey] = useState("");
-  const [nvdHasKey, setNvdHasKey] = useState(false);
-  const [nvdBusy, setNvdBusy] = useState(false);
-  const [nvdMsg, setNvdMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
-  const [nvdEditing, setNvdEditing] = useState(false);
-  const [confirmDeleteNvdKey, setConfirmDeleteNvdKey] = useState(false);
-
-  useEffect(() => {
-    NvdApiKey.get()
-      .then(data => {
-        setNvdHasKey(data.has_key);
-        setNvdMaskedKey(data.masked_key);
-      })
-      .catch((e) => {
-        console.error(e instanceof Error ? e.message : String(e));
-      });
-  }, []);
-
-  const handleSaveNvdKey = async () => {
-    setNvdBusy(true);
-    setNvdMsg(null);
-    try {
-      const data = await NvdApiKey.set(nvdKeyInput);
-      if (!data.ok) {
-        setNvdMsg({ text: data.error || "Failed to save API key", type: "error" });
-      } else {
-        setNvdHasKey(data.has_key);
-        setNvdMaskedKey(data.masked_key);
-        setNvdKeyInput("");
-        setNvdEditing(false);
-        setNvdMsg({ text: data.has_key ? "API key saved." : "API key removed.", type: "success" });
-      }
-    } catch (e) {
-      setNvdMsg({ text: e instanceof Error ? e.message : String(e), type: "error" });
-    } finally {
-      setNvdBusy(false);
-    }
-  };
-
-  const handleRemoveNvdKey = async () => {
-    setConfirmDeleteNvdKey(false);
-    setNvdBusy(true);
-    setNvdMsg(null);
-    try {
-      const data = await NvdApiKey.remove();
-      if (data.ok) {
-        setNvdHasKey(data.has_key);
-        setNvdMaskedKey(data.masked_key);
-        setNvdKeyInput("");
-        setNvdMsg({ text: "API key removed.", type: "success" });
-      } else {
-        setNvdMsg({ text: data.error || "Failed to remove API key", type: "error" });
-      }
-    } catch (e) {
-      setNvdMsg({ text: e instanceof Error ? e.message : String(e), type: "error" });
-    } finally {
-      setNvdBusy(false);
-    }
-  };
-
   // ---- Styles ----
   const inputClass =
     "w-full rounded px-2 py-1.5 text-sm bg-slate-900/60 border border-slate-600 text-white focus:outline-none focus:border-cyan-400";
@@ -590,82 +597,66 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         {/* ======== NVD API Key ======== */}
         <section aria-labelledby="settings-heading-nvd">
           <div className={cardHeader}>
-            <FontAwesomeIcon icon={faKey} className="text-cyan-400" aria-hidden="true" />
+            <FontAwesomeIcon icon={faFolderOpen} className="text-cyan-400" aria-hidden="true" />
             <h2 id="settings-heading-nvd" className="text-xl font-bold text-white">NVD API Key</h2>
           </div>
-          <div className={cardBody + " space-y-4"}>
+          <div className={cardBody + " space-y-3"}>
             <p id="nvd-key-description" className="text-zinc-400 text-sm">
-              An NVD API key increases the rate limit for vulnerability enrichment from 5 to 50 requests per 30 seconds.
-              Get a free key at{" "}
+              An NVD API key increases the rate limit for vulnerability enrichment from 5 to 50 requests per 30 seconds
+              when using NVD REST API mode. Required only when NVD data source is set to <strong>NVD REST API</strong>.{' '}
               <a
+                className="text-cyan-400 hover:text-cyan-300 underline"
                 href="https://nvd.nist.gov/developers/request-an-api-key"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-cyan-400 hover:text-cyan-300 underline"
               >
                 nvd.nist.gov
-              </a>.
+              </a>
             </p>
-
-            {/* -- Feedback -- */}
             {nvdMsg && (
-              <MessageBanner
-                type={nvdMsg.type}
-                message={nvdMsg.text}
-                isVisible={true}
-                onClose={() => setNvdMsg(null)}
-              />
+              <div className={`text-sm rounded px-3 py-2 ${nvdMsg.type === "success" ? "bg-green-900/40 text-green-300" : "bg-red-900/40 text-red-300"}`}>
+                {nvdMsg.text}
+              </div>
             )}
-
             {nvdHasKey && !nvdEditing ? (
-              <>
-                {/* -- Key is set: show masked key + modify / remove buttons -- */}
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-zinc-300">NVD API key:</span>
-                  <code className="text-sm text-zinc-300 bg-slate-900 px-2 py-0.5 rounded font-mono">{nvdMaskedKey}</code>
-                </div>
-
-                <div className="flex items-center gap-3 pt-1">
-                  <button
-                    onClick={() => { setNvdEditing(true); setNvdKeyInput(""); setNvdMsg(null); }}
-                    className={btnPrimary}
-                  >
-                    <FontAwesomeIcon icon={faPenToSquare} className="mr-1" aria-hidden="true" />
-                    Modify
-                  </button>
-                  <button
-                    onClick={() => setConfirmDeleteNvdKey(true)}
-                    disabled={nvdBusy}
-                    className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
-                  >
-                    <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
-                    Remove
-                  </button>
-                </div>
-              </>
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-sm text-zinc-300">NVD API key:</span>
+                <code className="text-sm text-zinc-300 bg-slate-900 px-2 py-0.5 rounded font-mono">{nvdMaskedKey}</code>
+                <button
+                  type="button"
+                  onClick={() => { setNvdEditing(true); setNvdMsg(null); }}
+                  disabled={nvdBusy}
+                  className={btnPrimary + " text-xs py-1 px-3"}
+                >
+                  Change
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmRemoveNvdKey(true)}
+                  disabled={nvdBusy}
+                  className="px-3 py-1 rounded text-xs font-semibold bg-red-800 hover:bg-red-700 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  Remove
+                </button>
+              </div>
             ) : (
-              <>
-                {/* -- No key or editing: show input field -- */}
-                <div className="space-y-2">
-                  <label htmlFor="nvd-api-key-input" className="block text-sm text-zinc-300 font-semibold">
-                    {nvdEditing ? "New API Key" : "API Key"}
-                  </label>
-                  <input
-                    id="nvd-api-key-input"
-                    type="password"
-                    value={nvdKeyInput}
-                    onChange={e => setNvdKeyInput(e.target.value)}
-                    placeholder="Paste your NVD API key..."
-                    className={inputClass}
-                    disabled={nvdBusy}
-                    autoComplete="off"
-                    aria-required="true"
-                    aria-describedby="nvd-key-description"
-                  />
-                </div>
-
-                <div className="flex items-center gap-3 pt-1">
+              <div className="space-y-2">
+                <label htmlFor="nvd-api-key-input" className="block text-sm text-zinc-300 font-semibold">
+                  {nvdEditing ? "New API Key" : "API Key"}
+                </label>
+                <input
+                  id="nvd-api-key-input"
+                  type="password"
+                  value={nvdKeyInput}
+                  onChange={(e) => setNvdKeyInput(e.target.value)}
+                  placeholder="Paste your NVD API key..."
+                  className={inputClass}
+                  disabled={nvdBusy}
+                  aria-describedby="nvd-key-description"
+                />
+                <div className="flex items-center gap-2">
                   <button
+                    type="button"
                     onClick={handleSaveNvdKey}
                     disabled={nvdBusy || !nvdKeyInput.trim()}
                     className={btnPrimary}
@@ -676,24 +667,26 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                     ) : (
                       <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
                     )}
-                    Save
+                    Save key
                   </button>
                   {nvdEditing && (
                     <button
+                      type="button"
                       onClick={() => { setNvdEditing(false); setNvdKeyInput(""); setNvdMsg(null); }}
-                      className="px-4 py-2 rounded-lg bg-slate-600 hover:bg-slate-500 text-white text-sm font-medium transition-colors duration-150"
+                      disabled={nvdBusy}
+                      className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold disabled:opacity-40 transition-colors"
                     >
-                      <FontAwesomeIcon icon={faXmark} className="mr-1" aria-hidden="true" />
                       Cancel
                     </button>
                   )}
                 </div>
-              </>
+              </div>
             )}
           </div>
         </section>
-        </>
-        )}
+
+        </>)
+        }
 
         {/* ======== Projects Settings tab ======== */}
         {activeTab === "projects" && (
@@ -1278,14 +1271,14 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         onCancel={() => setConfirmDeleteVariant(false)}
       />
       <ConfirmationModal
-        isOpen={confirmDeleteNvdKey}
+        isOpen={confirmRemoveNvdKey}
         title="Remove NVD API Key"
-        message="Are you sure you want to remove the NVD API key? Vulnerability enrichment will fall back to the lower rate limit."
-        confirmText="Yes, remove"
+        message="Are you sure you want to remove the NVD API key? Vulnerability enrichment will fall back to the lower rate limit when using NVD REST API mode."
+        confirmText="Remove"
         cancelText="Cancel"
         showTitleIcon={true}
         onConfirm={handleRemoveNvdKey}
-        onCancel={() => setConfirmDeleteNvdKey(false)}
+        onCancel={() => setConfirmRemoveNvdKey(false)}
       />
     </div>
   );

@@ -177,12 +177,12 @@ class TestBulkNvdRefreshEndpoint:
         assert "valid CVE" in resp.get_json()["error"]
 
     def test_returns_400_when_count_exceeds_max(self, client):
-        """400 when more than _MAX_CVE_IDS valid IDs are submitted."""
+        """400 when more than _MAX_CVE_IDS valid IDs are submitted in API mode."""
         from src.routes.bulk_refresh import _MAX_CVE_IDS
         ids = [f"CVE-2024-{i:05d}" for i in range(_MAX_CVE_IDS + 1)]
         resp = client.post(
             "/api/vulnerabilities/bulk-nvd-refresh",
-            json={"cve_ids": ids},
+            json={"cve_ids": ids, "mode": "api"},
         )
         assert resp.status_code == 400
         assert "at most" in resp.get_json()["error"]
@@ -302,7 +302,7 @@ class TestBulkNvdRefreshBackground:
     """Tests for the _run() closure spawned by bulk_nvd_refresh."""
 
     def _capture_target(self, client, cve_ids):
-        """POST to the endpoint and return the captured _run target without starting it."""
+        """POST to the endpoint with mode=api and return the captured _run target without starting it."""
         captured = {}
 
         def fake_thread(target=None, **kwargs):
@@ -312,7 +312,7 @@ class TestBulkNvdRefreshBackground:
         with patch("src.routes.bulk_refresh.threading.Thread", side_effect=fake_thread):
             resp = client.post(
                 "/api/vulnerabilities/bulk-nvd-refresh",
-                json={"cve_ids": cve_ids},
+                json={"cve_ids": cve_ids, "mode": "api"},
             )
         assert resp.status_code == 202
         return captured["target"]
@@ -758,7 +758,7 @@ def _capture_refresh_target(client, endpoint, cve_ids):
         return MagicMock()
 
     with patch("src.routes.bulk_refresh.threading.Thread", side_effect=fake_thread):
-        resp = client.post(endpoint, json={"cve_ids": cve_ids})
+        resp = client.post(endpoint, json={"cve_ids": cve_ids, "mode": "api"})
     assert resp.status_code == 202
     return captured["target"]
 
@@ -1497,6 +1497,148 @@ class TestBulkGhsaRefreshFailedCounter:
 
         MockTracker.error.assert_called_once()
         MockTracker.complete.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Bulk NVD refresh — mode parameter (local vs api)
+# ---------------------------------------------------------------------------
+
+class TestBulkNvdRefreshMode:
+    """Tests for the ``mode`` body parameter added by the local-nvd-fkie feature."""
+
+    def test_default_mode_is_local(self, client, existing_cve_id):
+        """When no mode is supplied the endpoint accepts the request (local default)."""
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-nvd-refresh",
+                json={"cve_ids": [existing_cve_id]},
+            )
+        assert resp.status_code == 202
+
+    def test_explicit_local_mode_accepted(self, client, existing_cve_id):
+        """mode='local' is accepted with 202."""
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-nvd-refresh",
+                json={"cve_ids": [existing_cve_id], "mode": "local"},
+            )
+        assert resp.status_code == 202
+
+    def test_explicit_api_mode_accepted(self, client, existing_cve_id):
+        """mode='api' is accepted with 202."""
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-nvd-refresh",
+                json={"cve_ids": [existing_cve_id], "mode": "api"},
+            )
+        assert resp.status_code == 202
+
+    def test_local_mode_background_uses_get_cve_json(self, client, existing_cve_id):
+        """_run() uses get_cve_json (local DB) when mode is 'local'."""
+        captured = {}
+
+        def fake_thread(target=None, **kwargs):
+            captured["target"] = target
+            return MagicMock()
+
+        with patch("src.routes.bulk_refresh.threading.Thread", side_effect=fake_thread):
+            client.post(
+                "/api/vulnerabilities/bulk-nvd-refresh",
+                json={"cve_ids": [existing_cve_id], "mode": "local"},
+            )
+
+        with patch("src.routes.bulk_refresh.get_cve_json") as mock_local, \
+             patch("src.routes.bulk_refresh.NVD_DB") as MockNVD, \
+             patch("src.routes.bulk_refresh._get_scc_engine"), \
+             patch("src.routes.bulk_refresh.db"), \
+             patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            mock_local.return_value = None
+            captured["target"]()
+
+        mock_local.assert_called_once_with(existing_cve_id)
+        MockNVD.return_value.api_get_cve.assert_not_called()
+
+    def test_api_mode_background_uses_nvd_db(self, client, existing_cve_id):
+        """_run() uses NVD_DB (REST API) when mode is 'api'."""
+        captured = {}
+
+        def fake_thread(target=None, **kwargs):
+            captured["target"] = target
+            return MagicMock()
+
+        with patch("src.routes.bulk_refresh.threading.Thread", side_effect=fake_thread):
+            client.post(
+                "/api/vulnerabilities/bulk-nvd-refresh",
+                json={"cve_ids": [existing_cve_id], "mode": "api"},
+            )
+
+        with patch("src.routes.bulk_refresh.get_cve_json") as mock_local, \
+             patch("src.routes.bulk_refresh.NVD_DB") as MockNVD, \
+             patch("src.routes.bulk_refresh.db"), \
+             patch("src.routes.bulk_refresh.time.sleep"), \
+             patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            MockNVD.return_value.api_get_cve.return_value = (404, {})
+            captured["target"]()
+
+        MockNVD.return_value.api_get_cve.assert_called_once_with(existing_cve_id, max_retries=2)
+        mock_local.assert_not_called()
+
+    def test_local_mode_background_no_sleep(self, client):
+        """_run() does NOT sleep between CVEs when mode is 'local'."""
+        cve_ids = ["CVE-2024-00001", "CVE-2024-00002"]
+        captured = {}
+
+        def fake_thread(target=None, **kwargs):
+            captured["target"] = target
+            return MagicMock()
+
+        with patch("src.routes.bulk_refresh.threading.Thread", side_effect=fake_thread):
+            client.post(
+                "/api/vulnerabilities/bulk-nvd-refresh",
+                json={"cve_ids": cve_ids, "mode": "local"},
+            )
+
+        with patch("src.routes.bulk_refresh.get_cve_json", return_value=None), \
+             patch("src.routes.bulk_refresh._get_scc_engine"), \
+             patch("src.routes.bulk_refresh.db"), \
+             patch("src.routes.bulk_refresh.time.sleep") as mock_sleep, \
+             patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            captured["target"]()
+
+        mock_sleep.assert_not_called()
+
+    def test_api_mode_background_sleeps_between_cves(self, client, monkeypatch):
+        """_run() sleeps between CVEs when mode is 'api'."""
+        monkeypatch.delenv("NVD_API_KEY", raising=False)
+        cve_ids = ["CVE-2024-00001", "CVE-2024-00002"]
+        captured = {}
+
+        def fake_thread(target=None, **kwargs):
+            captured["target"] = target
+            return MagicMock()
+
+        with patch("src.routes.bulk_refresh.threading.Thread", side_effect=fake_thread):
+            client.post(
+                "/api/vulnerabilities/bulk-nvd-refresh",
+                json={"cve_ids": cve_ids, "mode": "api"},
+            )
+
+        with patch("src.routes.bulk_refresh.NVD_DB") as MockNVD, \
+             patch("src.routes.bulk_refresh.db"), \
+             patch("src.routes.bulk_refresh.time.sleep") as mock_sleep, \
+             patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            MockNVD.return_value.api_get_cve.return_value = (404, {})
+            captured["target"]()
+
+        # One sleep between two CVEs, none after the last
+        mock_sleep.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

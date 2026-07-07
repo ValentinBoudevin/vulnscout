@@ -527,7 +527,7 @@ class TestNvdScanWithToolAndSbom:
 
         with _make_sync_thread_patch():
             resp = client.post(
-                f"/api/variants/{ids['variant_id']}/nvd-scan"
+                f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api"
             )
         assert resp.status_code == 202
 
@@ -803,7 +803,7 @@ class TestNvdScanOuterException:
 
         with _make_sync_thread_patch():
             resp = client.post(
-                f"/api/variants/{ids['variant_id']}/nvd-scan"
+                f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api"
             )
         assert resp.status_code == 202
 

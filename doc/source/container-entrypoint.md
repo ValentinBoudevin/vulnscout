@@ -136,7 +136,7 @@ The following paths inside the container are relevant:
 | `/scan/src/views/templates/` | Built-in report templates |
 | `/cache/vulnscout/vulnscout.db` | SQLite database |
 | `/etc/vulnscout/config.env` | Persistent configuration file |
-| `/cache/vulnscout/sbom_cve_check_databases/` | Local sbom-cve-check advisory database clones (NVD-FKIE + CVEList), stored inside the cache volume next to `vulnscout.db`. Override the host path with `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` (then mounted at `/sbom_cve_check_databases`) |
+| `/cache/vulnscout/local_databases/` | Local sbom-cve-check advisory database clones (NVD-FKIE + CVEList), stored inside the cache volume next to `vulnscout.db`. Override the host path with `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` (then mounted at `/local_databases`) |
 | `/scan/status.txt` | Scan progress status (used by the web UI) |
 
 ---
@@ -178,7 +178,7 @@ docker exec vulnscout /scan/src/entrypoint.sh \
   --perform-sbom-cve-check-scan
 ```
 
-> By default the sbom-cve-check databases live in `/cache/vulnscout/sbom_cve_check_databases` (inside the cache volume, next to `vulnscout.db`); set `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` to use a shared host clone mounted at `/sbom_cve_check_databases` instead. With `SBOM_CVE_CHECK_AUTO_UPDATE=1` the databases are cloned automatically on first use and refreshed before every scan.
+> By default the sbom-cve-check databases live in `/cache/vulnscout/local_databases` (inside the cache volume, next to `vulnscout.db`); set `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` to use a shared host clone mounted at `/local_databases` instead. With `SBOM_CVE_CHECK_AUTO_UPDATE=1` the databases are cloned automatically on first use and refreshed before every scan.
 
 **Set persistent configuration:**
 ```bash
