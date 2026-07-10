@@ -150,6 +150,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setShowBanner(true);
     }, []);
     const [modalVuln, setModalVuln] = useState<Vulnerability | undefined>(undefined);
+    const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
+    const [modalVulnIds, setModalVulnIds] = useState<string[]>([]);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
@@ -387,6 +389,39 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const setSelectedVariants = useCallback((values: string[]) => {
         setDeselectedVariants(variantList.filter(v => !values.includes(v)));
     }, [variantList]);
+
+    const filteredAssessments = useMemo(() => assessments.filter((a) => {
+        if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
+            return false;
+        }
+        if (selectedJustifications.length && !(a.justification && selectedJustifications.includes(a.justification.replace(/_/g, " ")))) {
+            return false;
+        }
+        if (selectedSuppliers.length) {
+            const rowSuppliers = a.packages.map(p => extractSupplierName(splitPkgId(p).supplier));
+            if (!selectedSuppliers.some(s => rowSuppliers.includes(s))) return false;
+        }
+        {
+            const vids = (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []);
+            const rowVariants = vids.map((vid: string) => variantNames[vid]).filter(Boolean);
+            if (rowVariants.length && !selectedVariants.some(v => rowVariants.includes(v))) return false;
+        }
+        return true;
+    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, selectedVariants, variantNames]);
+
+    // Distinct vuln_ids of the currently displayed assessment rows, in display
+    // order, used to drive Previous/Next navigation in the modal.
+    const assessmentVulnIds = useMemo(() => {
+        const seen = new Set<string>();
+        const ids: string[] = [];
+        for (const a of filteredAssessments) {
+            if (!seen.has(a.vuln_id)) {
+                seen.add(a.vuln_id);
+                ids.push(a.vuln_id);
+            }
+        }
+        return ids;
+    }, [filteredAssessments]);
 
     const resetFilters = () => {
         setSearch('');
@@ -715,7 +750,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setEditSubmitting(false);
     }, [editingRow, variantId, projectId, onAssessmentChanged, showMessage]);
 
-    const handleVulnClick = useCallback(async (vulnId: string) => {
+    const fetchVulnForModal = useCallback(async (vulnId: string): Promise<Vulnerability | undefined> => {
         try {
             const [vulnRes, assessRes] = await Promise.all([
                 fetch(`${import.meta.env.VITE_API_URL}/api/vulnerabilities/${encodeURIComponent(vulnId)}`, { mode: 'cors' }),
@@ -724,7 +759,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             if (!vulnRes.ok) throw new Error(`HTTP ${vulnRes.status}`);
             const vulnData = await vulnRes.json();
             const vuln = asVulnerability(vulnData);
-            if (Array.isArray(vuln)) return;
+            if (Array.isArray(vuln)) return undefined;
 
             if (assessRes.ok) {
                 const assessData = await assessRes.json();
@@ -732,11 +767,40 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     .flatMap(asAssessment)
                     .filter((a) => a.origin !== 'ai');
             }
-            setModalVuln(vuln);
+            return vuln;
         } catch (err) {
             console.error("Failed to load vulnerability:", err);
+            return undefined;
         }
     }, []);
+
+    const handleVulnClick = useCallback(async (vulnId: string) => {
+        const vuln = await fetchVulnForModal(vulnId);
+        if (!vuln) return;
+        setModalVuln(vuln);
+        setModalVulnIndex(undefined);
+        setModalVulnIds([]);
+    }, [fetchVulnForModal]);
+
+    // Opens the modal from the Assessments tab with navigation context so the
+    // modal renders Previous/Next buttons across the displayed vulnerabilities.
+    const handleAssessmentVulnClick = useCallback(async (vulnId: string) => {
+        const vuln = await fetchVulnForModal(vulnId);
+        if (!vuln) return;
+        const index = assessmentVulnIds.indexOf(vulnId);
+        setModalVuln(vuln);
+        setModalVulnIds(assessmentVulnIds);
+        setModalVulnIndex(index >= 0 ? index : undefined);
+    }, [fetchVulnForModal, assessmentVulnIds]);
+
+    const handleModalNavigation = useCallback(async (newIndex: number) => {
+        if (newIndex < 0 || newIndex >= modalVulnIds.length) return;
+        const vuln = await fetchVulnForModal(modalVulnIds[newIndex]);
+        if (!vuln) return;
+        setModalVuln(vuln);
+        setModalVulnIndex(newIndex);
+    }, [fetchVulnForModal, modalVulnIds]);
+
 
     const columns = useMemo(() => [
         columnHelper.accessor("vuln_id", {
@@ -746,7 +810,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             cell: info => (
                 <div
                     className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
-                    onClick={() => handleVulnClick(info.getValue())}
+                    onClick={() => handleAssessmentVulnClick(info.getValue())}
                     title="Click to view details"
                 >
                     <span className="font-mono text-sm">{info.getValue()}</span>
@@ -940,7 +1004,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
-    ], [handleVulnClick, variantNames]);
+    ], [handleAssessmentVulnClick, variantNames]);
 
     const aiActionsColumn = useMemo(() => columnHelper.display({
         id: 'ai-actions',
@@ -1152,7 +1216,6 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         return true;
     });
 
-    const filteredAssessments = filterReviewRows(assessments);
     const filteredAiAssessments = filterReviewRows(aiAssessments);
 
     /** Shared renderer for the "assessments" and "ai-assessments" tabs: both
@@ -1476,7 +1539,12 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     patchVuln={() => {}}
                     onClose={() => {
                         setModalVuln(undefined);
+                        setModalVulnIndex(undefined);
+                        setModalVulnIds([]);
                     }}
+                    vulnerabilities={modalVulnIndex !== undefined ? modalVulnIds.map(id => ({ id } as unknown as Vulnerability)) : undefined}
+                    currentIndex={modalVulnIndex}
+                    onNavigate={handleModalNavigation}
                 />
             )}
 
