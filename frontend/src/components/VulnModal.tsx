@@ -1329,10 +1329,10 @@ type VariantScopedSnapshot = {
                 <div
                     ref={modalRef}
                     tabIndex={-1}
-                    className="relative rounded-lg shadow bg-gray-700 h-full overflow-y-auto">
+                    className="relative rounded-lg shadow bg-gray-700 h-full flex flex-col overflow-hidden">
 
                     {/* Modal header */}
-                    <div className="flex items-center justify-between p-4 md:p-5 border-b rounded-t dark:border-gray-600">
+                    <div className="shrink-0 flex items-center justify-between p-4 md:p-5 border-b rounded-t dark:border-gray-600">
                         <h3 id="vulnerability_modal_title" className="text-xl font-semibold text-gray-900 dark:text-white">
                             {vuln.id}
                         </h3>
@@ -1461,6 +1461,9 @@ type VariantScopedSnapshot = {
                             </button>
                         </div>
                     </div>
+
+                    {/* Scrollable content region (only the body scrolls) */}
+                    <div className="flex-1 overflow-y-auto min-h-0">
 
                     {/* Message Banner - Sticky at top */}
                     {showBanner && (
@@ -1904,8 +1907,9 @@ type VariantScopedSnapshot = {
                         </div>
                     </div>
 
-                                        {/* Modal footer */}
-                    <div className="flex items-center justify-between p-4 md:p-5 border-t border-gray-200 rounded-b dark:border-gray-600">
+                    </div>
+                    {/* Modal footer */}
+                    <div className="shrink-0 flex items-center justify-between p-4 md:p-5 border-t border-gray-200 rounded-b dark:border-gray-600">
                         {vulnerabilities && currentIndex !== undefined ? (
                             <div className="flex items-center space-x-2">
                                 <button
