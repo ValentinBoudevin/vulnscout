@@ -505,6 +505,7 @@ function TableGeneric<DataType> ({
                 value={itemsPerPage}
                 onChange={(e) => {
                     setPagination({ pageIndex: 0, pageSize: Number(e.target.value) })
+                    updateSelected({})
                 }}
                 className="bg-slate-700 text-white border border-slate-500 rounded px-2 py-1"
                 >
