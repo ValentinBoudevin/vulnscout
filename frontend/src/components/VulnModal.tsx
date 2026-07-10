@@ -1325,7 +1325,14 @@ type VariantScopedSnapshot = {
                     </div>
                 </div>
             )}
-            <div className="relative p-16 h-full">
+            <div
+                className="relative p-16 h-full"
+                onMouseDown={(event) => {
+                    if (event.target === event.currentTarget) {
+                        handleClose();
+                    }
+                }}
+            >
                 <div
                     ref={modalRef}
                     tabIndex={-1}
