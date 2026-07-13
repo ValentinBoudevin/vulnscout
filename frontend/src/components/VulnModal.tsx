@@ -1334,7 +1334,7 @@ type VariantScopedSnapshot = {
                                                     disabled={refreshing}
                                                     className="accent-cyan-500"
                                                 />
-                                                <span className="text-gray-300">Local</span>
+                                                <span className="text-gray-300">Git repository</span>
                                             </label>
                                             <label className="flex items-center gap-1 cursor-pointer">
                                                 <input

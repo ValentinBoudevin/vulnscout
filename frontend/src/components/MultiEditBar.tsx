@@ -585,7 +585,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                                         onChange={() => setNvdRefreshMode("local")}
                                                         className="accent-cyan-500"
                                                     />
-                                                    <span className="text-neutral-200">Local</span>
+                                                    <span className="text-neutral-200">Git repository</span>
                                                 </label>
                                                 <label className="flex items-center gap-1.5 cursor-pointer text-xs">
                                                     <input

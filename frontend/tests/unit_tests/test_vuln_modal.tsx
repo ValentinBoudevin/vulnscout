@@ -2686,7 +2686,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('renders NVD source selector defaulting to Local mode', () => {
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-        const localRadio = screen.getByRole('radio', { name: 'Local' });
+        const localRadio = screen.getByRole('radio', { name: 'Git repository' });
         const apiRadio = screen.getByRole('radio', { name: 'API' });
         expect(localRadio).toBeChecked();
         expect(apiRadio).not.toBeChecked();
@@ -2726,8 +2726,8 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         const user = userEvent.setup();
 
         await user.click(screen.getByRole('radio', { name: 'API' }));
-        await user.click(screen.getByRole('radio', { name: 'Local' }));
-        expect(screen.getByRole('radio', { name: 'Local' })).toBeChecked();
+        await user.click(screen.getByRole('radio', { name: 'Git repository' }));
+        expect(screen.getByRole('radio', { name: 'Git repository' })).toBeChecked();
 
         await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
 
