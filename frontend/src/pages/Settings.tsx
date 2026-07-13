@@ -20,6 +20,7 @@ import type { Variant } from "../handlers/variant";
 import Config from "../handlers/config";
 import NvdApiKey from "../handlers/nvdApiKey";
 import ConfirmationModal from "../components/ConfirmationModal";
+import MessageBanner from "../components/MessageBanner";
 
 type Props = {
   onDataChanged?: (message?: string) => void;
