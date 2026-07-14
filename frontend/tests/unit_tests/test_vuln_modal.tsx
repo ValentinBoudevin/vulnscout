@@ -630,6 +630,50 @@ describe('Vulnerability Modal', () => {
         expect(closeCb).not.toHaveBeenCalled();
     });
 
+    test('clicking the padding area around the modal box closes it without unsaved changes', async () => {
+        // The padding wrapper (between the outer backdrop and the modal content
+        // box) also closes the modal when clicked directly, matching the outer
+        // backdrop's behavior.
+        const closeCb = jest.fn();
+        const { container } = render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const paddingWrapper = container.querySelector('.relative.p-16.h-full');
+        expect(paddingWrapper).not.toBeNull();
+
+        const user = userEvent.setup();
+        await user.click(paddingWrapper as HTMLElement);
+
+        expect(closeCb).toHaveBeenCalledTimes(1);
+    });
+
+    test('clicking the padding area around the modal box shows confirmation when unsaved changes exist', async () => {
+        const closeCb = jest.fn();
+        const { container } = render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const optimistic = screen.getByPlaceholderText(/shortest estimate/i);
+        await user.type(optimistic, '5h');
+
+        const paddingWrapper = container.querySelector('.relative.p-16.h-full');
+        await user.click(paddingWrapper as HTMLElement);
+
+        expect(await screen.findByText(/are you sure you want to close without saving/i)).toBeInTheDocument();
+        expect(closeCb).not.toHaveBeenCalled();
+    });
+
+    test('clicking inside the modal content does not close the modal', async () => {
+        // Guards the event.target === event.currentTarget check on both the
+        // backdrop and the padding wrapper: clicking the title (inside the
+        // modal box) must not bubble into a close.
+        const closeCb = jest.fn();
+        render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        await user.click(screen.getByText(vulnerability.id));
+
+        expect(closeCb).not.toHaveBeenCalled();
+    });
+
     test('ESC key shows confirmation modal with unsaved changes', async () => {
         const closeCb = jest.fn();
         render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
