@@ -47,6 +47,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     const [euvdCancelling, setEuvdCancelling] = useState<boolean>(false)
     const [refreshMenuOpen, setRefreshMenuOpen] = useState<boolean>(false)
     const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<'nvd' | 'epss' | 'ghsa' | 'euvd'>>(new Set(['nvd', 'epss', 'ghsa', 'euvd']))
+    const [nvdRefreshMode, setNvdRefreshMode] = useState<"local" | "api">("local")
     const refreshMenuRef = useRef<HTMLDivElement>(null)
     const loadingLabel = selectedVulns.length === 1 ? 'Editing selected CVE...' : 'Editing selected CVEs...'
     const hasSelection = selectedVulns.length >= 1
@@ -135,7 +136,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         const promises: Promise<void>[] = [];
         if (selectedRefreshTypes.has('nvd') && !nvdInProgress && hasCveIds) {
             promises.push(
-                BulkNvdRefreshHandler.trigger(selectedCveIds).then(res => {
+                BulkNvdRefreshHandler.trigger(selectedCveIds, nvdRefreshMode).then(res => {
                     if (res) triggerBanner(`NVD refresh started for ${res.total} CVE(s)`, 'success', 'nvd', true);
                     else triggerBanner('Failed to start NVD refresh', 'error', 'nvd');
                 }).catch(() => triggerBanner('Failed to start NVD refresh', 'error', 'nvd'))
@@ -569,6 +570,37 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                             >{nvdCancelling ? 'Cancelling…' : 'Cancel'}</button>
                                         )}
                                     </div>
+
+                                    {/* NVD data source radio (shown when NVD is selected and not in progress) */}
+                                    {selectedRefreshTypes.has('nvd') && !nvdInProgress && (
+                                        <div className="px-1 py-1.5 border-t border-sky-800/40 mt-1">
+                                            <div className="text-xs text-sky-300 mb-1">NVD data source:</div>
+                                            <div className="flex gap-3">
+                                                <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+                                                    <input
+                                                        type="radio"
+                                                        name="nvd-refresh-mode"
+                                                        value="local"
+                                                        checked={nvdRefreshMode === "local"}
+                                                        onChange={() => setNvdRefreshMode("local")}
+                                                        className="accent-cyan-500"
+                                                    />
+                                                    <span className="text-neutral-200">Git repository</span>
+                                                </label>
+                                                <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+                                                    <input
+                                                        type="radio"
+                                                        name="nvd-refresh-mode"
+                                                        value="api"
+                                                        checked={nvdRefreshMode === "api"}
+                                                        onChange={() => setNvdRefreshMode("api")}
+                                                        className="accent-cyan-500"
+                                                    />
+                                                    <span className="text-neutral-200">NVD REST API</span>
+                                                </label>
+                                            </div>
+                                        </div>
+                                    )}
 
                                     {/* EPSS row */}
                                     <div className="flex items-center justify-between py-1 px-1 rounded hover:bg-sky-900/40">

@@ -457,13 +457,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     useRefreshProgressEffect(ghsaProgress, 'GHSA', prevGhsaInProgress, prevGhsaPhase, prevGhsaStartedAt, setGhsaBanner, onRefreshComplete, 'advisories');
     useRefreshProgressEffect(euvdProgress, 'EUVD', prevEuvdInProgress, prevEuvdPhase, prevEuvdStartedAt, setEuvdBanner, onRefreshComplete, 'CVEs');
 
-    const fetchAllProgress = useCallback(async () => {
-        const shouldPollGhsa = hasAnyGhsaVuln || Boolean(ghsaProgress?.in_progress);
+    const fetchAllProgress = useCallback(async (forceAll = false) => {
+        const shouldPollGhsa = forceAll || hasAnyGhsaVuln || Boolean(ghsaProgress?.in_progress);
+        const shouldPollEpss = forceAll || Boolean(epssProgress?.in_progress);
+        const shouldPollEuvd = forceAll || Boolean(euvdProgress?.in_progress);
         const [nvd, epss, ghsa, euvd] = await Promise.allSettled([
             NVDProgressHandler.getProgress(),
-            EPSSProgressHandler.getProgress(),
+            shouldPollEpss ? EPSSProgressHandler.getProgress() : Promise.resolve(null),
             shouldPollGhsa ? GHSAProgressHandler.getProgress() : Promise.resolve(null),
-            EUVDProgressHandler.getProgress(),
+            shouldPollEuvd ? EUVDProgressHandler.getProgress() : Promise.resolve(null),
         ]);
         if (nvd.status === 'fulfilled') setNvdProgress(nvd.value);
         else console.error('Failed to fetch NVD refresh progress:', nvd.reason);
@@ -473,13 +475,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         else console.error('Failed to fetch GHSA refresh progress:', ghsa.reason);
         if (euvd.status === 'fulfilled') setEuvdProgress(euvd.value);
         else console.error('Failed to fetch EUVD refresh progress:', euvd.reason);
-    }, [hasAnyGhsaVuln, ghsaProgress?.in_progress]);
+    }, [hasAnyGhsaVuln, ghsaProgress?.in_progress, epssProgress?.in_progress, euvdProgress?.in_progress]);
 
     // Fetch once on mount so we can recover progress if a refresh was already running.
     useEffect(() => {
         if (!hasFetchedProgressOnce.current) {
             hasFetchedProgressOnce.current = true;
-            void fetchAllProgress();
+            void fetchAllProgress(true);
         }
     }, [fetchAllProgress]);
 
@@ -516,7 +518,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         // without idle background polling. This relies on an explicit flag
         // rather than parsing the user-facing banner text.
         if (source && refreshActivity) {
-            void fetchAllProgress();
+            void fetchAllProgress(true);
         }
     };
 

@@ -12,14 +12,14 @@ export interface BulkRefreshResponse {
 }
 
 export class BulkNvdRefreshHandler {
-    static async trigger(cveIds: string[]): Promise<BulkRefreshResponse | null> {
+    static async trigger(cveIds: string[], mode: "local" | "api" = "local"): Promise<BulkRefreshResponse | null> {
         const url = `${import.meta.env.VITE_API_URL}/api/vulnerabilities/bulk-nvd-refresh`;
         try {
             const response = await fetch(url, {
                 method: "POST",
                 mode: "cors",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ cve_ids: cveIds }),
+                body: JSON.stringify({ cve_ids: cveIds, mode }),
             });
             if (!response.ok) return null;
             return response.json().catch(() => null);

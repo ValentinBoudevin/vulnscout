@@ -23,6 +23,8 @@ from flask.typing import ResponseReturnValue
 from ..models import Vulnerability
 from ..extensions import db
 from ..controllers.nvd_db import NVD_DB
+from ..controllers.scc_engine import get_cve_json, get_engine as _get_scc_engine
+from ..controllers.nvd_extract import extract_cve_details
 from ..controllers.nvd_apply import apply_nvd_update, apply_cvss_update
 from ..controllers.epss_db import EPSS_DB
 from ..controllers.nvd_progress import NVDProgressTracker
@@ -48,7 +50,7 @@ _EUVD_COMMIT_EVERY = 200
 
 
 def _nvd_sleep_interval() -> float:
-    """Return seconds to sleep between NVD API calls based on key presence.
+    """Seconds to sleep between NVD REST API calls based on key presence.
 
     Without an API key: 5 req / 30 s → 6 s per call.
     With an API key:   50 req / 30 s → 0.6 s per call.
@@ -80,7 +82,11 @@ def init_app(app: Flask) -> None:
     def bulk_nvd_refresh() -> ResponseReturnValue:
         """Trigger a bulk NVD refresh for a list of CVE IDs.
 
-        Body: ``{"cve_ids": ["CVE-A", "CVE-B", ...]}``
+        Body: ``{"cve_ids": ["CVE-A", ...], "mode": "local"|"api"}``
+
+        ``mode`` defaults to ``"local"`` (uses the local NVD-FKIE database;
+        no rate limits, no API key needed).  Pass ``"api"`` to use the NVD
+        REST API instead (respects rate limits and NVD_API_KEY if set).
 
         Returns 202 immediately and runs the refresh in a background thread.
         Returns 409 if a refresh is already in progress.
@@ -95,8 +101,14 @@ def init_app(app: Flask) -> None:
         cve_ids = [c for c in cve_ids if _CVE_RE.match(c)]
         if not cve_ids:
             return jsonify({"error": "cve_ids must contain valid CVE identifiers (e.g. CVE-2024-1234)"}), 400
-        if len(cve_ids) > _MAX_CVE_IDS:
-            return jsonify({"error": f"cve_ids must contain at most {_MAX_CVE_IDS} entries"}), 400
+
+        mode = body.get("mode", "local")  # "local" (default) or "api"
+        # The cap exists to avoid burning NVD API rate-limit quota. Local mode
+        # hits no external service, so the limit does not apply there.
+        if mode == "api" and len(cve_ids) > _MAX_CVE_IDS:
+            return jsonify(
+                {"error": f"cve_ids must contain at most {_MAX_CVE_IDS} entries when using NVD API mode"}
+            ), 400
 
         total = len(cve_ids)
         if not NVDProgressTracker.start_if_idle("bulk_nvd_refresh"):
@@ -105,11 +117,23 @@ def init_app(app: Flask) -> None:
 
         def _run() -> None:
             with app.app_context():
-                sleep_between = _nvd_sleep_interval()
-                nvd_api_key = os.getenv("NVD_API_KEY")
-                nvd = NVD_DB(nvd_api_key=nvd_api_key)
                 done = 0
                 try:
+                    if mode == "api":
+                        sleep_between = _nvd_sleep_interval()
+                        nvd_api_key = os.getenv("NVD_API_KEY")
+                        nvd = NVD_DB(nvd_api_key=nvd_api_key)
+                    else:
+                        # Pre-warm the engine once (fetches latest advisories if
+                        # auto-update is on) so individual CVE lookups in the loop
+                        # below reuse the cached engine without re-fetching.
+                        try:
+                            _get_scc_engine()
+                        except Exception as exc:
+                            NVDProgressTracker.error(
+                                f"Failed to load local NVD database: {exc}"
+                            )
+                            return
                     for cve_id in cve_ids:
                         if NVDProgressTracker.is_cancelled():
                             _safe_commit("bulk NVD refresh cancel")
@@ -118,20 +142,35 @@ def init_app(app: Flask) -> None:
 
                         try:
                             now = datetime.datetime.now(datetime.timezone.utc)
-                            status_code, data = nvd.api_get_cve(cve_id, max_retries=2)
-                            if status_code == 200 and data.get("vulnerabilities"):
-                                cve = data["vulnerabilities"][0]["cve"]
-                                details = NVD_DB.extract_cve_details(cve)
-                                rec = db.session.get(Vulnerability, cve_id)
-                                if rec is not None:
-                                    apply_nvd_update(rec, details, now)
-                                    apply_cvss_update(rec, details, db)
+                            if mode == "api":
+                                status_code, data_api = nvd.api_get_cve(cve_id, max_retries=2)
+                                if status_code == 200 and data_api.get("vulnerabilities"):
+                                    cve_obj = data_api["vulnerabilities"][0]["cve"]
+                                    details = NVD_DB.extract_cve_details(cve_obj)
+                                    rec = db.session.get(Vulnerability, cve_id)
+                                    if rec is not None:
+                                        apply_nvd_update(rec, details, now)
+                                        apply_cvss_update(rec, details, db)
+                                else:
+                                    print(
+                                        f"[bulk NVD refresh] {cve_id}: status={status_code}, "
+                                        "skipping",
+                                        flush=True,
+                                    )
                             else:
-                                print(
-                                    f"[bulk NVD refresh] {cve_id}: status={status_code}, "
-                                    "skipping",
-                                    flush=True,
-                                )
+                                cve_obj = get_cve_json(cve_id)
+                                if cve_obj is not None:
+                                    details = extract_cve_details(cve_obj)
+                                    rec = db.session.get(Vulnerability, cve_id)
+                                    if rec is not None:
+                                        apply_nvd_update(rec, details, now)
+                                        apply_cvss_update(rec, details, db)
+                                else:
+                                    print(
+                                        f"[bulk NVD refresh] {cve_id}: not found in local "
+                                        "NVD database, skipping",
+                                        flush=True,
+                                    )
                         except Exception as exc:
                             print(f"[bulk NVD refresh] error for {cve_id}: {exc}", flush=True)
 
@@ -142,7 +181,7 @@ def init_app(app: Flask) -> None:
                         )
                         if done % _NVD_COMMIT_EVERY == 0:
                             _safe_commit("bulk NVD refresh")
-                        if done < total:
+                        if mode == "api" and done < total:
                             time.sleep(sleep_between)
 
                     _safe_commit("bulk NVD refresh final")

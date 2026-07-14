@@ -2640,7 +2640,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
 
         await waitFor(() => {
-            expect(screen.getByText(/NVD API unavailable.*EPSS API unavailable/i)).toBeInTheDocument();
+            expect(screen.getByText(/NVD.*unavailable.*EPSS API unavailable/i)).toBeInTheDocument();
         });
     });
 
@@ -2684,6 +2684,116 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         });
     });
 
+    test('renders NVD source selector defaulting to Local mode', () => {
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const localRadio = screen.getByRole('radio', { name: 'Git repository' });
+        const apiRadio = screen.getByRole('radio', { name: 'API' });
+        expect(localRadio).toBeChecked();
+        expect(apiRadio).not.toBeChecked();
+    });
+
+    test('switching NVD source to API sends mode "api" to the nvd-refresh endpoint', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        const apiRadio = screen.getByRole('radio', { name: 'API' });
+        await user.click(apiRadio);
+        expect(apiRadio).toBeChecked();
+
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+
+        await waitFor(() => {
+            const nvdCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/nvd-refresh'));
+            expect(nvdCall).toBeDefined();
+            expect(JSON.parse(String(nvdCall![1]!.body))).toEqual({ mode: 'api' });
+        });
+    });
+
+    test('switching back to Local mode sends mode "local" to the nvd-refresh endpoint', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByRole('radio', { name: 'API' }));
+        await user.click(screen.getByRole('radio', { name: 'Git repository' }));
+        expect(screen.getByRole('radio', { name: 'Git repository' })).toBeChecked();
+
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+
+        await waitFor(() => {
+            const nvdCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/nvd-refresh'));
+            expect(nvdCall).toBeDefined();
+            expect(JSON.parse(String(nvdCall![1]!.body))).toEqual({ mode: 'local' });
+        });
+    });
+
+    test('shows API-key-rejected message when NVD returns unauthorized', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(
+            JSON.stringify({ error: 'unauthorized', error_code: 'unauthorized' }),
+            { status: 401 }
+        ); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByRole('radio', { name: 'API' }));
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/NVD API key rejected/i)).toBeInTheDocument();
+        });
+    });
+
+    test('shows API-mode hint when NVD is unavailable in API mode', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByRole('radio', { name: 'API' }));
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/NVD API unavailable.*switch to Local/i)).toBeInTheDocument();
+        });
+    });
+
+    test('shows local-mode hint when NVD data is unavailable in Local mode', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/NVD data unavailable.*sbom-cve-check/i)).toBeInTheDocument();
+        });
+    });
+
     test('clears success cue and error when navigating to a different vulnerability', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponse(JSON.stringify([])); // all fetches return empty
@@ -2695,7 +2805,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         rerender(<VulnModal vuln={vuln2} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(screen.queryByText('Updated')).not.toBeInTheDocument();
-        expect(screen.queryByText(/NVD API unavailable/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/NVD.*unavailable/i)).not.toBeInTheDocument();
     });
 
     test('builds variantPackageMap and disables packages absent from the selected variant', async () => {
@@ -2996,7 +3106,7 @@ describe('Refresh button', () => {
         await user.click(screen.getByTitle(/Refresh from NVD & EPSS/i));
 
         await waitFor(() => {
-            expect(screen.getByText(/NVD API unavailable/i)).toBeInTheDocument();
+            expect(screen.getByText(/NVD.*unavailable/i)).toBeInTheDocument();
         });
         expect(patchVuln).not.toHaveBeenCalled();
     });

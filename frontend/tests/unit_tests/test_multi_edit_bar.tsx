@@ -353,7 +353,7 @@ describe('MultiEditBar', () => {
         });
 
         expect(mockHideBanner).toHaveBeenCalledTimes(1);
-        expect(mockBulkNvdTrigger).toHaveBeenCalledWith(['CVE-2024-0001', 'CVE-2024-0002']);
+        expect(mockBulkNvdTrigger).toHaveBeenCalledWith(['CVE-2024-0001', 'CVE-2024-0002'], 'local');
         expect(mockBulkEpssTrigger).toHaveBeenCalledWith(['CVE-2024-0001', 'CVE-2024-0002']);
         expect(mockBulkEuvdTrigger).toHaveBeenCalledWith(['CVE-2024-0001', 'CVE-2024-0002']);
     });
@@ -415,7 +415,7 @@ describe('MultiEditBar', () => {
         });
 
         await waitFor(() => {
-            expect(mockBulkNvdTrigger).toHaveBeenCalledWith(['CVE-2024-0001', 'CVE-2024-0002']);
+            expect(mockBulkNvdTrigger).toHaveBeenCalledWith(['CVE-2024-0001', 'CVE-2024-0002'], 'local');
         });
         expect(mockBulkEpssTrigger).not.toHaveBeenCalled();
     });

@@ -289,8 +289,15 @@ type VariantScopedSnapshot = {
         const signal = controller.signal;
         setVariantPackageMapLoaded(false);
         if (availableVariants.length === 0) {
-            setVariantPackageMap({});
-            setVariantPackageMapLoaded(true);
+            // Only mark as loaded once we know variants have been resolved.
+            // If variants are still loading (variantsLoadedForVulnId !== vuln.id),
+            // keep variantPackageMapLoaded = false to avoid a premature
+            // "all packages deprecated" flash when the map is empty but
+            // variants haven't arrived yet.
+            if (variantsLoadedForVulnId === vuln.id) {
+                setVariantPackageMap({});
+                setVariantPackageMapLoaded(true);
+            }
             return;
         }
         if (variantsLoadedForVulnId !== vuln.id) {
@@ -343,6 +350,7 @@ type VariantScopedSnapshot = {
     const [refreshing, setRefreshing] = useState(false);
     const [refreshError, setRefreshError] = useState<string | null>(null);
     const [refreshedList, setRefreshedList] = useState<string[]>([]);
+    const [nvdMode, setNvdMode] = useState<"local" | "api">("local");
 
     const modalRef = useRef<HTMLDivElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -458,7 +466,7 @@ type VariantScopedSnapshot = {
                 }
             } else {
                 const [nvdResult, epssResult] = await Promise.allSettled([
-                    NvdRefreshHandler.triggerSingleRefresh(vuln.id),
+                    NvdRefreshHandler.triggerSingleRefresh(vuln.id, nvdMode),
                     EpssRefreshHandler.triggerSingleRefresh(vuln.id),
                 ]);
 
@@ -470,8 +478,12 @@ type VariantScopedSnapshot = {
                         errors.push(nvdValue.apiKeyConfigured
                             ? "NVD rate-limited. Your NVD API key may be exhausted, please try again later."
                             : "NVD rate-limited. Set NVD API key in settings to reduce throttling.");
+                    } else if (nvdValue?.kind === "error" && nvdValue.code === "unauthorized") {
+                        errors.push("NVD API key rejected. Check your key in Settings.");
                     } else {
-                        errors.push("NVD API unavailable");
+                        errors.push(nvdMode === "api"
+                            ? "NVD API unavailable. Try again or switch to Local mode."
+                            : "NVD data unavailable. Try again or run an sbom-cve-check scan.");
                     }
                 }
                 if (epssResult.status === "rejected" || epssResult.value === null) {
@@ -514,7 +526,7 @@ type VariantScopedSnapshot = {
         } finally {
             setRefreshing(false);
         }
-    }, [vuln, patchVuln]);
+    }, [vuln, patchVuln, nvdMode]);
 
     const handleEditAssessment = (assessmentId: string, group: AssessmentGroup) => {
         setEditingAssessmentId(assessmentId);
@@ -1308,7 +1320,36 @@ type VariantScopedSnapshot = {
                             </div>
 
                             {!readOnly && (
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    {!isGhsaVuln && (
+                                        <span className="flex items-center gap-1.5 text-xs text-gray-400">
+                                            NVD source:
+                                            <label className="flex items-center gap-1 cursor-pointer">
+                                                <input
+                                                    type="radio"
+                                                    name={`nvd-mode-${vuln.id}`}
+                                                    value="local"
+                                                    checked={nvdMode === "local"}
+                                                    onChange={() => setNvdMode("local")}
+                                                    disabled={refreshing}
+                                                    className="accent-cyan-500"
+                                                />
+                                                <span className="text-gray-300">Git repository</span>
+                                            </label>
+                                            <label className="flex items-center gap-1 cursor-pointer">
+                                                <input
+                                                    type="radio"
+                                                    name={`nvd-mode-${vuln.id}`}
+                                                    value="api"
+                                                    checked={nvdMode === "api"}
+                                                    onChange={() => setNvdMode("api")}
+                                                    disabled={refreshing}
+                                                    className="accent-cyan-500"
+                                                />
+                                                <span className="text-gray-300">API</span>
+                                            </label>
+                                        </span>
+                                    )}
                                     <button
                                         onClick={handleRefresh}
                                         disabled={refreshing}

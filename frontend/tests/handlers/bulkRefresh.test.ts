@@ -38,7 +38,7 @@ describe("BulkNvdRefreshHandler.trigger", () => {
             expect.objectContaining({
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ cve_ids: cveIds }),
+                body: JSON.stringify({ cve_ids: cveIds, mode: "local" }),
             }),
         );
     });
@@ -526,5 +526,41 @@ describe("BulkEuvdRefreshCancelHandler.trigger", () => {
         } as unknown as Response);
         const result = await BulkEuvdRefreshCancelHandler.trigger();
         expect(result).toBeNull();
+    });
+});
+
+describe("BulkNvdRefreshHandler.trigger — mode parameter", () => {
+    it("sends mode:local by default", async () => {
+        mockFetch.mockResolvedValueOnce(makeOkResponse({ status: "started", total: 1 }));
+        await BulkNvdRefreshHandler.trigger(["CVE-2024-0001"]);
+        const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string);
+        expect(body.mode).toBe("local");
+    });
+
+    it("sends mode:api when explicitly passed", async () => {
+        mockFetch.mockResolvedValueOnce(makeOkResponse({ status: "started", total: 1 }));
+        await BulkNvdRefreshHandler.trigger(["CVE-2024-0001"], "api");
+        const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string);
+        expect(body.mode).toBe("api");
+    });
+
+    it("sends mode:local when explicitly passed", async () => {
+        mockFetch.mockResolvedValueOnce(makeOkResponse({ status: "started", total: 1 }));
+        await BulkNvdRefreshHandler.trigger(["CVE-2024-0001"], "local");
+        const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string);
+        expect(body.mode).toBe("local");
+    });
+
+    it("includes cve_ids and mode together in the body", async () => {
+        mockFetch.mockResolvedValueOnce(makeOkResponse({ status: "started", total: 2 }));
+        const ids = ["CVE-2024-0001", "CVE-2024-0002"];
+        await BulkNvdRefreshHandler.trigger(ids, "api");
+        expect(mockFetch).toHaveBeenCalledWith(
+            expect.stringContaining("/api/vulnerabilities/bulk-nvd-refresh"),
+            expect.objectContaining({
+                method: "POST",
+                body: JSON.stringify({ cve_ids: ids, mode: "api" }),
+            }),
+        );
     });
 });
