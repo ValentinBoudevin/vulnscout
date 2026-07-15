@@ -667,9 +667,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     <div className="flex items-center justify-center h-full">
                     <input
                         type="checkbox"
-                        title={table.getIsAllRowsSelected() ? "Unselect all" : "Select all"}
-                        checked={table.getIsAllRowsSelected()}
-                        onChange={table.getToggleAllRowsSelectedHandler()}
+                        ref={el => {
+                            if (el) el.indeterminate = table.getIsSomePageRowsSelected();
+                        }}
+                        title={table.getIsAllPageRowsSelected() ? "Unselect all" : "Select all"}
+                        checked={table.getIsAllPageRowsSelected()}
+                        onChange={table.getToggleAllPageRowsSelectedHandler()}
                     />
                     </div>
                 ),
