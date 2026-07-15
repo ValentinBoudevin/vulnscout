@@ -386,3 +386,170 @@ class TestTemplatesRenderAssessmentsWithVariantId:
             mock_tpl.return_value.render.return_value = "rendered"
             result = templates_instance.render("test.jinja2")
         assert result == "rendered"
+
+
+# ---------------------------------------------------------------------------
+# TemplatesExtensions.escape_adoc — HTML sanitization
+# ---------------------------------------------------------------------------
+
+class TestEscapeAdoc:
+    """Tests for the escape_adoc Jinja filter.
+
+    Validates that:
+    - HTML tags are stripped to plain text.
+    - HTML entities are decoded to their character equivalents.
+    - Block-level HTML tags introduce newlines to preserve structure.
+    - AsciiDoc structural markup (block fences, headings) is still neutralised.
+    - Empty / None input returns an empty string without error.
+    - Plain text that contains no HTML is returned unchanged (modulo structural
+      neutralization when needed).
+    """
+
+    def test_none_returns_empty_string(self):
+        assert TemplatesExtensions.escape_adoc(None) == ""
+
+    def test_empty_string_returns_empty_string(self):
+        assert TemplatesExtensions.escape_adoc("") == ""
+
+    def test_plain_text_unchanged(self):
+        text = "A flaw was found in the foo library version 1.2.3."
+        assert TemplatesExtensions.escape_adoc(text) == text
+
+    def test_html_tags_stripped(self):
+        result = TemplatesExtensions.escape_adoc(
+            "A <b>critical</b> flaw in <code>foo</code>."
+        )
+        assert "<b>" not in result
+        assert "<code>" not in result
+        assert "critical" in result
+        assert "foo" in result
+
+    def test_anchor_tag_stripped(self):
+        result = TemplatesExtensions.escape_adoc(
+            'See <a href="https://example.com">this advisory</a> for details.'
+        )
+        assert "<a" not in result
+        assert "href" not in result
+        assert "this advisory" in result
+
+    def test_html_entity_decoded(self):
+        result = TemplatesExtensions.escape_adoc(
+            "Versions &lt;= 1.0 are affected. Use &amp; to concatenate."
+        )
+        assert "&lt;" not in result
+        assert "&amp;" not in result
+        assert "<= 1.0" in result
+        assert "& to concatenate" in result
+
+    def test_block_tag_preserves_newline(self):
+        result = TemplatesExtensions.escape_adoc(
+            "<p>First paragraph.</p><p>Second paragraph.</p>"
+        )
+        assert "First paragraph." in result
+        assert "Second paragraph." in result
+        # Paragraphs should be separated by at least one newline.
+        assert "\n" in result
+
+    def test_br_tag_introduces_newline(self):
+        result = TemplatesExtensions.escape_adoc("Line one.<br>Line two.")
+        assert "Line one." in result
+        assert "Line two." in result
+        assert "\n" in result
+
+    def test_structural_markup_still_neutralised_after_html_strip(self):
+        """Block fences that survive HTML stripping must still be defused."""
+        description = "Normal text.\n----\nCode block.\n----"
+        result = TemplatesExtensions.escape_adoc(description)
+        for line in result.splitlines():
+            stripped = line.lstrip("\u200b")
+            if stripped.strip() == "----":
+                assert line.startswith("\u200b"), (
+                    f"AsciiDoc fence not neutralised: {line!r}"
+                )
+
+    def test_heading_neutralised_after_html_strip(self):
+        """AsciiDoc / Markdown headings must be defused even after tag stripping."""
+        description = "Normal text.\n== Section Heading\nMore text."
+        result = TemplatesExtensions.escape_adoc(description)
+        for line in result.splitlines():
+            if line.lstrip("\u200b").startswith("== "):
+                assert line.startswith("\u200b"), (
+                    f"AsciiDoc heading not neutralised: {line!r}"
+                )
+
+    def test_entity_encoded_tag_does_not_reintroduce_html(self):
+        """Decoding &lt;b&gt; must not resurrect a raw <b> tag in the output.
+
+        A single HTMLParser pass decodes charrefs inside handle_data without
+        re-tokenizing the decoded text, so "&lt;b&gt;bold&lt;/b&gt;" would
+        otherwise decode straight to the literal string "<b>bold</b>" and
+        reach Asciidoctor as unstripped HTML.
+        """
+        result = TemplatesExtensions.escape_adoc("&lt;b&gt;bold&lt;/b&gt; text")
+        assert "<b>" not in result
+        assert "</b>" not in result
+        assert "bold" in result
+        assert "text" in result
+
+    def test_doubly_encoded_entity_fully_decoded(self):
+        """Double-encoded entities (&amp;lt; -> &lt; -> <) must be fully resolved."""
+        result = TemplatesExtensions.escape_adoc("&amp;lt;script&amp;gt;alert(1)&amp;lt;/script&amp;gt;")
+        assert "<script>" not in result
+        assert "&lt;" not in result
+        assert "&amp;" not in result
+
+    def test_deeply_nested_encoded_tag_does_not_reintroduce_html(self):
+        """Six layers of "&amp;"-nesting must not leave a live <b> tag.
+
+        A bounded loop that re-runs the tag stripper (rather than fully
+        decoding entities before tokenizing) can exhaust its pass budget one
+        step before the tag stripper gets to see the fully-decoded "<b>" and
+        would then return that unsafe intermediate value. Decoding entities
+        to a fixed point before tokenizing avoids that regardless of nesting
+        depth.
+        """
+        opening, closing = "<b>", "</b>"
+        for _ in range(6):
+            opening = opening.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            closing = closing.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        payload = f"{opening}bold{closing}"
+        result = TemplatesExtensions.escape_adoc(payload)
+        assert "<b>" not in result
+        assert "</b>" not in result
+        assert "&lt;" not in result
+        assert "&amp;" not in result
+        assert "bold" in result
+
+    def test_encoding_beyond_pass_budget_never_yields_raw_tag(self):
+        """Nesting deeper than the internal pass budget must still be safe.
+
+        When the decode loop stops before reaching a fixed point, the
+        remaining entities must stay encoded and inert (the tag-stripping
+        pass performs no decoding), never surfacing as a raw tag.
+        """
+        payload = "<b>bold</b>"
+        for _ in range(TemplatesExtensions._MAX_ENTITY_DECODE_PASSES + 5):
+            payload = payload.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        result = TemplatesExtensions.escape_adoc(payload)
+        assert "<b>" not in result
+        assert "</b>" not in result
+        assert "bold" in result
+
+    def test_mixed_html_and_structural_markup(self):
+        """HTML tags stripped AND AsciiDoc fences neutralised in the same input."""
+        description = (
+            "<p>Overview: affected versions &lt; 2.0.</p>\n"
+            "====\n"
+            "delimiter block\n"
+            "====\n"
+        )
+        result = TemplatesExtensions.escape_adoc(description)
+        assert "<p>" not in result
+        assert "&lt;" not in result
+        assert "< 2.0" in result
+        for line in result.splitlines():
+            stripped = line.lstrip("\u200b")
+            if stripped.strip() == "====":
+                assert line.startswith("\u200b"), (
+                    f"AsciiDoc fence not neutralised: {line!r}"
+                )
