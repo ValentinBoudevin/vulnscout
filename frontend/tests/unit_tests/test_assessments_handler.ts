@@ -297,3 +297,86 @@ describe('Assessments API', () => {
     expect(url.searchParams.get('project_id')).toBe('proj-4');
   });
 });
+
+describe('asAssessment outdated flag', () => {
+  const base = {
+    id: 'out-1',
+    vuln_id: 'CVE-OUTDATED',
+    status: 'not_affected',
+    timestamp: '2024-01-01T00:00:00',
+    packages: ['firefox@1.0'],
+    responses: [],
+    origin: 'custom',
+    variant_id: 'v-uuid',
+  };
+
+  test('outdated=true and superseded_by parsed when present', () => {
+    const data = { ...base, outdated: true, superseded_by: ['firefox@2.0'] };
+    const result = asAssessment(data as any) as any;
+    expect(result.outdated).toBe(true);
+    expect(result.superseded_by).toEqual(['firefox@2.0']);
+  });
+
+  test('outdated=false when server returns false leaves field absent', () => {
+    // outdated:false is the default — we don't store it. An explicit empty
+    // superseded_by array is stored as [] (valid array, just empty).
+    const data = { ...base, outdated: false, superseded_by: [] };
+    const result = asAssessment(data as any) as any;
+    expect(result.outdated).toBeUndefined();
+    expect(result.superseded_by).toEqual([]);
+  });
+
+  test('outdated absent when server omits it', () => {
+    const result = asAssessment(base as any) as any;
+    expect(result.outdated).toBeUndefined();
+    expect(result.superseded_by).toBeUndefined();
+  });
+
+  test('superseded_by non-string entries are filtered out', () => {
+    const data = { ...base, outdated: true, superseded_by: ['firefox@2.0', 42, null, 'pkg@3.0'] };
+    const result = asAssessment(data as any) as any;
+    expect(result.superseded_by).toEqual(['firefox@2.0', 'pkg@3.0']);
+  });
+
+  test('superseded_by non-array is ignored', () => {
+    const data = { ...base, outdated: true, superseded_by: 'firefox@2.0' };
+    const result = asAssessment(data as any) as any;
+    expect(result.superseded_by).toBeUndefined();
+  });
+
+  test('stale_packages and superseded_map parsed when present', () => {
+    const data = {
+      ...base,
+      packages: ['firefox@1.0', 'chrome@1.0'],
+      outdated: true,
+      superseded_by: ['firefox@2.0'],
+      stale_packages: ['firefox@1.0'],
+      superseded_map: { 'firefox@1.0': ['firefox@2.0'] },
+    };
+    const result = asAssessment(data as any) as any;
+    expect(result.stale_packages).toEqual(['firefox@1.0']);
+    expect(result.superseded_map).toEqual({ 'firefox@1.0': ['firefox@2.0'] });
+  });
+
+  test('stale_packages non-string entries are filtered out', () => {
+    const data = { ...base, outdated: true, stale_packages: ['firefox@1.0', 7, null, 'pkg@3.0'] };
+    const result = asAssessment(data as any) as any;
+    expect(result.stale_packages).toEqual(['firefox@1.0', 'pkg@3.0']);
+  });
+
+  test('superseded_map array or non-object is ignored', () => {
+    const data = { ...base, outdated: true, superseded_map: ['firefox@2.0'] };
+    const result = asAssessment(data as any) as any;
+    expect(result.superseded_map).toBeUndefined();
+  });
+
+  test('superseded_map non-array values are filtered out', () => {
+    const data = {
+      ...base,
+      outdated: true,
+      superseded_map: { 'firefox@1.0': ['firefox@2.0'], 'bad@1.0': 'not-an-array' },
+    };
+    const result = asAssessment(data as any) as any;
+    expect(result.superseded_map).toEqual({ 'firefox@1.0': ['firefox@2.0'] });
+  });
+});

@@ -32,6 +32,10 @@ type Assessment = {
     last_update?: string;
     responses: string[];
     vuln_texts?: VulnText[];
+    outdated?: boolean;
+    superseded_by?: string[];
+    stale_packages?: string[];
+    superseded_map?: Record<string, string[]>;
 };
 
 export type { Assessment };
@@ -99,6 +103,16 @@ const asAssessment = (data: any): Assessment | [] => {
     if (typeof data?.workaround_timestamp === "string") item.workaround_timestamp = data.workaround_timestamp;
     if (typeof data?.last_update === "string") item.last_update = data.last_update;
     if (Array.isArray(data?.vuln_texts)) item.vuln_texts = data.vuln_texts;
+    if (data?.outdated === true) item.outdated = true;
+    if (Array.isArray(data?.superseded_by)) item.superseded_by = data.superseded_by.filter((s: any) => typeof s === "string");
+    if (Array.isArray(data?.stale_packages)) item.stale_packages = data.stale_packages.filter((s: any) => typeof s === "string");
+    if (data?.superseded_map && typeof data.superseded_map === "object" && !Array.isArray(data.superseded_map)) {
+        const map: Record<string, string[]> = {};
+        for (const [key, value] of Object.entries(data.superseded_map)) {
+            if (Array.isArray(value)) map[key] = value.filter((s: any) => typeof s === "string");
+        }
+        item.superseded_map = map;
+    }
     return item
 }
 

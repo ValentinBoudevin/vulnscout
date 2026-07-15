@@ -779,11 +779,41 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         columnHelper.accessor("simplified_status", {
             header: () => <div className="flex items-center justify-center">Status</div>,
             size: 110,
-            cell: info => (
-                <div className="flex items-center justify-center h-full">
-                    <code>{info.getValue()}</code>
-                </div>
-            ),
+            cell: info => {
+                const row = info.row.original as ReviewRow;
+                const rawAssessments = row._assessments ?? [row];
+                // Per-package staleness: union each stale package reference to the
+                // version(s) that supersede it, matching the detail shown in VulnModal.
+                const supersededMap: Record<string, string[]> = {};
+                for (const a of rawAssessments) {
+                    if (a.outdated && a.superseded_map) {
+                        for (const [ref, versions] of Object.entries(a.superseded_map)) {
+                            supersededMap[ref] = [...new Set([...(supersededMap[ref] ?? []), ...versions])].sort();
+                        }
+                    }
+                }
+                // The row is only flagged outdated once every package it covers is
+                // stale — a row spanning some current and some superseded packages
+                // is not fully outdated yet.
+                const isOutdated = row.packages.length > 0 && row.packages.every(p => p in supersededMap);
+                const supersededEntries = Object.entries(supersededMap);
+                const supersededTitle = supersededEntries.length > 0
+                    ? `Assessed against an older version — now present as ${supersededEntries.map(([ref, versions]) => `${ref} → ${versions.join(', ')}`).join('; ')}`
+                    : 'Assessed against an older version that is no longer in the active SBOM';
+                return (
+                    <div className="flex flex-col items-center justify-center gap-1 h-full">
+                        <code>{info.getValue()}</code>
+                        {isOutdated && (
+                            <span
+                                className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300"
+                                title={supersededTitle}
+                            >
+                                Outdated
+                            </span>
+                        )}
+                    </div>
+                );
+            },
         }),
         columnHelper.accessor("justification", {
             header: () => <div className="flex items-center justify-center">Justification</div>,

@@ -22,6 +22,7 @@ from ..helpers.assessment_io import (
     build_custom_data_export,
     import_custom_data,
 )
+from ..helpers.assessment_staleness import annotate_assessments_outdated
 
 from flask import request, Flask
 from flask.typing import ResponseReturnValue
@@ -118,6 +119,7 @@ def init_app(app: Flask) -> None:
                 assessments = []
         else:
             assessments = [a.to_dict() for a in _get_all_db_assessments()]
+        annotate_assessments_outdated(assessments)
         if request.args.get('format', 'list') == "dict":
             return {a["id"]: a for a in assessments}
         return assessments
@@ -164,6 +166,7 @@ def init_app(app: Flask) -> None:
             a_ser["vuln_texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[a.vuln_id]))
             assessments_serialized.append(a_ser)
 
+        annotate_assessments_outdated(assessments_serialized)
         return assessments_serialized
 
     @app.route('/api/assessments/review/export')
@@ -551,6 +554,7 @@ def init_app(app: Flask) -> None:
         for f in findings:
             for a in DBAssessment.get_by_finding(f.id):
                 assessments.append(a.to_dict())
+        annotate_assessments_outdated(assessments)
         if request.args.get('format', 'list') == "dict":
             return {a["id"]: a for a in assessments}
         return assessments, 200
