@@ -9,6 +9,24 @@ from src.bin.webapp import create_app
 from . import write_demo_files, setup_demo_db
 
 
+def _make_png_bytes() -> bytes:
+    """Return the raw bytes of a genuine, tiny, valid 1x1 PNG image."""
+    from io import BytesIO
+    from PIL import Image
+    buf = BytesIO()
+    Image.new("RGB", (1, 1), color=(255, 0, 0)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _make_jpeg_bytes() -> bytes:
+    """Return the raw bytes of a genuine, tiny, valid 1x1 JPEG image."""
+    from io import BytesIO
+    from PIL import Image
+    buf = BytesIO()
+    Image.new("RGB", (1, 1), color=(0, 255, 0)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
 @pytest.fixture()
 def init_files(tmp_path):
     files = {
@@ -494,3 +512,171 @@ def test_upload_template_missing_file(client):
     )
     assert response.status_code == 400
     assert json.loads(response.data)["error"]
+
+
+# ---------------------------------------------------------------------------
+# POST /api/documents/assets
+# ---------------------------------------------------------------------------
+
+def test_upload_asset_success(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets saves a valid image and returns 201."""
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+    monkeypatch.setattr("src.views.templates._ASSET_SEARCH_DIRS", [str(tmp_path / "assets")])
+
+    png_bytes = _make_png_bytes()
+    response = client.post(
+        "/api/documents/assets",
+        data={"file": (BytesIO(png_bytes), "logo.png")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 201
+    data = json.loads(response.data)
+    assert data["name"] == "logo.png"
+    saved = tmp_path / "assets" / "logo.png"
+    assert saved.exists()
+    assert saved.read_bytes() == png_bytes
+
+    documents = client.get("/api/documents")
+    assert documents.status_code == 200
+    assets = [item for item in json.loads(documents.data) if item["id"] == "logo.png"]
+    assert assets == [{"id": "logo.png", "extension": "png", "is_template": False, "category": ["assets"]}]
+
+    download = client.get("/api/documents/logo.png?ext=png")
+    assert download.status_code == 200
+    assert download.data == png_bytes
+    assert download.headers["Content-Type"] == "image/png"
+    assert "attachment; filename=logo.png" in download.headers["Content-Disposition"]
+
+
+def test_upload_asset_rejects_bad_extension(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets rejects non-image extensions with 400."""
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+
+    response = client.post(
+        "/api/documents/assets",
+        data={"file": (BytesIO(b"script"), "evil.js")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    error = json.loads(response.data)["error"]
+    assert error
+    assert not (tmp_path / "assets" / "evil.js").exists()
+
+
+def test_upload_asset_rejects_svg(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets rejects SVG uploads (excluded to avoid active content)."""
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+
+    svg_bytes = b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"
+    response = client.post(
+        "/api/documents/assets",
+        data={"file": (BytesIO(svg_bytes), "logo.svg")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert json.loads(response.data)["error"]
+    assert not (tmp_path / "assets" / "logo.svg").exists()
+
+
+def test_upload_asset_rejects_content_extension_mismatch(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets rejects a file whose decoded format doesn't match its extension."""
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+
+    # A genuine JPEG renamed with a .png extension must be rejected: the
+    # declared extension is trusted only after the decoded content confirms it.
+    jpeg_bytes = _make_jpeg_bytes()
+    response = client.post(
+        "/api/documents/assets",
+        data={"file": (BytesIO(jpeg_bytes), "logo.png")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert json.loads(response.data)["error"]
+    assert not (tmp_path / "assets" / "logo.png").exists()
+
+
+def test_upload_asset_rejects_non_image_content(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets rejects a file with an image extension but non-image bytes."""
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+
+    response = client.post(
+        "/api/documents/assets",
+        data={"file": (BytesIO(b"not actually an image"), "fake.png")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert json.loads(response.data)["error"]
+    assert not (tmp_path / "assets" / "fake.png").exists()
+
+
+def test_upload_asset_rejects_oversized_upload(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets rejects a file bigger than the configured size cap."""
+    from io import BytesIO
+    import src.routes.documents as documents_module
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+    monkeypatch.setattr(documents_module, "MAX_ASSET_UPLOAD_BYTES", 16)
+
+    response = client.post(
+        "/api/documents/assets",
+        data={"file": (BytesIO(_make_png_bytes()), "logo.png")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 413
+    assert json.loads(response.data)["error"]
+    assert not (tmp_path / "assets" / "logo.png").exists()
+
+
+def test_upload_asset_rejects_request_larger_than_content_limit(app, client):
+    """Werkzeug rejects oversized multipart bodies before the route parses files."""
+    request_limit = app.config["MAX_CONTENT_LENGTH"]
+    response = client.post(
+        "/api/documents/assets",
+        data=b"x" * (request_limit + 1),
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 413
+
+
+def test_upload_asset_rejects_path_traversal(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets strips directory components from the filename."""
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+
+    png_bytes = _make_png_bytes()
+    response = client.post(
+        "/api/documents/assets",
+        data={"file": (BytesIO(png_bytes), "../../escape.png")},
+        content_type="multipart/form-data",
+    )
+    # basename keeps "escape.png" and it must not leave the assets directory.
+    assert response.status_code == 201
+    data = json.loads(response.data)
+    assert data["name"] == "escape.png"
+    assert (tmp_path / "assets" / "escape.png").exists()
+    assert not (tmp_path.parent.parent / "escape.png").exists()
+
+
+def test_upload_asset_missing_file(client):
+    """POST /api/documents/assets without a file returns 400."""
+    response = client.post(
+        "/api/documents/assets",
+        data={},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert json.loads(response.data)["error"]
+
+
+def test_upload_asset_no_multipart(client):
+    """POST /api/documents/assets without multipart content type returns 400."""
+    response = client.post(
+        "/api/documents/assets",
+        data=b"\x89PNG",
+        content_type="application/octet-stream",
+    )
+    assert response.status_code == 400
