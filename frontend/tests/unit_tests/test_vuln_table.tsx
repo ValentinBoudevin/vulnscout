@@ -1460,6 +1460,33 @@ describe('Vulnerability Table', () => {
     // Published Date Feature Tests
     // =========================================================================
 
+    test('shows an EU KEV sync information banner when EU KEV data is absent', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(
+            'EU KEV data is unavailable. You might need to run a sync to update it.'
+        );
+    });
+
+    test('shows a published date sync information banner when published date data is absent', async () => {
+        const withEuvdData = vulnerabilities.map(v => ({
+            ...v,
+            published: undefined,
+            euvd: {
+                id: 'EUVD-2024-0001',
+                known_exploited: true,
+                sources: ['enisa'],
+                date_added: '2024-01-01',
+                url: 'https://euvd.enisa.europa.eu/vulnerability/EUVD-2024-0001',
+            },
+        }));
+        render(<TableVulnerabilities vulnerabilities={withEuvdData} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(
+            'Published date data is unavailable. You might need to run a sync to update it.'
+        );
+    });
+
     test('published date filter button is disabled when NVD sync is not completed and no published dates exist', async () => {
         // NVD progress mock defaults to phase: 'idle' (not completed). With no
         // vulnerability carrying a published date, the filter has nothing to act on.
