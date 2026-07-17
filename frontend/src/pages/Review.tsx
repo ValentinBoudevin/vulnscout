@@ -152,6 +152,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [modalVuln, setModalVuln] = useState<Vulnerability | undefined>(undefined);
     const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
     const [modalVulnIds, setModalVulnIds] = useState<string[]>([]);
+    const displayedVulnIdsRef = useRef<string[]>([]);
+    const fetchGenRef = useRef(0);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
@@ -409,19 +411,17 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         return true;
     }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, selectedVariants, variantNames]);
 
-    // Distinct vuln_ids of the currently displayed assessment rows, in display
-    // order, used to drive Previous/Next navigation in the modal.
-    const assessmentVulnIds = useMemo(() => {
+    const handleAssessmentsDisplayChange = useCallback((rows: ReviewRow[]) => {
         const seen = new Set<string>();
         const ids: string[] = [];
-        for (const a of filteredAssessments) {
-            if (!seen.has(a.vuln_id)) {
-                seen.add(a.vuln_id);
-                ids.push(a.vuln_id);
+        for (const r of rows) {
+            if (!seen.has(r.vuln_id)) {
+                seen.add(r.vuln_id);
+                ids.push(r.vuln_id);
             }
         }
-        return ids;
-    }, [filteredAssessments]);
+        displayedVulnIdsRef.current = ids;
+    }, []);
 
     const resetFilters = () => {
         setSearch('');
@@ -775,7 +775,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     }, []);
 
     const handleVulnClick = useCallback(async (vulnId: string) => {
+        const gen = ++fetchGenRef.current;
         const vuln = await fetchVulnForModal(vulnId);
+        if (gen !== fetchGenRef.current) return;
         if (!vuln) return;
         setModalVuln(vuln);
         setModalVulnIndex(undefined);
@@ -785,17 +787,22 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     // Opens the modal from the Assessments tab with navigation context so the
     // modal renders Previous/Next buttons across the displayed vulnerabilities.
     const handleAssessmentVulnClick = useCallback(async (vulnId: string) => {
+        const gen = ++fetchGenRef.current;
         const vuln = await fetchVulnForModal(vulnId);
+        if (gen !== fetchGenRef.current) return;
         if (!vuln) return;
-        const index = assessmentVulnIds.indexOf(vulnId);
+        const displayedIds = displayedVulnIdsRef.current;
+        const index = displayedIds.indexOf(vulnId);
         setModalVuln(vuln);
-        setModalVulnIds(assessmentVulnIds);
+        setModalVulnIds(displayedIds);
         setModalVulnIndex(index >= 0 ? index : undefined);
-    }, [fetchVulnForModal, assessmentVulnIds]);
+    }, [fetchVulnForModal]);
 
     const handleModalNavigation = useCallback(async (newIndex: number) => {
         if (newIndex < 0 || newIndex >= modalVulnIds.length) return;
+        const gen = ++fetchGenRef.current;
         const vuln = await fetchVulnForModal(modalVulnIds[newIndex]);
+        if (gen !== fetchGenRef.current) return;
         if (!vuln) return;
         setModalVuln(vuln);
         setModalVulnIndex(newIndex);
@@ -1226,6 +1233,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         cols: any[],
         emptyTitle: string,
         emptyBody: string,
+        onFilteredDataChange?: (rows: ReviewRow[]) => void,
     ) => (
         rows.length === 0 ? (
             <div className="text-center py-10 text-gray-400">
@@ -1252,6 +1260,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 hasPagination={true}
                 hoverField="texts"
                 hoverIdField="vuln_id"
+                onFilteredDataChange={onFilteredDataChange}
             />
         )
     );
@@ -1469,6 +1478,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 columns,
                 "No handmade assessments found",
                 "Assessments created directly in VulnScout (not imported from SBOM documents) will appear here.",
+                handleAssessmentsDisplayChange,
             )}
 
             {activeTab === 'ai-assessments' && renderAssessmentsTable(
@@ -1538,6 +1548,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     appendCVSS={() => null}
                     patchVuln={() => {}}
                     onClose={() => {
+                        // Invalidate any in-flight fetch so its late completion
+                        // cannot re-open the modal with a stale vulnerability.
+                        fetchGenRef.current++;
                         setModalVuln(undefined);
                         setModalVulnIndex(undefined);
                         setModalVulnIds([]);
