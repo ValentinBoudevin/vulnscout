@@ -1651,6 +1651,19 @@ type VariantScopedSnapshot = {
                                     const isNewlyAdded = group.assessments.some(assess => newAssessmentIds.has(assess.id));
                                     const isBeingEdited = editingAssessmentId === firstAssess.id;
                                     const groupOrigins = [...new Set(group.assessments.map(a => a.origin).filter(Boolean))];
+                                    // Per-package staleness: map each stale package reference to the
+                                    // version(s) that supersede it, so the "Outdated" pill can be shown
+                                    // next to the specific affected package rather than the whole group.
+                                    const supersededMap: Record<string, string[]> = {};
+                                    for (const a of group.assessments) {
+                                        if (a.outdated && a.superseded_map) {
+                                            for (const [ref, versions] of Object.entries(a.superseded_map)) {
+                                                // Union the replacement versions when several assessments
+                                                // in the group flag the same package reference.
+                                                supersededMap[ref] = [...new Set([...(supersededMap[ref] ?? []), ...versions])].sort();
+                                            }
+                                        }
+                                    }
 
                                     return (
                                         <li key={encodeURIComponent(group.key)} className={`mb-10 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
@@ -1667,11 +1680,18 @@ type VariantScopedSnapshot = {
                                                 {group.packages.map(pkg => {
                                                     const { nameVersion, supplier } = splitPkgId(pkg);
                                                     const supplierName = extractSupplierName(supplier);
+                                                    const supersededVersions = supersededMap[pkg];
+                                                    const pkgOutdated = Array.isArray(supersededVersions) && supersededVersions.length > 0;
                                                     return (
-                                                        <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300" title={supplierName ? `Supplier: ${supplierName}` : undefined}>
+                                                        <span key={pkg} className={`inline-flex items-center px-2.5 py-0.5 rounded-full font-medium ${pkgOutdated ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300' : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300'}`} title={pkgOutdated ? `Assessed against an older version — now present as ${supersededVersions.join(', ')}` : (supplierName ? `Supplier: ${supplierName}` : undefined)}>
                                                             <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
                                                             {nameVersion}
                                                             {supplierName && <span className="ml-1 opacity-70 text-xs">({supplierName})</span>}
+                                                            {pkgOutdated && (
+                                                                <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-amber-200 text-amber-900 dark:bg-amber-700 dark:text-amber-100">
+                                                                    Outdated
+                                                                </span>
+                                                            )}
                                                         </span>
                                                     );
                                                 })}
