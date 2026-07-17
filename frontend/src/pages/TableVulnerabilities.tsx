@@ -377,7 +377,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [generalBanner, setGeneralBanner] = useState<SourceBanner>(null);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
-        'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed'
+        'ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed'
     ]);
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
@@ -1098,12 +1098,24 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange, nvdProgress, epssProgress]);
 
     const columns = useMemo(() => {
-        return allColumns.filter(col => {
-            const colId = col.id as string;
-            if (colId === 'select-checkbox' || colId === 'actions') return true;
-            const displayName = columnDisplayNames[colId as keyof typeof columnDisplayNames];
-            return displayName && visibleColumns.includes(displayName);
+        const columnByDisplayName = new Map(
+            allColumns.map(column => [
+                columnDisplayNames[column.id as keyof typeof columnDisplayNames],
+                column,
+            ])
+        );
+        const selectedColumns = visibleColumns.flatMap(displayName => {
+            const column = columnByDisplayName.get(displayName);
+            return column ? [column] : [];
         });
+        const selectColumn = allColumns.find(column => column.id === 'select-checkbox');
+        const actionsColumn = allColumns.find(column => column.id === 'actions');
+
+        return [
+            ...(selectColumn ? [selectColumn] : []),
+            ...selectedColumns,
+            ...(actionsColumn ? [actionsColumn] : []),
+        ];
     }, [allColumns, visibleColumns, columnDisplayNames]);
 
     const dataToDisplay = useMemo(() => {
@@ -1245,7 +1257,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setPublishedDateFrom('');
         setPublishedDateTo('');
         setSelectedRows({});
-        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed']);
+        setVisibleColumns(['ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed']);
         setShowCustomSeverityFilter(false);
         setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
         setShowCustomEpssFilter(false);
