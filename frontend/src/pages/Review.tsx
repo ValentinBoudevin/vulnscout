@@ -411,7 +411,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         return true;
     }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, selectedVariants, variantNames]);
 
-    const handleAssessmentsDisplayChange = useCallback((rows: ReviewRow[]) => {
+    // Records the display order (filtered + sorted, deduped by vuln_id) of the
+    // currently visible tab's table so the modal can navigate across it. Only one
+    // tab's TableGeneric is mounted at a time, so a single ref serves all tabs.
+    const handleDisplayedVulnsChange = useCallback((rows: { vuln_id: string }[]) => {
         const seen = new Set<string>();
         const ids: string[] = [];
         for (const r of rows) {
@@ -774,19 +777,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }
     }, []);
 
-    const handleVulnClick = useCallback(async (vulnId: string) => {
-        const gen = ++fetchGenRef.current;
-        const vuln = await fetchVulnForModal(vulnId);
-        if (gen !== fetchGenRef.current) return;
-        if (!vuln) return;
-        setModalVuln(vuln);
-        setModalVulnIndex(undefined);
-        setModalVulnIds([]);
-    }, [fetchVulnForModal]);
-
-    // Opens the modal from the Assessments tab with navigation context so the
-    // modal renders Previous/Next buttons across the displayed vulnerabilities.
-    const handleAssessmentVulnClick = useCallback(async (vulnId: string) => {
+    // Opens the modal with navigation context so the modal renders Previous/Next
+    // buttons across the vulnerabilities currently displayed in the active tab.
+    const handleVulnClickWithNav = useCallback(async (vulnId: string) => {
         const gen = ++fetchGenRef.current;
         const vuln = await fetchVulnForModal(vulnId);
         if (gen !== fetchGenRef.current) return;
@@ -817,7 +810,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             cell: info => (
                 <div
                     className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
-                    onClick={() => handleAssessmentVulnClick(info.getValue())}
+                    onClick={() => handleVulnClickWithNav(info.getValue())}
                     title="Click to view details"
                 >
                     <span className="font-mono text-sm">{info.getValue()}</span>
@@ -1011,7 +1004,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
-    ], [handleAssessmentVulnClick, variantNames]);
+    ], [handleVulnClickWithNav, variantNames]);
 
     const aiActionsColumn = useMemo(() => columnHelper.display({
         id: 'ai-actions',
@@ -1052,7 +1045,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             cell: info => (
                 <div
                     className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
-                    onClick={() => handleVulnClick(info.getValue())}
+                    onClick={() => handleVulnClickWithNav(info.getValue())}
                     title="Click to view details"
                 >
                     <span className="font-mono text-sm">{info.getValue()}</span>
@@ -1103,7 +1096,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
-    ], [handleVulnClick, variantNames]);
+    ], [handleVulnClickWithNav, variantNames]);
 
     const cvssColumns = useMemo(() => [
         cvssColumnHelper.accessor("vuln_id", {
@@ -1113,7 +1106,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             cell: info => (
                 <div
                     className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
-                    onClick={() => handleVulnClick(info.getValue())}
+                    onClick={() => handleVulnClickWithNav(info.getValue())}
                     title="Click to view details"
                 >
                     <span className="font-mono text-sm">{info.getValue()}</span>
@@ -1181,7 +1174,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
-    ], [handleVulnClick, variantNames]);
+    ], [handleVulnClickWithNav, variantNames]);
 
     if (loading) {
         return (
@@ -1478,7 +1471,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 columns,
                 "No handmade assessments found",
                 "Assessments created directly in VulnScout (not imported from SBOM documents) will appear here.",
-                handleAssessmentsDisplayChange,
+                handleDisplayedVulnsChange,
             )}
 
             {activeTab === 'ai-assessments' && renderAssessmentsTable(
@@ -1486,6 +1479,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 aiColumns,
                 "No AI-generated assessments found",
                 "Pending assessments suggested by AI will appear here until approved or rejected.",
+                handleDisplayedVulnsChange,
             )}
 
             {activeTab === 'time-estimates' && (
@@ -1510,6 +1504,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         hasPagination={true}
                         hoverField="texts"
                         hoverIdField="vuln_id"
+                        onFilteredDataChange={handleDisplayedVulnsChange}
                     />
                 )
             )}
@@ -1536,6 +1531,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         hasPagination={true}
                         hoverField="texts"
                         hoverIdField="vuln_id"
+                        onFilteredDataChange={handleDisplayedVulnsChange}
                     />
                 )
             )}
