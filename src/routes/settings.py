@@ -491,9 +491,6 @@ def init_app(app: Flask) -> None:
             return None, err
         target_uuid = cast(uuid.UUID, target_uuid)
 
-        if source_uuid == target_uuid:
-            return None, (jsonify({"error": "Source and target variants must be different."}), 400)
-
         source = VariantController.get(source_id)
         target = VariantController.get(target_id)
         if source is None or target is None:
@@ -546,6 +543,8 @@ def init_app(app: Flask) -> None:
                     continue
                 # Exact mode: same package_id → same Finding row shared across variants
                 target_finding = source_finding
+                if source_uuid == target_uuid:
+                    continue
                 # Only propose the copy if this vulnerability is actually part of
                 # the target variant's pool (observed in its active scans).
                 if target_finding.id not in target_observed_finding_ids:
@@ -631,6 +630,8 @@ def init_app(app: Flask) -> None:
             candidates = []
 
             for tf in potential_targets:
+                if source_uuid == target_uuid and tf.id == source_finding.id:
+                    continue
                 if source_pkg is None or tf.package is None:
                     continue
                 if source_pkg.name != tf.package.name:
@@ -893,6 +894,7 @@ def init_app(app: Flask) -> None:
                     src_finding = assessment.finding
                     if (
                         src_finding is None
+                        or (source_uuid == target_uuid and tgt_finding.id == src_finding.id)
                         or tgt_finding.vulnerability_id != src_finding.vulnerability_id
                     ):
                         continue
