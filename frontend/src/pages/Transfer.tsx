@@ -217,7 +217,7 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                                     disabled={!customProjectId}
                                 >
                                     <option value="">— select a variant —</option>
-                                    {customProjectVariants.map((v) => (
+                                    {customProjectVariants.filter((v) => v.id !== copySourceId).map((v) => (
                                         <option key={v.id} value={v.id}>{v.name}</option>
                                     ))}
                                 </select>
