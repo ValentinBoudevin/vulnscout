@@ -944,6 +944,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     </div>
                 );
             },
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">Published Date</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Shows when the vulnerability was first published.</p>
+                    <p>The NVD refresh provides this date for CVEs, and the GitHub Security Advisory refresh provides it for GHSA identifiers.</p>
+                    <p>Select vulnerabilities and refresh their data when a date is unavailable.</p>
+                </div>
+            </>,
             cell: info => {
                 const published = info.getValue();
                 const fetching = nvdProgress?.in_progress && !published;
@@ -1089,6 +1097,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             columnHelper.accessor('euvd', {
             id: 'euvd',
             header: () => <div className="flex items-center justify-center">EU KEV</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">EU KEV</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Marks vulnerabilities in the consolidated EU Known Exploited Vulnerabilities list.</p>
+                    <p>The list combines the CISA KEV and ENISA EU KEV catalogues.</p>
+                    <p>Refresh ENISA EUVD data to populate this priority-triage signal.</p>
+                </div>
+            </>,
             cell: info => {
                 const euvd = info.getValue();
                 if (!euvd?.known_exploited) {
