@@ -1,10 +1,16 @@
 import { createPortal } from 'react-dom'
-import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, getPaginationRowModel, useReactTable, flexRender, Row, RowSelectionState, OnChangeFn, SortingState, PaginationState } from '@tanstack/react-table'
+import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, getPaginationRowModel, useReactTable, flexRender, Row, RowData, RowSelectionState, OnChangeFn, SortingState, PaginationState } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowUpShortWide, faArrowDownWideShort, faSort } from "@fortawesome/free-solid-svg-icons";
-import { useMemo, useRef, useState, useEffect, useCallback } from "react";
+import { faArrowUpShortWide, faArrowDownWideShort, faSort, faCircleQuestion } from "@fortawesome/free-solid-svg-icons";
+import { ReactNode, useMemo, useRef, useState, useEffect, useCallback } from "react";
 import Fuse from 'fuse.js';
+
+declare module '@tanstack/react-table' {
+    interface ColumnDefBase<TData extends RowData, TValue = unknown> {
+        HintText?: ReactNode;
+    }
+}
 
 /* tslint:disable:no-explicit-any */
 type Props<DataType> = {
@@ -32,6 +38,10 @@ type Props<DataType> = {
 };
 /* tslint:enable:no-explicit-any */
 
+function getColumnHint(columnDef: unknown): ReactNode | undefined {
+    return (columnDef as { HintText?: ReactNode }).HintText;
+}
+
 function TableGeneric<DataType> ({
     columns,
     data,
@@ -53,6 +63,7 @@ function TableGeneric<DataType> ({
     const itemsPerPage = pagination.pageSize
     const [sorting, setSorting] = useState<SortingState>([])
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null)
+    const [hintColumnId, setHintColumnId] = useState<string | null>(null)
     const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map())
     const [tooltipInfo, setTooltipInfo] = useState<{ original: DataType; id: string; rect: DOMRect } | null>(null)
     const hideTooltipTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -250,6 +261,21 @@ function TableGeneric<DataType> ({
         return () => { if (hideTooltipTimer.current) clearTimeout(hideTooltipTimer.current) }
     }, [])
 
+    useEffect(() => {
+        const closeHintOnOutsideClick = (event: MouseEvent) => {
+            const target = event.target as Element;
+            if (!target.closest('[data-column-hint]')) {
+                setHintColumnId(null);
+            }
+        };
+
+        if (hintColumnId !== null) {
+            document.addEventListener('mousedown', closeHintOnOutsideClick);
+        }
+
+        return () => document.removeEventListener('mousedown', closeHintOnOutsideClick);
+    }, [hintColumnId])
+
     function showTooltip(e: React.MouseEvent<HTMLTableRowElement>, rowOriginal: DataType, rowId: string) {
         if (hoverField === undefined) return
         if (hideTooltipTimer.current) clearTimeout(hideTooltipTimer.current)
@@ -341,24 +367,60 @@ function TableGeneric<DataType> ({
                     <thead className="grid sticky top-0 z-20">
                         {table.getHeaderGroups().map(headerGroup => (
                             <tr key={headerGroup.id} className="bg-slate-700 flex w-full">
-                            {headerGroup.headers.map(header => (
+                            {headerGroup.headers.map(header => {
+                                const hintText = getColumnHint(header.column.columnDef);
+                                return (
                                 <th
                                     key={header.id}
                                     className={[
-                                        `p-4 border border-slate-600 flex-auto`,
+                                        `relative p-4 border border-slate-600 flex-auto`,
                                         header.column.getCanSort() ? 'cursor-pointer select-none' : ''
                                     ].join(' ')}
                                     style={{width: header.getSize()}}
                                     onClick={header.column.getToggleSortingHandler()}
                                 >
-                                    <span className="mr-2">
-                                        {header.isPlaceholder
-                                        ? null
-                                        : flexRender(
-                                            header.column.columnDef.header,
-                                            header.getContext()
-                                        )}
-                                    </span>
+                                    {hintText ? (
+                                        <div className="relative flex items-center justify-center gap-1">
+                                            {header.isPlaceholder
+                                                ? null
+                                                : flexRender(
+                                                    header.column.columnDef.header,
+                                                    header.getContext()
+                                                )}
+                                            <button
+                                                type="button"
+                                                aria-label={`Show hint for ${header.column.id}`}
+                                                title="Show column hint"
+                                                data-column-hint
+                                                className="text-sky-300 hover:text-sky-100 transition-colors"
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    setHintColumnId(current => current === header.column.id ? null : header.column.id);
+                                                }}
+                                            >
+                                                <FontAwesomeIcon icon={faCircleQuestion} />
+                                            </button>
+                                            {hintColumnId === header.column.id && (
+                                                <div
+                                                    role="tooltip"
+                                                    data-column-hint
+                                                    className="absolute top-full mt-1 right-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-3 z-50 w-[360px] text-sm text-left"
+                                                    onClick={(event) => event.stopPropagation()}
+                                                >
+                                                    {hintText}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <span className="mr-2">
+                                            {header.isPlaceholder
+                                                ? null
+                                                : flexRender(
+                                                    header.column.columnDef.header,
+                                                    header.getContext()
+                                                )}
+                                        </span>
+                                    )}
                                     {header.column.getCanSort()
                                         ? (header.column.getIsSorted() === false
                                             ? <FontAwesomeIcon icon={faSort} />
@@ -369,7 +431,8 @@ function TableGeneric<DataType> ({
                                         )
                                         : ''}
                                 </th>
-                            ))}
+                                );
+                            })}
                             </tr>
                         ))}
                     </thead>
