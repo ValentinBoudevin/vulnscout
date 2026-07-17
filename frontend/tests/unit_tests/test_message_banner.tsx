@@ -40,7 +40,7 @@ describe('MessageBanner', () => {
                 onClose={() => {}}
             />
         );
-        expect(container.firstChild).toHaveClass('bg-blue-600', 'border-blue-700');
+        expect(container.firstChild).toHaveClass('bg-blue-800', 'border-blue-900');
     });
 
     test('does not render when invisible', () => {

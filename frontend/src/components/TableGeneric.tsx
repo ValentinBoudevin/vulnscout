@@ -8,7 +8,8 @@ import Fuse from 'fuse.js';
 
 declare module '@tanstack/react-table' {
     interface ColumnDefBase<TData extends RowData, TValue = unknown> {
-        HintText?: ReactNode;
+        HintText?: ReactNode | ((data: TData, value: TValue) => ReactNode);
+        HintAriaLabel?: string;
     }
 }
 
@@ -40,6 +41,10 @@ type Props<DataType> = {
 
 function getColumnHint(columnDef: unknown): ReactNode | undefined {
     return (columnDef as { HintText?: ReactNode }).HintText;
+}
+
+function getColumnHintAriaLabel(columnDef: unknown, columnId: string): string {
+    return (columnDef as { HintAriaLabel?: string }).HintAriaLabel ?? `Show hint for ${columnId}`;
 }
 
 function TableGeneric<DataType> ({
@@ -369,6 +374,7 @@ function TableGeneric<DataType> ({
                             <tr key={headerGroup.id} className="bg-slate-700 flex w-full">
                             {headerGroup.headers.map(header => {
                                 const hintText = getColumnHint(header.column.columnDef);
+                                const hintAriaLabel = getColumnHintAriaLabel(header.column.columnDef, header.column.id);
                                 return (
                                 <th
                                     key={header.id}
@@ -389,7 +395,7 @@ function TableGeneric<DataType> ({
                                                 )}
                                             <button
                                                 type="button"
-                                                aria-label={`Show hint for ${header.column.id}`}
+                                                aria-label={hintAriaLabel}
                                                 title="Show column hint"
                                                 data-column-hint
                                                 className="text-sky-300 hover:text-sky-100 transition-colors"

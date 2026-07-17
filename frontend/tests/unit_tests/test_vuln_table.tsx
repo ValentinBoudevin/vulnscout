@@ -7,7 +7,6 @@ jest.setTimeout(15000);
 import { act, fireEvent, render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
-// @ts-expect-error TS6133
 import React from 'react';
 
 import type { Vulnerability } from "../../src/handlers/vulnerabilities";
@@ -1464,8 +1463,9 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent(
-            'EU KEV data is unavailable. You might need to run a sync to update it.'
+            'EU KEV data needs updating. Use the "Refresh vulnerability data" button to update it.'
         );
+        expect(screen.getByText('EU KEV data').classList.contains('font-bold')).toBe(true);
     });
 
     test('shows a published date sync information banner when published date data is absent', async () => {
@@ -1483,8 +1483,52 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={withEuvdData} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent(
-            'Published date data is unavailable. You might need to run a sync to update it.'
+            'Published date data needs updating. Use the "Refresh vulnerability data" button to update it.'
         );
+        expect(screen.getByText('Published date data').classList.contains('font-bold')).toBe(true);
+    });
+
+    test('combines missing EU KEV and published date data into one banner', async () => {
+        const withoutPublishedDates = vulnerabilities.map(v => ({ ...v, published: undefined }));
+        render(<TableVulnerabilities vulnerabilities={withoutPublishedDates} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const alerts = await screen.findAllByRole('alert');
+        expect(alerts).toHaveLength(1);
+        expect(alerts[0]).toHaveTextContent(
+            'EU KEV data and published date data need updating. Use the "Refresh vulnerability data" button to update them.'
+        );
+        expect(screen.getByText('EU KEV data').classList.contains('font-bold')).toBe(true);
+        expect(screen.getByText('published date data').classList.contains('font-bold')).toBe(true);
+    });
+
+    test('keeps a dismissed EU KEV banner hidden after the table remounts', async () => {
+        function VulnerabilityTab() {
+            const [isTableVisible, setIsTableVisible] = React.useState(true);
+            const [isBannerDismissed, setIsBannerDismissed] = React.useState(false);
+
+            return <>
+                <button onClick={() => setIsTableVisible(visible => !visible)}>Switch tab</button>
+                {isTableVisible && <TableVulnerabilities
+                    vulnerabilities={vulnerabilities}
+                    appendAssessment={() => {}}
+                    appendCVSS={() => null}
+                    patchVuln={() => {}}
+                    missingEuvdDataBannerDismissed={isBannerDismissed}
+                    onMissingEuvdDataBannerDismissedChange={setIsBannerDismissed}
+                />}
+            </>;
+        }
+
+        render(<VulnerabilityTab />);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('EU KEV data needs updating');
+        fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss' })[0]);
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Switch tab' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Switch tab' }));
+
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
     test('published date filter button is disabled when NVD sync is not completed and no published dates exist', async () => {

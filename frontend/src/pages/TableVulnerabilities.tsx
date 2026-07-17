@@ -27,9 +27,6 @@ import type { EUVDProgress } from "../handlers/euvd_progress";
 
 type SourceBanner = { message: string; type: 'error' | 'success' } | null;
 
-const MISSING_EUVD_DATA_MESSAGE = 'EU KEV data is unavailable. You might need to run a sync to update it.';
-const MISSING_PUBLISHED_DATE_DATA_MESSAGE = 'Published date data is unavailable. You might need to run a sync to update it.';
-
 function useRefreshProgressEffect(
     progress: { in_progress: boolean; phase?: string; current: number; total: number; started_at?: string } | null,
     label: string,
@@ -93,6 +90,10 @@ type Props = {
     compareOperation?: string;
     /** Called when an NVD, EPSS, or GHSA bulk refresh completes, so the parent can reload data */
     onRefreshComplete?: () => void;
+    missingEuvdDataBannerDismissed?: boolean;
+    onMissingEuvdDataBannerDismissedChange?: (dismissed: boolean) => void;
+    missingPublishedDateDataBannerDismissed?: boolean;
+    onMissingPublishedDateDataBannerDismissedChange?: (dismissed: boolean) => void;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -347,7 +348,7 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, onRefreshComplete }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange }: Readonly<Props>) {
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
@@ -378,8 +379,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [ghsaBanner, setGhsaBanner] = useState<SourceBanner>(null);
     const [euvdBanner, setEuvdBanner] = useState<SourceBanner>(null);
     const [generalBanner, setGeneralBanner] = useState<SourceBanner>(null);
-    const [isMissingEuvdDataBannerDismissed, setIsMissingEuvdDataBannerDismissed] = useState(false);
-    const [isMissingPublishedDateDataBannerDismissed, setIsMissingPublishedDateDataBannerDismissed] = useState(false);
+    const [localMissingEuvdDataBannerDismissed, setLocalMissingEuvdDataBannerDismissed] = useState(false);
+    const [localMissingPublishedDateDataBannerDismissed, setLocalMissingPublishedDateDataBannerDismissed] = useState(false);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
         'ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed'
@@ -447,6 +448,19 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         [vulnerabilities]
     );
 
+    const isMissingEuvdDataBannerDismissed = missingEuvdDataBannerDismissed ?? localMissingEuvdDataBannerDismissed;
+    const isMissingPublishedDateDataBannerDismissed = missingPublishedDateDataBannerDismissed ?? localMissingPublishedDateDataBannerDismissed;
+
+    const setMissingEuvdDataBannerDismissed = useCallback((dismissed: boolean) => {
+        onMissingEuvdDataBannerDismissedChange?.(dismissed);
+        if (missingEuvdDataBannerDismissed === undefined) setLocalMissingEuvdDataBannerDismissed(dismissed);
+    }, [missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange]);
+
+    const setMissingPublishedDateDataBannerDismissed = useCallback((dismissed: boolean) => {
+        onMissingPublishedDateDataBannerDismissedChange?.(dismissed);
+        if (missingPublishedDateDataBannerDismissed === undefined) setLocalMissingPublishedDateDataBannerDismissed(dismissed);
+    }, [missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange]);
+
     // The EU KEV column renders a badge only when a vulnerability is flagged
     // known_exploited; every other row shows an empty placeholder. The backend
     // also always serialises an `euvd` object (often with just an alias id and
@@ -457,6 +471,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         () => vulnerabilities.some(v => v.euvd?.known_exploited === true),
         [vulnerabilities]
     );
+    const previousHasAnyEuvdData = useRef(hasAnyEuvdData);
+    const previousHasAnyPublishedDate = useRef(hasAnyPublishedDate);
 
     const shouldShowMissingEuvdDataBanner = vulnerabilities.length > 0 &&
         !hasAnyEuvdData &&
@@ -468,13 +484,32 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         !nvdProgress?.in_progress &&
         !isMissingPublishedDateDataBannerDismissed;
 
-    useEffect(() => {
-        setIsMissingEuvdDataBannerDismissed(false);
-    }, [hasAnyEuvdData]);
+    const shouldShowMissingDataBanner = shouldShowMissingEuvdDataBanner || shouldShowMissingPublishedDateDataBanner;
+
+    const missingDataBannerMessage = shouldShowMissingEuvdDataBanner && shouldShowMissingPublishedDateDataBanner
+        ? <><strong className="font-bold">EU KEV data</strong> and <strong className="font-bold">published date data</strong> need updating. Use the "Refresh vulnerability data" button to update them.</>
+        : shouldShowMissingEuvdDataBanner
+            ? <><strong className="font-bold">EU KEV data</strong> needs updating. Use the "Refresh vulnerability data" button to update it.</>
+            : <><strong className="font-bold">Published date data</strong> needs updating. Use the "Refresh vulnerability data" button to update it.</>;
+
+    const dismissMissingDataBanner = () => {
+        if (shouldShowMissingEuvdDataBanner) setMissingEuvdDataBannerDismissed(true);
+        if (shouldShowMissingPublishedDateDataBanner) setMissingPublishedDateDataBannerDismissed(true);
+    };
 
     useEffect(() => {
-        setIsMissingPublishedDateDataBannerDismissed(false);
-    }, [hasAnyPublishedDate]);
+        if (previousHasAnyEuvdData.current !== hasAnyEuvdData) {
+            setMissingEuvdDataBannerDismissed(false);
+        }
+        previousHasAnyEuvdData.current = hasAnyEuvdData;
+    }, [hasAnyEuvdData, setMissingEuvdDataBannerDismissed]);
+
+    useEffect(() => {
+        if (previousHasAnyPublishedDate.current !== hasAnyPublishedDate) {
+            setMissingPublishedDateDataBannerDismissed(false);
+        }
+        previousHasAnyPublishedDate.current = hasAnyPublishedDate;
+    }, [hasAnyPublishedDate, setMissingPublishedDateDataBannerDismissed]);
 
 
     useEffect(() => {
@@ -560,8 +595,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const bannerMessage = activeBanners.map(b => b.message).join(' · ');
     const bannerType: 'error' | 'success' = activeBanners.some(b => b.type === 'error') ? 'error' : 'success';
     const visibleBannerCount = activeBanners.length +
-        Number(shouldShowMissingEuvdDataBanner) +
-        Number(shouldShowMissingPublishedDateDataBanner);
+        Number(shouldShowMissingDataBanner);
 
     const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa' | 'euvd', refreshActivity?: boolean) => {
         if (source === 'nvd') setNvdBanner({ message, type });
@@ -866,6 +900,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     <p>Filtering matches vulnerabilities when any selected status is present in the summary.</p>
                 </div>
             </>,
+            HintAriaLabel: 'Status summary helper',
             cell: info => {
                 const summary = getVulnerabilityStatusSummary(info.row.original);
                 const label = getTopStatusSummaryLabel(summary);
@@ -1417,20 +1452,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 onClose={closeBanner}
             />
         )}
-        {shouldShowMissingEuvdDataBanner && (
+        {shouldShowMissingDataBanner && (
             <MessageBanner
                 type="info"
-                message={MISSING_EUVD_DATA_MESSAGE}
+                message={missingDataBannerMessage}
                 isVisible={true}
-                onClose={() => setIsMissingEuvdDataBannerDismissed(true)}
-            />
-        )}
-        {shouldShowMissingPublishedDateDataBanner && (
-            <MessageBanner
-                type="info"
-                message={MISSING_PUBLISHED_DATE_DATA_MESSAGE}
-                isVisible={true}
-                onClose={() => setIsMissingPublishedDateDataBannerDismissed(true)}
+                onClose={dismissMissingDataBanner}
             />
         )}
 

@@ -48,6 +48,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
+    const [missingEuvdDataBannerDismissed, setMissingEuvdDataBannerDismissed] = useState(false);
+    const [missingPublishedDateDataBannerDismissed, setMissingPublishedDateDataBannerDismissed] = useState(false);
     const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
     const [loadingMessage, setLoadingMessage] = useState<string>("Loading data...");
     const [defaultConfig, setDefaultConfig] = useState<AppConfig>({
@@ -309,6 +311,10 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     baseVariantId={currentBaseVariantId}
                     compareOperation={currentOperation}
                     onRefreshComplete={handleRefreshComplete}
+                    missingEuvdDataBannerDismissed={missingEuvdDataBannerDismissed}
+                    onMissingEuvdDataBannerDismissedChange={setMissingEuvdDataBannerDismissed}
+                    missingPublishedDateDataBannerDismissed={missingPublishedDateDataBannerDismissed}
+                    onMissingPublishedDateDataBannerDismissedChange={setMissingPublishedDateDataBannerDismissed}
                 />}
                 {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
                 {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
