@@ -1,6 +1,8 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+from html.parser import HTMLParser
+from html import unescape as html_unescape
 from jinja2 import sandbox, FileSystemLoader, ChoiceLoader
 import subprocess
 import os
@@ -259,6 +261,56 @@ class Templates:
         return docs
 
 
+class _HtmlStripper(HTMLParser):
+    """Stdlib HTML tokenizer that strips tags and performs NO decoding.
+
+    Block-level tags (``<p>``, ``<br>``, ``<li>``, ``<div>``, ``<tr>``, …)
+    are replaced with a newline so that paragraph structure is preserved in
+    the resulting plain text.  All other tags are silently dropped.
+
+    ``convert_charrefs`` is deliberately disabled and entity/character
+    references are re-emitted verbatim: entity decoding happens *before*
+    this parser runs (see ``TemplatesExtensions._strip_html``). Keeping the
+    tag-stripping pass decode-free guarantees that no decoding step remains
+    after the last strip, so stripped output can never contain a tag that
+    was hiding behind an entity reference.
+    """
+
+    _BLOCK_TAGS = frozenset({
+        "p", "br", "div", "li", "tr", "th", "td",
+        "h1", "h2", "h3", "h4", "h5", "h6",
+        "blockquote", "pre", "hr",
+    })
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:  # type: ignore[override]
+        if tag.lower() in self._BLOCK_TAGS:
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in self._BLOCK_TAGS:
+            self._parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        self._parts.append(data)
+
+    def handle_entityref(self, name: str) -> None:
+        # Anything still shaped like an entity reference at this point is
+        # literal text: either an unknown name html.unescape left alone, or
+        # a leftover from an input that exceeded the decode budget. Pass it
+        # through verbatim -- it is inert and must not be interpreted.
+        self._parts.append(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        self._parts.append(f"&#{name};")
+
+    def get_text(self) -> str:
+        return "".join(self._parts)
+
+
 class TemplatesExtensions:
     def __init__(self, jinjaEnv):
         jinjaEnv.filters["status"] = TemplatesExtensions.filter_status
@@ -327,6 +379,49 @@ class TemplatesExtensions:
     # and corrupt the report's heading hierarchy.
     _ADOC_HEADING = re.compile(r"^(?:={1,6}|#{1,6})[ \t]")
 
+    # Maximum number of entity-decoding passes performed by _strip_html
+    # before stopping (see its docstring). Legitimate descriptions never
+    # nest entity encoding more than a level or two; this bound only caps
+    # CPU spent on adversarial, arbitrarily-nested inputs. Exceeding it is
+    # safe: leftover entities stay encoded and inert.
+    _MAX_ENTITY_DECODE_PASSES = 20
+
+    @staticmethod
+    def _strip_html(value: str) -> str:
+        """Fully decode HTML entities, then strip tags in a single pass.
+
+        Ordering is what makes this safe. Entity-encoded markup (e.g.
+        ``&lt;b&gt;bold&lt;/b&gt;``, or deeper nestings like
+        ``&amp;lt;b&amp;gt;``) only becomes a live tag when a decoding step
+        runs *after* the last tag-stripping step. So:
+
+        1. Decode entities to a fixed point with ``html.unescape`` (which
+           never tokenizes tags), bounded by a pass budget. Legitimate
+           descriptions converge in one or two passes; each extra pass means
+           another deliberate layer of encoding. The budget exists purely to
+           bound CPU on adversarial inputs (repeated whole-string unescape
+           is O(passes * len)).
+        2. Strip tags in a single pass with ``_HtmlStripper``, which
+           performs *no* decoding and re-emits any remaining entity
+           references verbatim.
+
+        Because step 2 never decodes, there is no decoding step after the
+        last strip: whatever entities survive an exhausted budget stay as
+        inert literal text (``&lt;b&gt;`` renders as those characters) and
+        can never re-materialise as raw HTML.
+        """
+        decoded = value
+        for _ in range(TemplatesExtensions._MAX_ENTITY_DECODE_PASSES):
+            next_decoded = html_unescape(decoded)
+            if next_decoded == decoded:
+                break
+            decoded = next_decoded
+
+        stripper = _HtmlStripper()
+        stripper.feed(decoded)
+        stripper.close()
+        return stripper.get_text()
+
     @staticmethod
     def escape_adoc(value: Optional[str]) -> str:
         """Neutralise AsciiDoc structural markup in arbitrary free-form text.
@@ -347,9 +442,16 @@ class TemplatesExtensions:
         We defuse such lines by prefixing them with a zero-width space so
         Asciidoctor no longer treats them as structural markup, while the
         visible text stays unchanged.
+
+        HTML tags and entities are stripped first using Python's stdlib HTML
+        tokenizer so that Asciidoctor never sees raw HTML syntax.
         """
         if not value:
             return ""
+        # Fully decode HTML entities and strip any embedded tags (see
+        # _strip_html) so Asciidoctor receives plain text instead of raw
+        # HTML that would malform the rendered output.
+        value = TemplatesExtensions._strip_html(value)
         lines = value.splitlines()
         for i, line in enumerate(lines):
             if (
