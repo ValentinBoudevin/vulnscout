@@ -7,45 +7,75 @@ import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
 import React from 'react';
 
-jest.mock('../../src/components/TableGeneric', () => ({
-    __esModule: true,
-    default: ({ data, columns, search }: any) => {
-        const val = (row: any, col: any) => (col.accessorKey ? row[col.accessorKey] : undefined);
-        return (
-            <table data-testid="mock-table" data-search={search ?? ''}>
-                <thead>
-                    <tr>
-                        {columns.map((col: any, ci: number) => (
-                            <th key={ci}>{typeof col.header === 'function' ? col.header({ column: col }) : col.header}</th>
-                        ))}
-                    </tr>
-                </thead>
-                <tbody>
-                    {data.map((row: any, i: number) => (
-                        <tr key={i} data-testid="mock-table-row">
+jest.mock('../../src/components/TableGeneric', () => {
+    const ReactMock = require('react');
+    return {
+        __esModule: true,
+        default: ({ data, columns, search, onFilteredDataChange }: any) => {
+            const val = (row: any, col: any) => (col.accessorKey ? row[col.accessorKey] : undefined);
+            // Simulate TableGeneric emitting its filtered+sorted rows in display
+            // order. The real component applies the text search internally; here
+            // we approximate it with a substring match on vuln_id/id so tests can
+            // assert that modal navigation follows the *displayed* rows, not the
+            // pre-search `filteredAssessments` list.
+            const displayedForNav = (typeof search === 'string' && search.length >= 1)
+                ? data.filter((row: any) =>
+                    String(row.vuln_id ?? row.id ?? '').toLowerCase().includes(search.toLowerCase()))
+                : data;
+            ReactMock.useEffect(() => {
+                onFilteredDataChange?.(displayedForNav);
+            }, [onFilteredDataChange, displayedForNav]);
+            return (
+                <table data-testid="mock-table" data-search={search ?? ''}>
+                    <thead>
+                        <tr>
                             {columns.map((col: any, ci: number) => (
-                                <td key={ci}>
-                                    {col.cell ? col.cell({ row: { original: row }, getValue: () => val(row, col) }) : null}
-                                </td>
+                                <th key={ci}>{typeof col.header === 'function' ? col.header({ column: col }) : col.header}</th>
                             ))}
                         </tr>
-                    ))}
-                </tbody>
-            </table>
-        );
-    },
-}));
+                    </thead>
+                    <tbody>
+                        {data.map((row: any, i: number) => (
+                            <tr key={i} data-testid="mock-table-row">
+                                {columns.map((col: any, ci: number) => (
+                                    <td key={ci}>
+                                        {col.cell ? col.cell({ row: { original: row }, getValue: () => val(row, col) }) : null}
+                                    </td>
+                                ))}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            );
+        },
+    };
+});
 
 // The vulnerability modal is not exercised here; keep it inert but observable,
 // and expose its callbacks so we can test the dismiss and no-op handler paths.
+// Also surface the Previous/Next navigation props (vulnerabilities/currentIndex/
+// onNavigate) so tests can assert on Review's nav wiring without re-testing
+// VulnModal's own navigation UI (covered in test_vuln_modal.tsx).
 jest.mock('../../src/components/VulnModal', () => ({
     __esModule: true,
-    default: ({ onClose, appendAssessment, appendCVSS, patchVuln }: any) => (
+    default: ({ vuln, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate }: any) => (
         <div data-testid="vuln-modal">
+            <div data-testid="vuln-modal-vuln-id">{vuln?.id}</div>
             <button onClick={() => { appendAssessment(); appendCVSS(); patchVuln(); }}>
                 invoke-vuln-modal-callbacks
             </button>
             <button onClick={onClose}>close-vuln-modal</button>
+            {vulnerabilities !== undefined && currentIndex !== undefined && (
+                <div data-testid="vuln-modal-nav-info">
+                    {`nav ${currentIndex} of ${vulnerabilities.length}`}
+                </div>
+            )}
+            {onNavigate && (
+                <>
+                    <button onClick={() => onNavigate((currentIndex ?? 0) - 1)}>nav-prev</button>
+                    <button onClick={() => onNavigate((currentIndex ?? 0) + 1)}>nav-next</button>
+                </>
+            )}
         </div>
     ),
 }));
@@ -641,6 +671,454 @@ describe('Review — vulnerability modal', () => {
             );
         });
         expect(screen.queryByTestId('vuln-modal')).not.toBeInTheDocument();
+    });
+});
+
+// ===========================================================================
+// Assessments tab Previous/Next navigation (commit 144be635)
+// ===========================================================================
+
+// Two rows sharing the same vuln_id but differing in status/justification so
+// groupAssessments keeps them as two distinct rows — exercising the vuln_id
+// dedup in the display-order navigation list. A third row uses a different
+// vuln_id entirely.
+const NAV_DUP_A = {
+    id: 'nav-a', vuln_id: 'CVE-NAV-1', packages: ['pkgA@1.0.0'], variant_id: 'v1',
+    status: 'affected', status_notes: 'note-a', timestamp: '2024-01-01T00:00:00Z',
+    origin: 'custom', responses: [],
+};
+const NAV_DUP_B = {
+    id: 'nav-b', vuln_id: 'CVE-NAV-1', packages: ['pkgA@1.0.0'], variant_id: 'v2',
+    status: 'not_affected', justification: 'code_not_reachable', status_notes: 'note-b',
+    timestamp: '2024-01-02T00:00:00Z', origin: 'custom', responses: [],
+};
+const NAV_OTHER = {
+    id: 'nav-c', vuln_id: 'CVE-NAV-2', packages: ['pkgA@1.0.0'], variant_id: 'v1',
+    status: 'affected', status_notes: 'note-c', timestamp: '2024-01-03T00:00:00Z',
+    origin: 'custom', responses: [],
+};
+
+/**
+ * Same routing as mockNetwork, but resolves `/api/vulnerabilities/<id>` (and
+ * its `/assessments` sibling) per requested id, so navigating between
+ * distinct vulnerabilities can be observed via `vuln-modal-vuln-id`.
+ */
+function mockNetworkWithVulnById(
+    reviewList: unknown[],
+    opts: { te?: unknown[]; cvss?: unknown[] } = {},
+): void {
+    const { te = [], cvss = [] } = opts;
+    fetchMock.resetMocks();
+    fetchMock.mockResponse(async (req) => {
+        const url = req.url;
+        if (url.includes('/api/assessments/review/time-estimates')) return JSON.stringify(te);
+        if (url.includes('/api/assessments/review/custom-cvss')) return JSON.stringify(cvss);
+        if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
+        const assessMatch = url.match(/\/api\/vulnerabilities\/([^/]+)\/assessments/);
+        if (assessMatch) return JSON.stringify([]);
+        const variantsMatch = url.match(/\/api\/vulnerabilities\/([^/]+)\/variants/);
+        if (variantsMatch) return JSON.stringify(VARIANTS);
+        const vulnMatch = url.match(/\/api\/vulnerabilities\/([^/]+)$/);
+        if (vulnMatch) {
+            const id = decodeURIComponent(vulnMatch[1]);
+            return JSON.stringify({ id, version: '4.0', base_score: 5 });
+        }
+        if (url.includes('/api/packages')) return JSON.stringify([{ name: 'pkgA', version: '1.0.0' }]);
+        if (url.includes('/api/variants')) return JSON.stringify(VARIANTS);
+        if (url.includes('/api/projects')) return JSON.stringify(PROJECTS);
+        if (url.includes('/api/version')) return JSON.stringify({ version: 'unknown' });
+        return JSON.stringify([]);
+    });
+}
+
+const openAssessmentsModal = async (
+    user: ReturnType<typeof userEvent.setup>,
+    rowIndex: number,
+) => {
+    const idCell = (await screen.findAllByTitle('Click to view details'))[rowIndex];
+    await user.click(idCell);
+    await screen.findByTestId('vuln-modal');
+};
+
+/**
+ * Like mockNetworkWithVulnById, but the single-vulnerability GET for any id in
+ * `deferGates` blocks until its gate promise resolves. Lets tests hold a modal
+ * navigation fetch pending while they close/reopen the modal, exercising the
+ * request-generation guard against stale responses.
+ */
+function mockNetworkWithDeferredVuln(
+    reviewList: unknown[],
+    deferGates: Record<string, Promise<void>>,
+): void {
+    fetchMock.resetMocks();
+    fetchMock.mockResponse(async (req) => {
+        const url = req.url;
+        if (url.includes('/api/assessments/review/time-estimates')) return JSON.stringify([]);
+        if (url.includes('/api/assessments/review/custom-cvss')) return JSON.stringify([]);
+        if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
+        const assessMatch = url.match(/\/api\/vulnerabilities\/([^/]+)\/assessments/);
+        if (assessMatch) return JSON.stringify([]);
+        const variantsMatch = url.match(/\/api\/vulnerabilities\/([^/]+)\/variants/);
+        if (variantsMatch) return JSON.stringify(VARIANTS);
+        const vulnMatch = url.match(/\/api\/vulnerabilities\/([^/]+)$/);
+        if (vulnMatch) {
+            const id = decodeURIComponent(vulnMatch[1]);
+            if (id in deferGates) await deferGates[id];
+            return JSON.stringify({ id, version: '4.0', base_score: 5 });
+        }
+        if (url.includes('/api/packages')) return JSON.stringify([{ name: 'pkgA', version: '1.0.0' }]);
+        if (url.includes('/api/variants')) return JSON.stringify(VARIANTS);
+        if (url.includes('/api/projects')) return JSON.stringify(PROJECTS);
+        if (url.includes('/api/version')) return JSON.stringify({ version: 'unknown' });
+        return JSON.stringify([]);
+    });
+}
+
+const searchAssessments = (value: string) => {
+    const input = screen.getByPlaceholderText(/Search by vulnerability/);
+    fireEvent.input(input, { target: { value } });
+};
+
+describe('Review — Assessments tab navigation', () => {
+    test('dedupes repeated vuln_ids and computes index among distinct ids', async () => {
+        mockNetworkWithVulnById([NAV_DUP_A, NAV_DUP_B, NAV_OTHER]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        // Row 1 is the second occurrence of CVE-NAV-1; its distinct index is
+        // still 0 (not 1), and there are only 2 distinct vuln ids total.
+        await openAssessmentsModal(user, 1);
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 0 of 2');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-1');
+
+        await user.click(screen.getByText('close-vuln-modal'));
+        await waitFor(() => expect(screen.queryByTestId('vuln-modal')).not.toBeInTheDocument());
+
+        // Row 2 is the distinct second vuln id, so its index is 1.
+        await openAssessmentsModal(user, 2);
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 1 of 2');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-2');
+    });
+
+    test('all three tabs (Assessments, Time Estimates, Custom CVSS) pass navigation props', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { te: TIME_ESTIMATES, cvss: CUSTOM_CVSS });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openAssessmentsModal(user, 0);
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toBeInTheDocument();
+        await user.click(screen.getByText('close-vuln-modal'));
+        await waitFor(() => expect(screen.queryByTestId('vuln-modal')).not.toBeInTheDocument());
+
+        await user.click(screen.getByText(/Time Estimates \(2\)/));
+        const teIdCell = (await screen.findAllByTitle('Click to view details'))[0];
+        await user.click(teIdCell);
+        await screen.findByTestId('vuln-modal');
+        expect(screen.getByTestId('vuln-modal-nav-info')).toBeInTheDocument();
+        await user.click(screen.getByText('close-vuln-modal'));
+        await waitFor(() => expect(screen.queryByTestId('vuln-modal')).not.toBeInTheDocument());
+
+        await user.click(screen.getByText(/Custom CVSS \(5\)/));
+        const cvssIdCell = (await screen.findAllByTitle('Click to view details'))[0];
+        await user.click(cvssIdCell);
+        await screen.findByTestId('vuln-modal');
+        expect(screen.getByTestId('vuln-modal-nav-info')).toBeInTheDocument();
+    });
+
+    test('clicking Next fetches and displays the next distinct vulnerability', async () => {
+        mockNetworkWithVulnById([NAV_DUP_A, NAV_DUP_B, NAV_OTHER]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openAssessmentsModal(user, 0);
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 0 of 2');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-1');
+
+        await user.click(screen.getByText('nav-next'));
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith(
+                expect.stringContaining('/api/vulnerabilities/CVE-NAV-2'),
+                expect.anything(),
+            );
+        });
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 1 of 2');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-2');
+    });
+
+    test('navigating past the last vulnerability is a no-op', async () => {
+        mockNetworkWithVulnById([NAV_DUP_A, NAV_OTHER]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openAssessmentsModal(user, 1);
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 1 of 2');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-2');
+
+        fetchMock.mockClear();
+        await user.click(screen.getByText('nav-next'));
+
+        // Out of bounds (index 2 >= length 2): no fetch, modal stays put.
+        await waitFor(() => {
+            expect(fetchMock.mock.calls.filter(c => String(c[0]).includes('/api/vulnerabilities/CVE-NAV'))).toHaveLength(0);
+        });
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-2');
+        expect(screen.getByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 1 of 2');
+    });
+
+    test('navigating before the first vulnerability is a no-op', async () => {
+        mockNetworkWithVulnById([NAV_DUP_A, NAV_OTHER]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openAssessmentsModal(user, 0);
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 0 of 2');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-1');
+
+        fetchMock.mockClear();
+        await user.click(screen.getByText('nav-prev'));
+
+        // Out of bounds (index -1 < 0): no fetch, modal stays on the first vuln.
+        await waitFor(() => {
+            expect(fetchMock.mock.calls.filter(c => String(c[0]).includes('/api/vulnerabilities/CVE-NAV'))).toHaveLength(0);
+        });
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-1');
+        expect(screen.getByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 0 of 2');
+    });
+
+    test('filtering the Assessments tab narrows the navigation id list', async () => {
+        mockNetworkWithVulnById([NAV_DUP_A, NAV_DUP_B, NAV_OTHER]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        // Filter down to "Not affected" rows only: this keeps NAV_DUP_B (CVE-NAV-1)
+        // and drops NAV_DUP_A and NAV_OTHER, leaving a single distinct vuln id.
+        await screen.findAllByTitle('Click to view details');
+        await user.click(screen.getByRole('button', { name: /Status/ }));
+        await user.click(screen.getByRole('checkbox', { name: 'Not affected' }));
+
+        await openAssessmentsModal(user, 0);
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 0 of 1');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-1');
+    });
+
+    // Bug B: the navigation list must follow the table's displayed rows (which
+    // include the text-search state), not the pre-search `filteredAssessments`.
+    const SEARCH_A1 = { ...NAV_DUP_A, id: 'srch-a1', vuln_id: 'CVE-AAA-1' };
+    const SEARCH_B2 = { ...NAV_OTHER, id: 'srch-b2', vuln_id: 'CVE-BBB-2' };
+    const SEARCH_A3 = { ...NAV_OTHER, id: 'srch-a3', vuln_id: 'CVE-AAA-3' };
+
+    test('search narrows the navigation list to the displayed rows', async () => {
+        mockNetworkWithVulnById([SEARCH_A1, SEARCH_B2, SEARCH_A3]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findAllByTitle('Click to view details');
+        // Search "AAA" hides CVE-BBB-2, leaving two distinct displayed ids.
+        searchAssessments('AAA');
+        await waitFor(() => {
+            expect(screen.getByTestId('mock-table')).toHaveAttribute('data-search', 'AAA');
+        });
+
+        // Open the first displayed AAA row: nav context spans only the 2 visible
+        // ids, not all 3 assessments.
+        await openAssessmentsModal(user, 0);
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 0 of 2');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-AAA-1');
+    });
+
+    test('Next skips search-hidden vulnerabilities and follows display order', async () => {
+        mockNetworkWithVulnById([SEARCH_A1, SEARCH_B2, SEARCH_A3]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findAllByTitle('Click to view details');
+        searchAssessments('AAA');
+        await waitFor(() => {
+            expect(screen.getByTestId('mock-table')).toHaveAttribute('data-search', 'AAA');
+        });
+
+        await openAssessmentsModal(user, 0);
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 0 of 2');
+
+        // Next must jump to CVE-AAA-3 (the next *visible* row), skipping the
+        // search-hidden CVE-BBB-2 that sits between them in the raw list.
+        await user.click(screen.getByText('nav-next'));
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith(
+                expect.stringContaining('/api/vulnerabilities/CVE-AAA-3'),
+                expect.anything(),
+            );
+        });
+        expect(fetchMock).not.toHaveBeenCalledWith(
+            expect.stringContaining('/api/vulnerabilities/CVE-BBB-2'),
+            expect.anything(),
+        );
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 1 of 2');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-AAA-3');
+    });
+
+    // Bug C: asynchronous navigation must not apply stale results. Closing the
+    // modal (or starting a newer request) invalidates any in-flight fetch.
+    test('closing the modal while a navigation fetch is pending does not reopen it', async () => {
+        let release: () => void = () => {};
+        const gate = new Promise<void>((res) => { release = res; });
+        mockNetworkWithDeferredVuln([NAV_DUP_A, NAV_OTHER], { 'CVE-NAV-2': gate });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openAssessmentsModal(user, 0);
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 0 of 2');
+
+        // Start navigating to CVE-NAV-2; its fetch is held pending.
+        await user.click(screen.getByText('nav-next'));
+        // Close before the fetch resolves.
+        await user.click(screen.getByText('close-vuln-modal'));
+        await waitFor(() => expect(screen.queryByTestId('vuln-modal')).not.toBeInTheDocument());
+
+        // Releasing the stale fetch must not reopen the modal.
+        release();
+        await new Promise((r) => setTimeout(r, 0));
+        await waitFor(() => expect(screen.queryByTestId('vuln-modal')).not.toBeInTheDocument());
+    });
+
+    test('a stale navigation response does not override a newer selection', async () => {
+        let release: () => void = () => {};
+        const gate = new Promise<void>((res) => { release = res; });
+        mockNetworkWithDeferredVuln([NAV_DUP_A, NAV_OTHER], { 'CVE-NAV-2': gate });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openAssessmentsModal(user, 0);
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-1');
+
+        // Navigate to CVE-NAV-2 (held pending), then close and reopen CVE-NAV-1.
+        await user.click(screen.getByText('nav-next'));
+        await user.click(screen.getByText('close-vuln-modal'));
+        await waitFor(() => expect(screen.queryByTestId('vuln-modal')).not.toBeInTheDocument());
+        await openAssessmentsModal(user, 0);
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-1');
+
+        // The late CVE-NAV-2 response must be discarded, leaving CVE-NAV-1 shown.
+        release();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-1');
+    });
+
+    test('a stale modal-open fetch is discarded when a newer vuln is opened', async () => {
+        let release: () => void = () => {};
+        const gate = new Promise<void>((res) => { release = res; });
+        mockNetworkWithDeferredVuln([NAV_DUP_A, NAV_OTHER], { 'CVE-NAV-1': gate });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        // Click CVE-NAV-1 (row 0); its open fetch is held pending, so no modal yet.
+        const cells = await screen.findAllByTitle('Click to view details');
+        await user.click(cells[0]);
+        expect(screen.queryByTestId('vuln-modal')).not.toBeInTheDocument();
+
+        // Open CVE-NAV-2 (row 1, not gated); its newer generation supersedes the
+        // still-pending CVE-NAV-1 open.
+        await user.click(cells[1]);
+        await screen.findByTestId('vuln-modal');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-2');
+
+        // Releasing the stale CVE-NAV-1 open must not replace the shown vuln.
+        release();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-2');
+    });
+});
+
+describe('Review — Time Estimates & Custom CVSS tab navigation', () => {
+    const TE_NAV = [
+        { vuln_id: 'CVE-TE-1', variant_id: 'v1', optimistic: 1, likely: 2, pessimistic: 4 },
+        { vuln_id: 'CVE-TE-1', variant_id: 'v2', optimistic: 1, likely: 2, pessimistic: 4 },
+        { vuln_id: 'CVE-TE-2', variant_id: 'v1', optimistic: 1, likely: 2, pessimistic: 4 },
+    ];
+    const CVSS_NAV = [
+        { vuln_id: 'CVE-CV-1', variant_id: 'v1', version: '3.1', vector_string: 'x', base_score: 5, author: 'alice', origin: 'custom' },
+        { vuln_id: 'CVE-CV-1', variant_id: 'v2', version: '3.1', vector_string: 'x', base_score: 5, author: 'bob', origin: 'custom' },
+        { vuln_id: 'CVE-CV-2', variant_id: 'v1', version: '3.1', vector_string: 'x', base_score: 5, author: 'carol', origin: 'custom' },
+    ];
+
+    test('Time Estimates tab: Next navigates across the distinct displayed vulns', async () => {
+        mockNetworkWithVulnById([], { te: TE_NAV });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByText(/Time Estimates \(3\)/));
+        const cells = await screen.findAllByTitle('Click to view details');
+        await user.click(cells[0]);
+        await screen.findByTestId('vuln-modal');
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 0 of 2');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-TE-1');
+
+        await user.click(screen.getByText('nav-next'));
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 1 of 2');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-TE-2');
+    });
+
+    test('Time Estimates tab: duplicate vuln rows collapse to one nav entry', async () => {
+        mockNetworkWithVulnById([], { te: TE_NAV });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByText(/Time Estimates \(3\)/));
+        const cells = await screen.findAllByTitle('Click to view details');
+        // Row 1 is the second occurrence of CVE-TE-1; its distinct index is still
+        // 0 and only 2 distinct vuln ids exist.
+        await user.click(cells[1]);
+        await screen.findByTestId('vuln-modal');
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 0 of 2');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-TE-1');
+    });
+
+    test('Custom CVSS tab: Next navigates across the distinct displayed vulns', async () => {
+        mockNetworkWithVulnById([], { cvss: CVSS_NAV });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByText(/Custom CVSS \(3\)/));
+        const cells = await screen.findAllByTitle('Click to view details');
+        await user.click(cells[0]);
+        await screen.findByTestId('vuln-modal');
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 0 of 2');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-CV-1');
+
+        await user.click(screen.getByText('nav-next'));
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 1 of 2');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-CV-2');
+    });
+
+    test('switching tabs and back rebuilds the navigation list for the active tab', async () => {
+        mockNetworkWithVulnById([NAV_DUP_A, NAV_OTHER], { te: TE_NAV });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        // Start on the Assessments tab: nav spans the assessment vuln ids.
+        await openAssessmentsModal(user, 0);
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 0 of 2');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-1');
+        await user.click(screen.getByText('close-vuln-modal'));
+        await waitFor(() => expect(screen.queryByTestId('vuln-modal')).not.toBeInTheDocument());
+
+        // Move to Time Estimates: the shared ref now tracks the TE vuln ids.
+        await user.click(await screen.findByText(/Time Estimates \(3\)/));
+        let cells = await screen.findAllByTitle('Click to view details');
+        await user.click(cells[0]);
+        await screen.findByTestId('vuln-modal');
+        expect(await screen.findByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-TE-1');
+        await user.click(screen.getByText('close-vuln-modal'));
+        await waitFor(() => expect(screen.queryByTestId('vuln-modal')).not.toBeInTheDocument());
+
+        // Back to Assessments: nav must again span the assessment vuln ids.
+        await user.click(screen.getByRole('button', { name: /^Assessments/ }));
+        cells = await screen.findAllByTitle('Click to view details');
+        await user.click(cells[0]);
+        await screen.findByTestId('vuln-modal');
+        expect(await screen.findByTestId('vuln-modal-nav-info')).toHaveTextContent('nav 0 of 2');
+        expect(screen.getByTestId('vuln-modal-vuln-id')).toHaveTextContent('CVE-NAV-1');
     });
 });
 
