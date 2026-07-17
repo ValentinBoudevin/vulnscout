@@ -31,6 +31,18 @@ describe('MessageBanner', () => {
         expect(container.firstChild).not.toBeNull();
     });
 
+    test('renders info banner', () => {
+        const { container } = render(
+            <MessageBanner
+                type="info"
+                message="Test information"
+                isVisible={true}
+                onClose={() => {}}
+            />
+        );
+        expect(container.firstChild).toHaveClass('bg-blue-600', 'border-blue-700');
+    });
+
     test('does not render when invisible', () => {
         const { container } = render(
             <MessageBanner 
