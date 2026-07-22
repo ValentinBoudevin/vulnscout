@@ -9,6 +9,7 @@ from ..helpers.add_middleware import FlaskWithMiddleware as Flask
 from ..helpers.env_vars import get_bool_env
 from ..extensions import db, migrate, setup_write_serialization
 from ..routes import init_app
+from ..routes.documents import MAX_ASSET_UPLOAD_BYTES
 from .. import models  # noqa: F401
 from .merger_ci import init_app as init_merger_cli, post_treatment
 import sys
@@ -20,6 +21,7 @@ import signal
 MAX_SCRIPT_STEPS = 8
 SCAN_FILE = "/scan/status.txt"
 DEFAULT_DB_URI = "sqlite:////cache/vulnscout/vulnscout.db"
+MAX_UPLOAD_REQUEST_BYTES = MAX_ASSET_UPLOAD_BYTES + 64 * 1024
 
 
 def _launch_enrichment(app):
@@ -85,6 +87,9 @@ def _warm_scan_list_cache(app):
 def create_app():
     app = Flask(__name__, static_folder="../static")
     app.config.from_prefixed_env()
+    # Allow multipart headers while ensuring Werkzeug rejects oversized bodies
+    # before parsing and spooling uploaded files.
+    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_REQUEST_BYTES
     app._INT_SCAN_FINISHED = False
     if "SCAN_FILE" not in app.config:
         app.config["SCAN_FILE"] = SCAN_FILE

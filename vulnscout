@@ -74,6 +74,7 @@ Scan & output commands:
   --serve                         Run scan then start web UI (port 7275)
   --report <template>             Generate a report from a template
   --report <path>                 Stage a local report template file and generate a report from it
+  --add-asset <path>              Stage a local image asset for use in report templates
   --export-spdx                   Export project as SPDX 3.0 SBOM
   --export-cdx                    Export project as CycloneDX 1.6 SBOM
   --export-openvex                Export project as OpenVEX document
@@ -319,6 +320,8 @@ parse_and_run() {
                 MATCH_CONDITION="$2"; shift 2 ;;
             add-spdx|--add-spdx|add-cve-check|--add-cve-check|add-yocto-vex|--add-yocto-vex|add-openvex|--add-openvex|add-cdx|--add-cdx|add-grype|--add-grype)
                 ensure_running; add_input "${1#--}" "$2"; shift 2 ;;
+            add-asset|--add-asset)
+                ensure_running; add_input add-asset "$2"; shift 2 ;;
             perform-grype-scan|--perform-grype-scan)
                 ensure_running; PENDING_ARGS+=(--perform-grype-scan); shift ;;
             perform-nvd-scan|--perform-nvd-scan)

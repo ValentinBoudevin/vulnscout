@@ -4,11 +4,12 @@
 from html.parser import HTMLParser
 from html import unescape as html_unescape
 from jinja2 import sandbox, FileSystemLoader, ChoiceLoader
+import base64
+import shutil
 import subprocess
+import tempfile
 import os
-import random
 import re
-import string
 from datetime import datetime, timezone
 from typing import Any, Callable, List, Optional
 from ..models.iso8601_duration import Iso8601Duration
@@ -23,6 +24,101 @@ from ..controllers import (
     ScanController,
     SBOMDocumentController,
 )
+
+# Directories searched for image assets, most-preferred first.
+# The built-in assets directory is appended at runtime (depends on __file__).
+_ASSET_SEARCH_DIRS: List[str] = [
+    "/cache/vulnscout/templates/assets",
+    ".vulnscout/templates/assets",
+    "templates/assets",
+    "/scan/templates/assets",
+]
+
+# Image extensions accepted by find_asset / embed_image.
+ALLOWED_ASSET_EXTENSIONS: frozenset = frozenset({"png", "jpg", "jpeg", "gif", "svg", "webp"})
+
+_MIME_BY_EXT: dict = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "svg": "image/svg+xml",
+    "webp": "image/webp",
+}
+
+
+def _asset_search_dirs() -> List[str]:
+    """Return the ordered list of asset directories, including the built-in one."""
+    builtin = os.path.join(os.path.dirname(__file__), "templates", "assets")
+    return _ASSET_SEARCH_DIRS + [builtin]
+
+
+def find_asset(name: str) -> Optional[str]:
+    """Return the absolute path of a named asset file, or ``None`` if not found.
+
+    Only a plain filename (no directory separators, no ``..``) whose extension
+    is in :data:`ALLOWED_ASSET_EXTENSIONS` is accepted — anything else returns
+    ``None`` without raising.
+    """
+    safe_name = os.path.basename((name or "").strip())
+    if not safe_name or safe_name != name or "/" in name or ".." in name:
+        return None
+    ext = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
+    if ext not in ALLOWED_ASSET_EXTENSIONS:
+        return None
+    for directory in _asset_search_dirs():
+        candidate = os.path.join(directory, safe_name)
+        if os.path.isfile(candidate):
+            return os.path.realpath(candidate)
+    return None
+
+
+# Matches AsciiDoc block (``image::``) and inline (``image:``) macro targets,
+# e.g. ``image::logo.png[Alt]`` or ``image:icon.svg[]``. Used to discover
+# which named assets a rendered document actually references so only those
+# (already validated through find_asset) are copied into the sandboxed
+# temporary directory passed to asciidoctor.
+_IMAGE_MACRO_RE = re.compile(r"image::?([^\[\]\s]+)\[")
+
+
+def _referenced_asset_names(adoc: str) -> set[str]:
+    """Return the set of plain asset filenames referenced by image macros in *adoc*."""
+    names: set[str] = set()
+    for match in _IMAGE_MACRO_RE.finditer(adoc):
+        target = match.group(1)
+        if target.startswith("data:"):
+            continue  # already an inlined data URI (e.g. from embed_image)
+        names.add(os.path.basename(target))
+    return names
+
+
+def embed_image(name: str, width: Optional[int] = None, alt: str = "") -> str:
+    """Return an AsciiDoc block image macro with the image inlined as a base64 data URI.
+
+    If the asset cannot be resolved an empty string is returned so callers may
+    use ``{% if embed_image(...) %}`` guards without raising errors.
+
+    The emitted syntax is self-contained in every asciidoctor output format
+    (raw adoc, HTML, PDF) — no ``imagesdir`` or safe-mode setting is required.
+
+    Example usage in a Jinja template::
+
+        {{ embed_image("logo.png", width=150, alt="Company Logo") }}
+    """
+    path = find_asset(name)
+    if path is None:
+        return ""
+    ext = name.rsplit(".", 1)[-1].lower()
+    mime = _MIME_BY_EXT.get(ext, "application/octet-stream")
+    try:
+        with open(path, "rb") as fh:
+            b64 = base64.b64encode(fh.read()).decode("ascii")
+    except OSError:
+        return ""
+    attrs = alt
+    if width is not None:
+        attrs = f"{alt},{width}"
+    return f"image::data:{mime};base64,{b64}[{attrs}]"
 
 
 class Templates:
@@ -55,6 +151,8 @@ class Templates:
             autoescape=False
         )
         self.env.globals['env'] = TemplatesExtensions.get_env_var
+        self.env.globals['embed_image'] = embed_image
+        self.env.globals['find_asset'] = find_asset
         self.extensions = TemplatesExtensions(self.env)
 
     def render(self, template_name, **kwargs):
@@ -222,31 +320,70 @@ class Templates:
         return template.render(**kwargs)
 
     def _run_asciidoctor(self, adoc: str, command: list[str], output_ext: str) -> bytes:
-        """Run an asciidoctor command on *adoc* text and return the converted bytes."""
-        random_name = ''.join(random.choices(string.ascii_lowercase, k=8))
-        adoc_path = f"{random_name}.adoc"
-        output_path = f"{random_name}.{output_ext}"
+        """Run an asciidoctor command on *adoc* text and return the converted bytes.
 
-        with open(adoc_path, "w+") as f:
-            f.write(adoc)
+        The conversion runs inside a freshly created temporary directory so the
+        working directory is always predictable.  Extra attributes are injected
+        automatically:
 
-        execution = subprocess.run(command + [adoc_path], capture_output=True)
-        if execution.returncode != 0:
-            print(execution.stdout)
-            print(execution.stderr)
-            try:
-                if os.path.exists(adoc_path):
-                    os.remove(adoc_path)
-                if os.path.exists(output_path):
-                    os.remove(output_path)
-            finally:
-                raise RuntimeError(f"Error converting adoc to {output_ext}: asciidoctor returned non-zero exit code")
+        * ``-S safe`` with ``-B <tmp_dir>`` — restricts asciidoctor to reading
+          files from within the temporary directory only. Combined with
+          copying only the resolved, referenced assets into that directory
+          (see :func:`_referenced_asset_names`), this prevents directives such
+          as ``include::/etc/passwd[]`` from disclosing arbitrary server
+          files while still allowing legitimate template assets to resolve.
+        * ``-a imagesdir=<path>`` — set to the copied assets directory so
+          native ``image::name.png[]`` macros resolve without a full path.
+        * ``-a data-uri`` (HTML only) — inlines resolved images as base64 data
+          URIs, making the HTML file self-contained.
 
-        with open(output_path, "rb") as f:
-            result = f.read()
-        os.remove(adoc_path)
-        os.remove(output_path)
-        return result
+        The primary :func:`embed_image` Jinja global already emits data-URI
+        macros directly in the AsciiDoc source, so these attributes are a
+        secondary aid for template authors who prefer native image macros.
+        """
+        tmp_dir = tempfile.mkdtemp(prefix="vulnscout_adoc_")
+        try:
+            adoc_path = os.path.join(tmp_dir, "report.adoc")
+            output_path = os.path.join(tmp_dir, f"report.{output_ext}")
+
+            # Copy only the specific assets the document actually references
+            # (resolved through the existing find_asset allow-list, which
+            # already rejects path traversal and disallowed extensions) into
+            # a directory inside tmp_dir. Asciidoctor never needs to read
+            # from the real assets directories directly.
+            images_dir = os.path.join(tmp_dir, "assets")
+            os.makedirs(images_dir, exist_ok=True)
+            for name in _referenced_asset_names(adoc):
+                resolved = find_asset(name)
+                if resolved is not None:
+                    try:
+                        shutil.copyfile(resolved, os.path.join(images_dir, name))
+                    except OSError:
+                        pass
+
+            extra: list[str] = [
+                "-S", "safe",
+                "-B", tmp_dir,
+                "-a", f"imagesdir={images_dir}",
+            ]
+            if output_ext == "html":
+                extra += ["-a", "data-uri"]
+
+            with open(adoc_path, "w+") as f:
+                f.write(adoc)
+
+            execution = subprocess.run(command + extra + [adoc_path], capture_output=True)
+            if execution.returncode != 0:
+                print(execution.stdout)
+                print(execution.stderr)
+                raise RuntimeError(
+                    f"Error converting adoc to {output_ext}: asciidoctor returned non-zero exit code"
+                )
+
+            with open(output_path, "rb") as f:
+                return f.read()
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def adoc_to_pdf(self, adoc: str) -> bytes:
         return self._run_asciidoctor(adoc, ["asciidoctor-pdf"], "pdf")

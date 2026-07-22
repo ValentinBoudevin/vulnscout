@@ -111,6 +111,7 @@ Input commands:
   --perform-nvd-scan        Run an NVD CPE-based vulnerability scan
   --perform-osv-scan        Run an OSV PURL-based vulnerability scan
   --perform-sbom-cve-check-scan  Run a sbom-cve-check vulnerability scan
+  --add-asset <path>        Stage an image asset for use in report templates
 
 Scan & output commands:
   --serve                   Run scan then start interactive web UI (port 7275)
@@ -209,6 +210,21 @@ cmd_add_file() {
         cp "$src" "$dest"
         echo "Added $type input: $dest"
     fi
+}
+
+cmd_add_asset() {
+    local src="$1"
+    local dest_name
+    dest_name="$(basename "$src")"
+    dest_name="${dest_name#vulnscout_stage_}"  # strip staging prefix added by the wrapper
+    local ext="${dest_name##*.}"
+    case "$ext" in
+        png|jpg|jpeg|gif|svg|webp) ;;
+        *) echo "Warning: '$dest_name' has an unsupported image extension, skipping." >&2; return 0 ;;
+    esac
+    mkdir -p "/cache/vulnscout/templates/assets"
+    cp "$src" "/cache/vulnscout/templates/assets/$dest_name"
+    echo "Added report asset: /cache/vulnscout/templates/assets/$dest_name" >&2
 }
 
 cmd_add_report_template() {
@@ -706,6 +722,8 @@ while [[ $# -gt 0 ]]; do
             cmd_add_file yocto_vex "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-grype)
             cmd_add_file grype "$2"; SCAN_REQUIRED=true; shift 2 ;;
+        --add-asset)
+            cmd_add_asset "$2"; shift 2 ;;
         --perform-grype-scan)
             GRYPE_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --perform-nvd-scan)
