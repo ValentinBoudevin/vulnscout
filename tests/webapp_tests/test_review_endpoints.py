@@ -12,6 +12,7 @@
 import io
 import json
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 
@@ -626,6 +627,59 @@ def test_import_duplicate_skipped(client):
     assert r2["imported"] == 0
 
 
+def _import_openvex_with_timestamp(client, vuln_id, package, timestamp):
+    statements = [{
+        "vulnerability": {"name": vuln_id},
+        "products": [{"@id": package}],
+        "status": "affected",
+        "timestamp": timestamp,
+    }]
+    data = _make_openvex_json("default", statements)
+    return client.post(
+        "/api/assessments/review/import",
+        data={
+            "file": (io.BytesIO(data), "default.json"),
+            "variant_id": str(VARIANT_UUID),
+            "timestamp_policy": "original",
+        },
+        content_type="multipart/form-data",
+    )
+
+
+def test_import_openvex_original_timestamp_keeps_distinct_entries(client):
+    """A later statement timestamp is imported instead of skipped as duplicate."""
+    vuln_id, package = "CVE-2020-35492", "openvex-history@1.0"
+
+    first = _import_openvex_with_timestamp(
+        client, vuln_id, package, "2026-07-07T10:00:00+00:00")
+    second = _import_openvex_with_timestamp(
+        client, vuln_id, package, "2026-07-20T10:00:00+00:00")
+
+    assert json.loads(first.data)["imported"] == 1
+    assert json.loads(second.data)["imported"] == 1
+
+    listed = json.loads(client.get("/api/assessments/review").data)
+    timestamps = sorted(
+        a["timestamp"] for a in listed
+        if a["vuln_id"] == vuln_id and package in a["packages"]
+    )
+    assert timestamps == ["2026-07-07T10:00:00+00:00", "2026-07-20T10:00:00+00:00"]
+
+
+def test_import_openvex_original_timestamp_is_idempotent(client):
+    """Re-importing an identical OpenVEX document stays a no-op."""
+    vuln_id, package = "CVE-2020-35492", "openvex-idempotent@1.0"
+
+    first = _import_openvex_with_timestamp(
+        client, vuln_id, package, "2026-07-20T10:00:00+00:00")
+    second = _import_openvex_with_timestamp(
+        client, vuln_id, package, "2026-07-20T10:00:00+00:00")
+
+    assert json.loads(first.data)["imported"] == 1
+    assert json.loads(second.data)["imported"] == 0
+    assert json.loads(second.data)["skipped"] == 1
+
+
 def test_import_statement_missing_vuln(client):
     """Statement without vulnerability name → error."""
     statements = [{
@@ -1110,6 +1164,141 @@ def test_import_custom_data_assessments(client):
     result = json.loads(resp.data)
     assert result["status"] == "success"
     assert result["assessments_imported"] >= 1
+
+
+def test_import_custom_data_uses_original_timestamp(app, client):
+    original_timestamp = "2001-02-03T04:05:06+00:00"
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2099-91001",
+        "status": "affected",
+        "packages": ["timestamp-original@1.0"],
+        "variant_id": str(VARIANT_UUID),
+        "timestamp": original_timestamp,
+    }])
+    payload["timestamp_policy"] = "original"
+
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+
+    assert resp.status_code == 200
+    with app.app_context():
+        from src.helpers.datetime_utils import ensure_utc_iso
+        from src.models.assessment import Assessment
+
+        imported = next(
+            assessment for assessment in Assessment.get_by_origin([VARIANT_UUID], origin="custom")
+            if assessment.vuln_id == "CVE-2099-91001"
+        )
+        assert ensure_utc_iso(imported.timestamp) == original_timestamp
+
+
+def test_import_custom_data_uses_current_system_time(app, client):
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2099-91002",
+        "status": "affected",
+        "packages": ["timestamp-current@1.0"],
+        "variant_id": str(VARIANT_UUID),
+        "timestamp": "2001-02-03T04:05:06+00:00",
+    }])
+    payload["timestamp_policy"] = "current"
+    before_import = datetime.now(timezone.utc)
+
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+    after_import = datetime.now(timezone.utc)
+
+    assert resp.status_code == 200
+    with app.app_context():
+        from src.models.assessment import Assessment
+
+        imported = next(
+            assessment for assessment in Assessment.get_by_origin([VARIANT_UUID], origin="custom")
+            if assessment.vuln_id == "CVE-2099-91002"
+        )
+        stored_timestamp = imported.timestamp
+        if stored_timestamp.tzinfo is None:
+            stored_timestamp = stored_timestamp.replace(tzinfo=timezone.utc)
+        assert before_import <= stored_timestamp <= after_import
+
+
+def test_import_custom_data_rejects_invalid_timestamp_policy(client):
+    payload = _custom_data_payload()
+    payload["timestamp_policy"] = "invalid"
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+
+    assert resp.status_code == 400
+    assert "timestamp_policy" in json.loads(resp.data)["error"]
+
+
+def _import_custom_data_with_timestamp(client, vuln_id, package, timestamp, **extra):
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": vuln_id,
+        "status": "affected",
+        "packages": [package],
+        "variant_id": str(VARIANT_UUID),
+        "timestamp": timestamp,
+        **extra,
+    }])
+    payload["timestamp_policy"] = "original"
+    return client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+
+
+def test_import_custom_data_original_timestamp_keeps_distinct_entries(client):
+    """A later timestamp is a new history entry, not a duplicate to discard."""
+    vuln_id, package = "CVE-2099-91003", "timestamp-history@1.0"
+
+    first = _import_custom_data_with_timestamp(
+        client, vuln_id, package, "2026-07-07T10:00:00+00:00")
+    second = _import_custom_data_with_timestamp(
+        client, vuln_id, package, "2026-07-20T10:00:00+00:00")
+
+    assert json.loads(first.data)["assessments_imported"] == 1
+    assert json.loads(second.data)["assessments_imported"] == 1
+
+    listed = json.loads(client.get("/api/assessments/review").data)
+    timestamps = sorted(a["timestamp"] for a in listed if a["vuln_id"] == vuln_id)
+    assert timestamps == ["2026-07-07T10:00:00+00:00", "2026-07-20T10:00:00+00:00"]
+
+
+def test_import_custom_data_original_timestamp_is_idempotent(client):
+    """Re-importing the same file does not duplicate its assessments."""
+    vuln_id, package = "CVE-2099-91004", "timestamp-idempotent@1.0"
+
+    first = _import_custom_data_with_timestamp(
+        client, vuln_id, package, "2026-07-20T10:00:00+00:00")
+    second = _import_custom_data_with_timestamp(
+        client, vuln_id, package, "2026-07-20T10:00:00+00:00")
+
+    assert json.loads(first.data)["assessments_imported"] == 1
+    assert json.loads(second.data)["assessments_imported"] == 0
+    assert json.loads(second.data)["assessments_skipped"] == 1
+
+
+def test_import_custom_data_original_timestamp_normalised_to_utc(client):
+    """A non-UTC offset is converted rather than stored as wall-clock time."""
+    vuln_id, package = "CVE-2099-91005", "timestamp-offset@1.0"
+
+    resp = _import_custom_data_with_timestamp(
+        client, vuln_id, package, "2026-07-20T12:00:00+02:00")
+
+    assert json.loads(resp.data)["assessments_imported"] == 1
+    listed = json.loads(client.get("/api/assessments/review").data)
+    imported = next(a for a in listed if a["vuln_id"] == vuln_id)
+    assert imported["timestamp"] == "2026-07-20T10:00:00+00:00"
 
 
 def test_import_custom_data_assessments_without_variant_field(client):

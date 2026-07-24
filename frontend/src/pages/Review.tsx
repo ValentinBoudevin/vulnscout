@@ -145,6 +145,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [transferMode, setTransferMode] = useState<'import' | 'export' | null>(null);
     const [transferVariantIds, setTransferVariantIds] = useState<string[]>([]);
     const [transferFormat, setTransferFormat] = useState<'custom' | 'openvex'>('custom');
+    const [importTimestampPolicy, setImportTimestampPolicy] = useState<'original' | 'current'>('original');
 
     const showMessage = useCallback((message: string, type: "error" | "success") => {
         setBannerMessage(message);
@@ -438,6 +439,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const openTransfer = useCallback((mode: 'import' | 'export') => {
         setTransferFormat('custom');
+        setImportTimestampPolicy('original');
         setTransferVariantIds(mode === 'export'
             ? variantId ? [variantId] : transferVariants.map(variant => variant.id)
             : []);
@@ -513,6 +515,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             const formData = new FormData();
             formData.append('file', file);
             formData.append('variant_id', transferVariantIds[0]);
+            formData.append('timestamp_policy', importTimestampPolicy);
             fetch(new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href).toString(), {
                 method: 'POST',
                 body: formData,
@@ -558,7 +561,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     method: 'POST',
                     mode: 'cors',
                     headers: { 'Content-Type': 'application/json' },
-                    body: text,
+                    body: JSON.stringify({ ...parsed, timestamp_policy: importTimestampPolicy }),
                 });
                 const data = await result.json() as ImportResult;
 
@@ -591,7 +594,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             }
         };
         reader.readAsText(file);
-    }, [variantId, projectId, showMessage, transferFormat, transferVariantIds]);
+    }, [variantId, projectId, showMessage, transferFormat, transferVariantIds, importTimestampPolicy]);
 
     const handleDeleteRow = useCallback(async () => {
         if (!rowToDelete) return;
@@ -1423,8 +1426,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     variants={transferVariants}
                     selectedVariantIds={transferVariantIds}
                     transferFormat={transferFormat}
+                    timestampPolicy={importTimestampPolicy}
                     onSelectedVariantIdsChange={setTransferVariantIds}
                     onTransferFormatChange={changeTransferFormat}
+                    onTimestampPolicyChange={setImportTimestampPolicy}
                     onConfirm={transferMode === 'export' ? handleExportReview : handleImportReview}
                     onCancel={() => setTransferMode(null)}
                 />

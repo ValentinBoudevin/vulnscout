@@ -1397,6 +1397,8 @@ describe('Review — import and export', () => {
         await user.click(screen.getByText('Import'));
         const dialog = screen.getByRole('dialog');
         expect(within(dialog).queryByText('Variant')).not.toBeInTheDocument();
+        expect(within(dialog).getByRole('radio', { name: /Use original timestamps from file/ })).toBeChecked();
+        await user.click(within(dialog).getByRole('radio', { name: /Use current system time/ }));
         await user.click(within(dialog).getByRole('button', { name: 'Choose file' }));
 
         const file = new File(
@@ -1407,6 +1409,8 @@ describe('Review — import and export', () => {
         fireEvent.change(fileInput(), { target: { files: [file] } });
 
         await screen.findByText(/Imported:/);
+        const importCall = postCalls().find(call => String(call[0]).includes('/api/assessments/review/import-custom-data'));
+        expect(JSON.parse(String((importCall?.[1] as RequestInit).body)).timestamp_policy).toBe('current');
     });
 
     test('imports OpenVEX into one selected variant without using the filename', async () => {
@@ -1433,6 +1437,7 @@ describe('Review — import and export', () => {
         expect(importCalls).toHaveLength(1);
         const targetedVariantIds = importCalls.map(call => ((call[1] as RequestInit).body as FormData).get('variant_id'));
         expect(targetedVariantIds).toEqual(['v2']);
+        expect(((importCalls[0][1] as RequestInit).body as FormData).get('timestamp_policy')).toBe('original');
     });
 
     test('file selection accepts JSON only', async () => {

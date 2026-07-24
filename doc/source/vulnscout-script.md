@@ -330,10 +330,16 @@ Export one variant:
 ./vulnscout --project demo --variant x86 --export-custom-vulnscout-data
 ```
 
-The `--import-custom-vulnscout-data` command restores entries according to the variant metadata stored in the file:
+The `--import-custom-vulnscout-data` command restores entries according to the
+variant metadata stored in the file. Imported assessments use the current
+system time by default. Add `--use-original-timestamps` to preserve assessment
+timestamps from the file. `--use-current-timestamps` is also accepted to select
+the default explicitly.
 
 ```bash
 ./vulnscout --project demo --import-custom-vulnscout-data /path/to/custom_vulnscout_data_all.json
+
+./vulnscout --project demo --import-custom-vulnscout-data /path/to/custom_vulnscout_data_all.json --use-original-timestamps
 ```
 
 ### OpenVEX
@@ -346,7 +352,14 @@ OpenVEX custom-assessment transfers operate on one JSON document and require `--
 
 # Import into a variant
 ./vulnscout --project demo --variant x86 --import-custom-openvex-assessments /path/to/custom_openvex_x86.json
+
+# Ignore OpenVEX statement timestamps and use the current system time
+./vulnscout --project demo --variant x86 --import-custom-openvex-assessments /path/to/custom_openvex_x86.json --use-current-timestamps
 ```
+
+OpenVEX imports preserve statement timestamps by default. Add
+`--use-current-timestamps` to use the current system time, or use
+`--use-original-timestamps` to select the default explicitly.
 
 ---
 
