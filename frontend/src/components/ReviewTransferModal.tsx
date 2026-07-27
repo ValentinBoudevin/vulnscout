@@ -8,8 +8,10 @@ type Props = {
     variants: Variant[];
     selectedVariantIds: string[];
     transferFormat: 'custom' | 'openvex';
+    timestampPolicy: 'original' | 'current';
     onSelectedVariantIdsChange: (ids: string[]) => void;
     onTransferFormatChange: (format: 'custom' | 'openvex') => void;
+    onTimestampPolicyChange: (policy: 'original' | 'current') => void;
     onConfirm: () => void;
     onCancel: () => void;
 };
@@ -19,8 +21,10 @@ function ReviewTransferModal({
     variants,
     selectedVariantIds,
     transferFormat,
+    timestampPolicy,
     onSelectedVariantIdsChange,
     onTransferFormatChange,
+    onTimestampPolicyChange,
     onConfirm,
     onCancel,
 }: Readonly<Props>) {
@@ -59,16 +63,32 @@ function ReviewTransferModal({
                     <fieldset>
                         <legend className="mb-2 text-sm font-semibold text-gray-200">Format</legend>
                         <div className="grid grid-cols-2 gap-3">
-                            <label className="flex cursor-pointer items-start gap-2 rounded border border-gray-600 p-3 text-gray-100">
-                                <input type="radio" name="review-transfer-format" checked={transferFormat === 'custom'} onChange={() => onTransferFormatChange('custom')} />
-                                <span><span className="block font-medium">VulnScout JSON</span><span className="text-xs text-gray-400">{mode === 'export' ? 'Assessments, CVSS, and time estimates' : 'Uses the variants recorded in the file'}</span></span>
+                            <label className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 transition-colors ${transferFormat === 'custom' ? 'border-cyan-500 bg-cyan-950/40 text-white' : 'border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500'}`}>
+                                <input type="radio" name="review-transfer-format" checked={transferFormat === 'custom'} onChange={() => onTransferFormatChange('custom')} className="mt-0.5 accent-cyan-500" />
+                                <span className="flex flex-col"><span className="text-sm font-medium">VulnScout JSON</span><span className="text-xs text-zinc-400">{mode === 'export' ? 'Assessments, CVSS, and time estimates' : 'Uses the variants recorded in the file'}</span></span>
                             </label>
-                            <label className="flex cursor-pointer items-start gap-2 rounded border border-gray-600 p-3 text-gray-100">
-                                <input type="radio" name="review-transfer-format" checked={isOpenVex} onChange={() => onTransferFormatChange('openvex')} />
-                                <span><span className="block font-medium">OpenVEX</span><span className="text-xs text-gray-400">One variant in a JSON document</span></span>
+                            <label className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 transition-colors ${isOpenVex ? 'border-cyan-500 bg-cyan-950/40 text-white' : 'border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500'}`}>
+                                <input type="radio" name="review-transfer-format" checked={isOpenVex} onChange={() => onTransferFormatChange('openvex')} className="mt-0.5 accent-cyan-500" />
+                                <span className="flex flex-col"><span className="text-sm font-medium">OpenVEX</span><span className="text-xs text-zinc-400">One variant in a JSON document</span></span>
                             </label>
                         </div>
                     </fieldset>
+
+                    {mode === 'import' && (
+                        <fieldset>
+                            <legend className="mb-2 text-sm font-semibold text-gray-200">Assessment timestamps</legend>
+                            <div className="space-y-2">
+                                <label className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 transition-colors ${timestampPolicy === 'original' ? 'border-cyan-500 bg-cyan-950/40 text-white' : 'border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500'}`}>
+                                    <input type="radio" name="review-import-timestamp" checked={timestampPolicy === 'original'} onChange={() => onTimestampPolicyChange('original')} className="mt-0.5 accent-cyan-500" />
+                                    <span className="flex flex-col"><span className="text-sm font-medium">Use original timestamps from file</span><span className="text-xs text-zinc-400">Preserve when each assessment was originally recorded</span></span>
+                                </label>
+                                <label className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 transition-colors ${timestampPolicy === 'current' ? 'border-cyan-500 bg-cyan-950/40 text-white' : 'border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500'}`}>
+                                    <input type="radio" name="review-import-timestamp" checked={timestampPolicy === 'current'} onChange={() => onTimestampPolicyChange('current')} className="mt-0.5 accent-cyan-500" />
+                                    <span className="flex flex-col"><span className="text-sm font-medium">Use current system time</span><span className="text-xs text-zinc-400">Ignore timestamps stored in the file</span></span>
+                                </label>
+                            </div>
+                        </fieldset>
+                    )}
 
                     {needsVariantSelection && (
                         <fieldset>
@@ -80,13 +100,16 @@ function ReviewTransferModal({
                                     </button>
                                 </div>
                             )}
-                            <div className="clear-both max-h-64 space-y-1 overflow-y-auto rounded border border-gray-600 p-2">
-                                {variants.map(variant => (
-                                    <label key={variant.id} className="flex cursor-pointer items-center gap-3 rounded px-2 py-2 text-sm text-gray-100 hover:bg-gray-700">
-                                        <input type={supportsMultipleVariants ? 'checkbox' : 'radio'} name="review-openvex-variant" checked={supportsMultipleVariants ? selectedVariantIds.includes(variant.id) : selectedVariantIds[0] === variant.id} onChange={() => supportsMultipleVariants ? toggleVariant(variant.id) : onSelectedVariantIdsChange([variant.id])} />
-                                        {variant.name}
-                                    </label>
-                                ))}
+                            <div className="clear-both max-h-64 space-y-2 overflow-y-auto">
+                                {variants.map(variant => {
+                                    const selected = supportsMultipleVariants ? selectedVariantIds.includes(variant.id) : selectedVariantIds[0] === variant.id;
+                                    return (
+                                        <label key={variant.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors ${selected ? 'border-cyan-500 bg-cyan-950/40 text-white' : 'border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500'}`}>
+                                            <input type={supportsMultipleVariants ? 'checkbox' : 'radio'} name="review-openvex-variant" checked={selected} onChange={() => supportsMultipleVariants ? toggleVariant(variant.id) : onSelectedVariantIdsChange([variant.id])} className={supportsMultipleVariants ? 'rounded border-slate-500 bg-slate-900 text-cyan-500 focus:ring-cyan-500' : 'accent-cyan-500'} />
+                                            {variant.name}
+                                        </label>
+                                    );
+                                })}
                             </div>
                         </fieldset>
                     )}

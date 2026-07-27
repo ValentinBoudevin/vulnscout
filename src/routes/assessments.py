@@ -433,6 +433,10 @@ def init_app(app: Flask) -> None:
         if DBVariant.get_by_id(target_variant_id) is None:
             return {"error": "Variant not found"}, 404
 
+        timestamp_policy = request.form.get('timestamp_policy', 'original')
+        if timestamp_policy not in {'original', 'current'}:
+            return {"error": "timestamp_policy must be 'original' or 'current'"}, 400
+
         import json
         try:
             data = json.load(uploaded.stream)
@@ -446,7 +450,11 @@ def init_app(app: Flask) -> None:
                          "or 'statements' array)"
             }, 400
 
-        created, errors, skipped = _import_openvex_statements(data["statements"], target_variant_id)
+        created, errors, skipped = _import_openvex_statements(
+            data["statements"],
+            target_variant_id,
+            use_original_timestamps=timestamp_policy == 'original',
+        )
         return {"status": "success", "imported": len(created), "skipped": skipped, "errors": errors}, 200
 
     @app.route('/api/assessments/review/time-estimates')
@@ -700,8 +708,16 @@ def init_app(app: Flask) -> None:
         if not isinstance(data, dict) or "version" not in data:
             return {"error": "Invalid custom-data format. Expected {version, assessments, ...}"}, 400
 
+        timestamp_policy = data.get('timestamp_policy', 'current')
+        if timestamp_policy not in {'original', 'current'}:
+            return {"error": "timestamp_policy must be 'original' or 'current'"}, 400
+
         variant_by_name = build_variant_by_name_map()
-        result = import_custom_data(data, variant_by_name)
+        result = import_custom_data(
+            data,
+            variant_by_name,
+            use_original_timestamps=timestamp_policy == 'original',
+        )
 
         status_code = 200 if result["status"] == "success" else 400
         return result, status_code

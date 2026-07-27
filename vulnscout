@@ -79,7 +79,9 @@ Scan & output commands:
   --export-cdx                    Export project as CycloneDX 1.6 SBOM
   --export-openvex                Export project as OpenVEX document
     --export-custom-vulnscout-data  Export custom VulnScout JSON data
-    --import-custom-vulnscout-data <path>  Import custom VulnScout JSON data
+        --import-custom-vulnscout-data <path>  Import custom VulnScout JSON data
+            --use-original-timestamps    Preserve file timestamps instead of using system time
+            --use-current-timestamps     Use current system time instead of file timestamps
     --export-custom-openvex-assessments  Export custom OpenVEX assessments for --variant
     --import-custom-openvex-assessments <path>  Import custom OpenVEX assessments into --variant
     --export-context                 Export AI assessment context to /scan/outputs/context-export.json
@@ -372,6 +374,10 @@ parse_and_run() {
                 call_container_engine cp "$import_ctx_file" "$CONTAINER_NAME:$import_ctx_staged"
                 EXPORT_ARGS+=(--import-context "$import_ctx_staged")
                 shift 2 ;;
+            --use-original-timestamps)
+                EXPORT_ARGS+=(--use-original-timestamps); shift ;;
+            --use-current-timestamps)
+                EXPORT_ARGS+=(--use-current-timestamps); shift ;;
             delete-scan|--delete-scan)
                 ensure_running
                 exec_container --delete-scan "$2"

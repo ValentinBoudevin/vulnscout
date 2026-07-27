@@ -91,8 +91,17 @@ def export_custom_vulnscout_data_command(output_dir: str, project: str, variant:
 @click.command("import-custom-vulnscout-data")
 @click.argument("file_path")
 @click.option("--project", "-p", required=True, help="Project name.")
+@click.option(
+    "--use-original-timestamps/--use-current-timestamps",
+    default=False,
+    help="Choose whether to preserve assessment timestamps from the file.",
+)
 @with_appcontext
-def import_custom_vulnscout_data_command(file_path: str, project: str) -> None:
+def import_custom_vulnscout_data_command(
+    file_path: str,
+    project: str,
+    use_original_timestamps: bool,
+) -> None:
     """Import custom VulnScout JSON data using its embedded variant metadata."""
     project_obj = resolve_project(project)
     data = _load_json_file(file_path)
@@ -100,7 +109,11 @@ def import_custom_vulnscout_data_command(file_path: str, project: str) -> None:
         raise click.ClickException("Not a valid VulnScout JSON data file.")
 
     variant_by_name = build_variant_by_name_map(project_obj.id)
-    _print_custom_data_import_result(import_custom_data(data, variant_by_name))
+    _print_custom_data_import_result(import_custom_data(
+        data,
+        variant_by_name,
+        use_original_timestamps=use_original_timestamps,
+    ))
 
 
 @click.command("export-custom-openvex-assessments")
@@ -132,8 +145,18 @@ def export_custom_openvex_assessments_command(output_dir: str, project: str, var
 @click.argument("file_path")
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", required=True, help="Variant name to import into.")
+@click.option(
+    "--use-original-timestamps/--use-current-timestamps",
+    default=True,
+    help="Choose whether to preserve assessment timestamps from the file.",
+)
 @with_appcontext
-def import_custom_openvex_assessments_command(file_path: str, project: str, variant: str) -> None:
+def import_custom_openvex_assessments_command(
+    file_path: str,
+    project: str,
+    variant: str,
+    use_original_timestamps: bool,
+) -> None:
     """Import one OpenVEX JSON document into the specified variant."""
     _, variant_obj = resolve_project_variant(project, variant, create=False)
     data = _load_json_file(file_path)
@@ -141,7 +164,9 @@ def import_custom_openvex_assessments_command(file_path: str, project: str, vari
         raise click.ClickException("Not a valid OpenVEX document.")
 
     total_created, total_errors, total_skipped = import_statements(
-        data["statements"], variant_obj.id
+        data["statements"],
+        variant_obj.id,
+        use_original_timestamps=use_original_timestamps,
     )
     for error in total_errors:
         click.echo(f"  Warning: {error}", err=True)

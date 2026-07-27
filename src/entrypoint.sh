@@ -121,7 +121,9 @@ Scan & output commands:
   --export-cdx              Export project as CycloneDX 1.6 SBOM to /scan/outputs/
   --export-openvex          Export project as OpenVEX document to /scan/outputs/
     --export-custom-vulnscout-data  Export custom VulnScout JSON data to /scan/outputs/
-    --import-custom-vulnscout-data <path>  Import custom VulnScout JSON data
+        --import-custom-vulnscout-data <path>  Import custom VulnScout JSON data
+            --use-original-timestamps    Preserve file timestamps instead of using system time
+            --use-current-timestamps     Use current system time instead of file timestamps
     --export-custom-openvex-assessments  Export custom OpenVEX assessments for --variant
     --import-custom-openvex-assessments <path>  Import custom OpenVEX assessments into --variant
     --export-context          Export AI assessment context (project/variant description, threat model, etc.) to /scan/outputs/context-export.json
@@ -549,6 +551,9 @@ cmd_import_custom_vulnscout_data() {
     local file="$1"
 
     import_args=(--project "$PROJECT_NAME")
+    if [[ "${IMPORT_CUSTOM_TIMESTAMP_POLICY:-current}" == "original" ]]; then
+        import_args+=(--use-original-timestamps)
+    fi
 
     cd "$BASE_DIR"
     local raw_basename dest_name dest_file
@@ -600,8 +605,12 @@ cmd_import_custom_openvex_assessments() {
     fi
 
     flask --app src.bin.webapp db upgrade
-    flask --app src.bin.webapp import-custom-openvex-assessments \
-        --project "$PROJECT_NAME" --variant "$VARIANT_NAME" "$file"
+    local -a import_args=(--project "$PROJECT_NAME" --variant "$VARIANT_NAME")
+    if [[ "${IMPORT_CUSTOM_TIMESTAMP_POLICY:-original}" == "current" ]]; then
+        import_args+=(--use-current-timestamps)
+    fi
+    import_args+=("$file")
+    flask --app src.bin.webapp import-custom-openvex-assessments "${import_args[@]}"
     setup_user
 }
 
@@ -756,6 +765,7 @@ EXPORT_FORMATS=()
 SCAN_REQUIRED=false
 JSON_OUTPUT=false
 DATA_REQUESTED=""
+IMPORT_CUSTOM_TIMESTAMP_POLICY=""
 
 if [[ $# -eq 0 ]]; then
     cmd_daemon
@@ -832,6 +842,10 @@ while [[ $# -gt 0 ]]; do
             EXPORT_CONTEXT=true; shift ;;
         --import-context)
             IMPORT_CONTEXT_FILE="$2"; shift 2 ;;
+        --use-original-timestamps)
+            IMPORT_CUSTOM_TIMESTAMP_POLICY=original; shift ;;
+        --use-current-timestamps)
+            IMPORT_CUSTOM_TIMESTAMP_POLICY=current; shift ;;
         --list-projects|--list-scans)
             cmd_get_data "$1"; shift ;;
         --config)
@@ -844,6 +858,11 @@ while [[ $# -gt 0 ]]; do
             echo "Unknown command: $1"; echo "Run --help for usage."; exit 1 ;;
     esac
 done
+
+if [[ -n "${IMPORT_CUSTOM_TIMESTAMP_POLICY:-}" && -z "${IMPORT_CUSTOM_VULNSCOUT_DATA_FILE:-}" && -z "${IMPORT_CUSTOM_OPENVEX_ASSESSMENTS_FILE:-}" ]]; then
+    echo "Error: timestamp options require a custom VulnScout or OpenVEX import." >&2
+    exit 1
+fi
 
 # Step 1: Scan the new inputs/match condition if any
 match_exit=0

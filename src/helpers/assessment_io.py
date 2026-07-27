@@ -164,9 +164,59 @@ def is_openvex_doc(doc: object) -> bool:
     return "openvex" in str(ctx) and isinstance(doc.get("statements"), list)
 
 
+def parse_imported_timestamp(raw_ts: object, use_original_timestamps: bool) -> "_dt | None":
+    """Return the timestamp to persist for an imported assessment.
+
+    Returns ``None`` when *use_original_timestamps* is false or when *raw_ts*
+    is missing/unparseable, in which case the caller lets the model apply the
+    current time.  Parsed values are always converted to UTC: SQLite drops the
+    offset when storing, so a non-UTC timestamp would otherwise be read back as
+    if its local wall-clock time had been UTC.
+    """
+    if not use_original_timestamps or not isinstance(raw_ts, str) or not raw_ts:
+        return None
+    try:
+        parsed = _dt.fromisoformat(raw_ts.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=_tz.utc)
+    return parsed.astimezone(_tz.utc)
+
+
+def duplicate_assessment_query(
+    finding_id: "_uuid.UUID",
+    variant_id: "_uuid.UUID | None",
+    status: str,
+    origin: str,
+    timestamp: "_dt | None" = None,
+) -> Any:
+    """Build the SELECT used to detect an already-imported assessment.
+
+    When *timestamp* is given (i.e. the caller preserves the timestamps stored
+    in the file) it is part of the identity: an assessment recorded at another
+    date is a distinct entry in the vulnerability's history and must be
+    imported instead of being silently dropped as a duplicate.  Without it,
+    re-importing the same file stays idempotent.
+    """
+    from ..extensions import db
+    from ..models.assessment import Assessment as DBAssessment
+
+    query = db.select(DBAssessment).where(
+        DBAssessment.finding_id == finding_id,
+        DBAssessment.variant_id == variant_id,
+        DBAssessment.status == status,
+        DBAssessment.origin == origin,
+    )
+    if timestamp is not None:
+        query = query.where(DBAssessment.timestamp == timestamp)
+    return query
+
+
 def import_statements(
     statements: list[dict[str, Any]],
     variant_id: "_uuid.UUID",
+    use_original_timestamps: bool = True,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
     """Persist a list of OpenVEX statement dicts as DB assessments.
 
@@ -177,6 +227,9 @@ def import_statements(
         OpenVEX JSON document).
     variant_id:
         UUID of the target variant to attach the assessments to.
+    use_original_timestamps:
+        Preserve valid statement timestamps when true.  When false, newly
+        created assessments use the database server's current time.
 
     Returns
     -------
@@ -237,13 +290,9 @@ def import_statements(
         # Preserve the original assessment date so exports remain ordered by
         # the date of the custom assessment and stay reproducible when two
         # developers import each other's assessments.
-        imported_ts: "_dt | None" = None
-        raw_ts = stmt.get("timestamp")
-        if isinstance(raw_ts, str) and raw_ts:
-            try:
-                imported_ts = _dt.fromisoformat(raw_ts)
-            except (ValueError, TypeError):
-                imported_ts = None
+        imported_ts = parse_imported_timestamp(
+            stmt.get("timestamp"), use_original_timestamps
+        )
 
         for pkg_string_id in pkg_ids:
             try:
@@ -256,11 +305,12 @@ def import_statements(
                 finding = Finding.get_or_create(db_pkg.id, vuln_name)
 
                 existing = db.session.execute(
-                    db.select(DBAssessment).where(
-                        DBAssessment.finding_id == finding.id,
-                        DBAssessment.variant_id == variant_id,
-                        DBAssessment.status == status,
-                        DBAssessment.origin == "custom",
+                    duplicate_assessment_query(
+                        finding_id=finding.id,
+                        variant_id=variant_id,
+                        status=status,
+                        origin="custom",
+                        timestamp=imported_ts,
                     )
                 ).scalars().first()
                 if existing is not None:
@@ -366,6 +416,7 @@ def build_custom_data_export(
                 "impact_statement": assessment_dict.get("impact_statement") or None,
                 "status_notes": assessment_dict.get("status_notes") or None,
                 "workaround": assessment_dict.get("workaround") or None,
+                "timestamp": assessment_dict["timestamp"],
                 "packages": assessment_dict["packages"],
                 "variant_id": assessment_dict.get("variant_id"),
             })
@@ -491,6 +542,7 @@ def import_custom_data(
     data: dict[str, Any],
     variant_by_name: "dict[str, _Variant]",
     variant_id: "_uuid.UUID | None" = None,
+    use_original_timestamps: bool = False,
 ) -> dict[str, Any]:
     """Import a custom-data JSON document containing assessments, CVSS and
     time estimates.
@@ -506,6 +558,9 @@ def import_custom_data(
     variant_id:
         When provided, all assessments are attached to this variant.
         When *None*, each assessment's ``variant_id`` field is used.
+    use_original_timestamps:
+        Preserve valid assessment timestamps when true.  When false, newly
+        created assessments use the database server's current time.
 
     Returns
     -------
@@ -600,6 +655,9 @@ def import_custom_data(
             impact_statement = a.get("impact_statement", "")
             status_notes = a.get("status_notes", "")
             workaround = a.get("workaround", "")
+            imported_ts = parse_imported_timestamp(
+                a.get("timestamp"), use_original_timestamps
+            )
 
             for pkg_string_id in pkg_ids:
                 try:
@@ -616,11 +674,12 @@ def import_custom_data(
                     finding = Finding.get_or_create(db_pkg.id, vuln_name)
 
                     existing = db.session.execute(
-                        db.select(DBAssessment).where(
-                            DBAssessment.finding_id == finding.id,
-                            DBAssessment.variant_id == target_variant_id,
-                            DBAssessment.status == status,
-                            DBAssessment.origin == origin,
+                        duplicate_assessment_query(
+                            finding_id=finding.id,
+                            variant_id=target_variant_id,
+                            status=status,
+                            origin=origin,
+                            timestamp=imported_ts,
                         )
                     ).scalars().first()
                     if existing is not None:
@@ -640,6 +699,7 @@ def import_custom_data(
                         impact_statement=impact_statement,
                         workaround=workaround,
                         responses=[],
+                        timestamp=imported_ts,
                         commit=True,
                     )
                     result[imported_key] += 1

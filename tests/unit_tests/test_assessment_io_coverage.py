@@ -161,6 +161,7 @@ class TestBuildCustomDataExport:
             "impact_statement": None,
             "status_notes": None,
             "workaround": None,
+            "timestamp": result["ai_assessments"][0]["timestamp"],
             "packages": ["ai-pkg@1.0.0"],
             "variant_id": str(var.id),
             "variant": "io-cov-var",
