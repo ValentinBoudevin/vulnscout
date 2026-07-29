@@ -21,6 +21,7 @@ from src.bin.webapp import create_app
 from src.extensions import db as _db
 from src.models.assessment import Assessment
 from src.models.finding import Finding
+from src.models.metrics import Metrics
 from src.models.observation import Observation
 from src.models.package import Package
 from src.models.project import Project
@@ -281,6 +282,128 @@ class TestOutdatedFlag:
             assert "superseded_by" in item
             assert "stale_packages" in item
             assert "superseded_map" in item
+
+    def test_delete_outdated_data_removes_only_stale_records(self):
+        """The cleanup endpoint removes the flagged package and assessment."""
+        response = self.client.delete("/api/outdated-data")
+
+        assert response.status_code == 200
+        summary = json.loads(response.data)
+        assert summary["assessments_deleted"] == 1
+        assert summary["observations_deleted"] == 1
+        assert summary["findings_deleted"] == 1
+        assert summary["vulnerabilities_deleted"] == 0
+        assert summary["packages_deleted"] == 1
+
+        with self.app.app_context():
+            assert Package.get_by_string_id("firefox@1.0") is None
+            assert Package.get_by_string_id("firefox@2.0") is not None
+            assert _db.session.get(Assessment, self.assess_id) is None
+            assert Vulnerability.get_by_id(CVE_ID) is not None
+
+        package_response = self.client.get(
+            f"/api/packages?variant_id={VARIANT_ID}&outdated_only=true"
+        )
+        assert package_response.status_code == 200
+        assert json.loads(package_response.data) == []
+
+    def test_outdated_data_preview_lists_the_records_to_delete(self):
+        """The preview exposes the same stale package data and assessment."""
+        response = self.client.get("/api/outdated-data")
+
+        assert response.status_code == 200
+        assert json.loads(response.data) == {
+            "packages": [{
+                "package": "firefox@1.0",
+                "project": "test",
+                "variant": "default",
+                "vulnerabilities": [CVE_ID],
+                "linked_data": {"observations": 1, "sbom_packages": 1, "sbom_observations": 0},
+            }],
+            "assessments": [{
+                "project": "test",
+                "vulnerability": CVE_ID,
+                "package": "firefox@1.0",
+                "variant": "default",
+            }],
+        }
+
+    def test_delete_outdated_data_removes_orphaned_vulnerability_data(self):
+        """A vulnerability exclusive to stale package evidence is removed with its metrics."""
+        obsolete_cve = "CVE-2024-00001"
+        with self.app.app_context():
+            Vulnerability.create_record(id=obsolete_cve, description="Obsolete vuln", status="high")
+            obsolete_package = Package.find_or_create("legacy", "1.0", [], [], "")
+            obsolete_finding = Finding.get_or_create(obsolete_package.id, obsolete_cve)
+            _db.session.add(SBOMPackage(
+                sbom_document_id=uuid.UUID("e1111111-1111-1111-1111-111111111111"),
+                package_id=obsolete_package.id,
+            ))
+            _db.session.add(Observation(finding_id=obsolete_finding.id, scan_id=SCAN_V1_ID))
+            _db.session.add(Metrics(vulnerability_id=obsolete_cve, variant_id=VARIANT_ID))
+            _db.session.commit()
+
+        response = self.client.delete("/api/outdated-data")
+
+        assert response.status_code == 200
+        assert json.loads(response.data)["vulnerabilities_deleted"] == 1
+        with self.app.app_context():
+            assert _db.session.get(Vulnerability, obsolete_cve) is None
+            assert _db.session.execute(
+                _db.select(Metrics).where(Metrics.vulnerability_id == obsolete_cve)
+            ).scalar_one_or_none() is None
+            assert _db.session.get(Vulnerability, CVE_ID) is not None
+
+    def test_delete_outdated_cli_command(self):
+        """The Flask command delegates to the same cleanup implementation."""
+        runner = self.app.test_cli_runner()
+        result = runner.invoke(args=["delete-outdated"])
+
+        assert result.exit_code == 0
+        assert "1 assessments" in result.output
+        with self.app.app_context():
+            assert Package.get_by_string_id("firefox@1.0") is None
+
+    def test_delete_outdated_preserves_packages_active_in_other_variants(self):
+        """Cleanup removes stale variant data without deleting shared active data."""
+        second_variant_id = uuid.UUID("abababab-abab-abab-abab-abababababab")
+        second_scan_id = uuid.UUID("cdcdcdcd-cdcd-cdcd-cdcd-cdcdcdcdcdcd")
+        with self.app.app_context():
+            old_package = Package.get_by_string_id("firefox@1.0")
+            assert old_package is not None
+            old_finding = Finding.get_by_package_and_vulnerability(old_package.id, CVE_ID)
+            assert old_finding is not None
+            old_finding_id = old_finding.id
+            _db.session.add(Variant(id=second_variant_id, name="other", project_id=PROJECT_ID))
+            _db.session.add(Scan(
+                id=second_scan_id,
+                variant_id=second_variant_id,
+                scan_type="sbom",
+                timestamp=datetime(2024, 7, 1, tzinfo=timezone.utc),
+            ))
+            document = SBOMDocument(
+                id=uuid.UUID("e3333333-3333-3333-3333-333333333333"),
+                path="/scan/other.spdx.json",
+                source_name="other.spdx.json",
+                format="spdx",
+                scan_id=second_scan_id,
+            )
+            _db.session.add(document)
+            _db.session.add(SBOMPackage(
+                sbom_document_id=document.id,
+                package_id=old_package.id,
+            ))
+            _db.session.add(Observation(finding_id=old_finding.id, scan_id=second_scan_id))
+            _db.session.commit()
+
+        response = self.client.delete("/api/outdated-data")
+
+        assert response.status_code == 200
+        assert json.loads(response.data)["packages_deleted"] == 0
+        with self.app.app_context():
+            old_package = Package.get_by_string_id("firefox@1.0")
+            assert old_package is not None
+            assert len(Observation.get_by_finding(old_finding_id)) == 1
 
 
 class TestNotOutdated_VersionStillActive:

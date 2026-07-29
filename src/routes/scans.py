@@ -403,6 +403,31 @@ def init_app(app: Flask) -> None:
             "orphaned_findings_removed": orphaned_count,
         })
 
+    @app.route('/api/outdated-data', methods=['GET', 'DELETE'])
+    def outdated_data() -> ResponseReturnValue:
+        """Permanently remove package evidence and assessments marked outdated.
+
+        Package evidence is removed only from variants where its package
+        name/version is no longer active; globally shared rows are pruned only
+        after their final reference disappears.
+
+        OpenAPI:
+        response 200 JsonObject Cleanup summary or deletion preview.
+        response 500 Error Cleanup failed.
+        """
+        from ..helpers.outdated_cleanup import (
+            delete_outdated_data as cleanup,
+            outdated_data_preview,
+        )
+
+        if flask_request.method == 'GET':
+            return jsonify(outdated_data_preview())
+        try:
+            return jsonify(cleanup())
+        except Exception as exc:
+            db.session.rollback()
+            return jsonify({"error": f"Failed to delete outdated data: {exc}"}), 500
+
     @app.route('/api/scans/<scan_id>/diff')
     def get_scan_diff(scan_id: str) -> ResponseReturnValue:
         """Return the computed diff between a scan and its predecessor.

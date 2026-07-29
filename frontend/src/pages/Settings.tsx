@@ -19,8 +19,11 @@ import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
 import Config from "../handlers/config";
 import NvdApiKey from "../handlers/nvdApiKey";
+import ScansHandler from "../handlers/scans";
+import type { OutdatedDataPreview } from "../handlers/scans";
 import ConfirmationModal from "../components/ConfirmationModal";
 import MessageBanner from "../components/MessageBanner";
+import Popup from "../components/Popup";
 
 type Props = {
   onDataChanged?: (message?: string) => void;
@@ -28,6 +31,58 @@ type Props = {
 };
 
 type SettingsTab = "general" | "projects" | "variants" | "scan";
+
+type OutdatedPackagePlan = {
+  package: string;
+  vulnerabilities: string[];
+  assessments: string[];
+  linkedData: { observations: number; sbomPackages: number; sbomObservations: number };
+};
+
+type OutdatedVariantPlan = { name: string; packages: Map<string, OutdatedPackagePlan> };
+type OutdatedProjectPlan = { name: string; variants: Map<string, OutdatedVariantPlan> };
+
+function buildOutdatedDataPlan(preview: OutdatedDataPreview): OutdatedProjectPlan[] {
+  const projects = new Map<string, OutdatedProjectPlan>();
+  const ensurePackage = (projectName: string, variantName: string, packageName: string) => {
+    let project = projects.get(projectName);
+    if (!project) {
+      project = { name: projectName, variants: new Map() };
+      projects.set(projectName, project);
+    }
+    let variant = project.variants.get(variantName);
+    if (!variant) {
+      variant = { name: variantName, packages: new Map() };
+      project.variants.set(variantName, variant);
+    }
+    let packagePlan = variant.packages.get(packageName);
+    if (!packagePlan) {
+      packagePlan = {
+        package: packageName,
+        vulnerabilities: [],
+        assessments: [],
+        linkedData: { observations: 0, sbomPackages: 0, sbomObservations: 0 },
+      };
+      variant.packages.set(packageName, packagePlan);
+    }
+    return packagePlan;
+  };
+
+  for (const item of preview.packages) {
+    const packagePlan = ensurePackage(item.project, item.variant, item.package);
+    packagePlan.vulnerabilities.push(...item.vulnerabilities);
+    packagePlan.linkedData = {
+      observations: item.linked_data.observations,
+      sbomPackages: item.linked_data.sbom_packages,
+      sbomObservations: item.linked_data.sbom_observations,
+    };
+  }
+  for (const item of preview.assessments) {
+    const packagePlan = ensurePackage(item.project, item.variant, item.package);
+    packagePlan.assessments.push(item.vulnerability);
+  }
+  return [...projects.values()];
+}
 
 function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   // ---- Active category tab ----
@@ -72,6 +127,13 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   const [nvdMsg, setNvdMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
   const [nvdEditing, setNvdEditing] = useState(false);
   const [confirmRemoveNvdKey, setConfirmRemoveNvdKey] = useState(false);
+
+  // ---- Global data maintenance ----
+  const [confirmDeleteOutdatedData, setConfirmDeleteOutdatedData] = useState(false);
+  const [outdatedDataPreview, setOutdatedDataPreview] = useState<OutdatedDataPreview | null>(null);
+  const [loadingOutdatedDataPreview, setLoadingOutdatedDataPreview] = useState(false);
+  const [deletingOutdatedData, setDeletingOutdatedData] = useState(false);
+  const [outdatedDataMessage, setOutdatedDataMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
 
   useEffect(() => {
     Config.get()
@@ -197,6 +259,59 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       setNvdMsg({ text: "Failed to remove NVD API key.", type: "error" });
     } finally {
       if (!unmountedRef.current) setNvdBusy(false);
+    }
+  };
+
+  const openDeleteOutdatedDataConfirmation = async () => {
+    setConfirmDeleteOutdatedData(true);
+    setOutdatedDataPreview(null);
+    setOutdatedDataMessage(null);
+    setLoadingOutdatedDataPreview(true);
+    try {
+      const result = await ScansHandler.getOutdatedDataPreview();
+      if (unmountedRef.current) return;
+      if (result.ok) {
+        setOutdatedDataPreview(result.preview ?? null);
+      } else {
+        setConfirmDeleteOutdatedData(false);
+        setOutdatedDataMessage({ text: result.error ?? "Failed to load outdated data.", type: "error" });
+      }
+    } catch {
+      if (!unmountedRef.current) {
+        setConfirmDeleteOutdatedData(false);
+        setOutdatedDataMessage({ text: "Failed to load outdated data.", type: "error" });
+      }
+    } finally {
+      if (!unmountedRef.current) setLoadingOutdatedDataPreview(false);
+    }
+  };
+
+  const handleDeleteOutdatedData = async () => {
+    setConfirmDeleteOutdatedData(false);
+    setDeletingOutdatedData(true);
+    setOutdatedDataMessage(null);
+    onLoadingMessage?.("Deleting outdated data...");
+    let refreshStarted = false;
+    try {
+      const result = await ScansHandler.deleteOutdatedData();
+      if (unmountedRef.current) return;
+      if (!result.ok) {
+        setOutdatedDataMessage({ text: result.error ?? "Failed to delete outdated data.", type: "error" });
+        return;
+      }
+      setOutdatedDataPreview(null);
+      setOutdatedDataMessage({ text: "Outdated data removed from every project and variant.", type: "success" });
+      onDataChanged?.("Removing outdated data...");
+      refreshStarted = Boolean(onDataChanged);
+    } catch {
+      if (!unmountedRef.current) {
+        setOutdatedDataMessage({ text: "Failed to delete outdated data.", type: "error" });
+      }
+    } finally {
+      if (!unmountedRef.current) {
+        setDeletingOutdatedData(false);
+        if (!refreshStarted) onLoadingMessage?.(null);
+      }
     }
   };
 
@@ -1245,6 +1360,39 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             </div>
           </div>
         </section>
+
+        <section aria-labelledby="settings-heading-outdated-data">
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faTrash} className="text-red-400" aria-hidden="true" />
+            <h2 id="settings-heading-outdated-data" className="text-xl font-bold text-white">Data Maintenance</h2>
+          </div>
+          <div className={cardBody + " space-y-3"}>
+            <p className="text-sm text-zinc-400">
+              Permanently remove all outdated package evidence and custom assessments across every project and variant.
+            </p>
+            {outdatedDataMessage && (
+              <MessageBanner
+                type={outdatedDataMessage.type}
+                message={outdatedDataMessage.text}
+                isVisible={true}
+                onClose={() => setOutdatedDataMessage(null)}
+              />
+            )}
+            <button
+              type="button"
+              onClick={openDeleteOutdatedDataConfirmation}
+              disabled={deletingOutdatedData || loadingOutdatedDataPreview}
+              className="px-4 py-2 rounded-lg bg-red-800 hover:bg-red-700 focus:ring-4 focus:outline-none focus:ring-red-900 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {deletingOutdatedData ? (
+                <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
+              ) : (
+                <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
+              )}
+              {deletingOutdatedData ? "Removing outdated data..." : "Delete all outdated data"}
+            </button>
+          </div>
+        </section>
         </>
         )}
       </div>
@@ -1281,6 +1429,108 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         onConfirm={handleRemoveNvdKey}
         onCancel={() => setConfirmRemoveNvdKey(false)}
       />
+      <Popup
+        isOpen={confirmDeleteOutdatedData}
+        title="Delete Outdated Data"
+        dialogClassName="max-w-3xl"
+        onClose={() => {
+          setConfirmDeleteOutdatedData(false);
+          setOutdatedDataPreview(null);
+        }}
+      >
+        {loadingOutdatedDataPreview ? (
+          <div className="flex min-h-40 items-center justify-center gap-3 text-sm text-gray-500 dark:text-gray-400">
+            <FontAwesomeIcon icon={faSpinner} spin aria-hidden="true" />
+            Loading deletion plan...
+          </div>
+        ) : !outdatedDataPreview ? null : outdatedDataPreview.packages.length === 0 && outdatedDataPreview.assessments.length === 0 ? (
+          <p className="text-sm text-gray-500 dark:text-gray-400">No outdated data was found.</p>
+        ) : (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              The following outdated records will be permanently removed across all projects and variants.
+            </p>
+            <div className="max-h-[55vh] overflow-y-auto pr-1" role="tree" aria-label="Outdated data deletion plan">
+              {buildOutdatedDataPlan(outdatedDataPreview).map((project) => (
+                <section key={project.name} className="relative pb-4 last:pb-0" role="treeitem" aria-level={1}>
+                  <div className="flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">
+                      <FontAwesomeIcon icon={faFolderOpen} aria-hidden="true" />
+                    </span>
+                    {project.name}
+                  </div>
+                  <div className="ml-3.5 mt-2 border-l border-gray-300 pl-5 dark:border-gray-600" role="group">
+                    {[...project.variants.values()].map((variant) => (
+                      <div key={variant.name} className="relative pb-4 last:pb-0" role="treeitem" aria-level={2}>
+                        <span className="absolute -left-5 top-3 h-px w-4 bg-gray-300 dark:bg-gray-600" aria-hidden="true" />
+                        <div className="flex items-center gap-2 text-sm font-semibold text-gray-800 dark:text-gray-100">
+                          <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-sky-500 ring-4 ring-sky-100 dark:ring-sky-950" aria-hidden="true" />
+                          Variant: {variant.name}
+                        </div>
+                        <div className="ml-1.5 mt-2 border-l border-gray-300 pl-5 dark:border-gray-600" role="group">
+                          {[...variant.packages.values()].map((packagePlan) => (
+                            <div key={packagePlan.package} className="relative pb-4 last:pb-0" role="treeitem" aria-level={3}>
+                              <span className="absolute -left-5 top-3 h-px w-4 bg-gray-300 dark:bg-gray-600" aria-hidden="true" />
+                              <div className="flex items-center gap-2 text-sm font-semibold text-gray-800 dark:text-gray-100">
+                                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300">
+                                  <FontAwesomeIcon icon={faFileLines} aria-hidden="true" />
+                                </span>
+                                {packagePlan.package}
+                              </div>
+                              <div className="ml-3 mt-2 space-y-2 border-l border-gray-200 pl-4 text-xs dark:border-gray-600" role="group">
+                                {packagePlan.vulnerabilities.map((vulnerability) => (
+                                  <div key={vulnerability} className="relative flex items-center gap-2 text-gray-700 dark:text-gray-200" role="treeitem" aria-level={4}>
+                                    <span className="absolute -left-4 top-2 h-px w-3 bg-gray-200 dark:bg-gray-600" aria-hidden="true" />
+                                    <FontAwesomeIcon icon={faBug} className="text-red-500" aria-hidden="true" />
+                                    Vulnerability to remove: <span className="font-mono font-semibold">{vulnerability}</span>
+                                  </div>
+                                ))}
+                                {packagePlan.assessments.map((vulnerability) => (
+                                  <div key={`assessment-${vulnerability}`} className="relative flex items-center gap-2 text-gray-600 dark:text-gray-300" role="treeitem" aria-level={4}>
+                                    <span className="absolute -left-4 top-2 h-px w-3 bg-gray-200 dark:bg-gray-600" aria-hidden="true" />
+                                    <FontAwesomeIcon icon={faCheck} className="text-amber-600" aria-hidden="true" />
+                                    Custom assessment for <span className="font-mono">{vulnerability}</span>
+                                  </div>
+                                ))}
+                                <div className="relative text-gray-500 dark:text-gray-400" role="treeitem" aria-level={4}>
+                                  <span className="absolute -left-4 top-2 h-px w-3 bg-gray-200 dark:bg-gray-600" aria-hidden="true" />
+                                  Linked records: {packagePlan.linkedData.observations} observation{packagePlan.linkedData.observations === 1 ? "" : "s"}, {packagePlan.linkedData.sbomPackages} SBOM package link{packagePlan.linkedData.sbomPackages === 1 ? "" : "s"}, {packagePlan.linkedData.sbomObservations} SBOM vulnerability record{packagePlan.linkedData.sbomObservations === 1 ? "" : "s"}.
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Findings, packages, and vulnerabilities are removed only when no current or other-variant data still references them.
+            </p>
+            <div className="flex justify-end gap-3 border-t border-gray-200 pt-4 dark:border-gray-600">
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmDeleteOutdatedData(false);
+                  setOutdatedDataPreview(null);
+                }}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100 dark:border-gray-500 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteOutdatedData}
+                className="rounded-lg bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-800 focus:outline-none focus:ring-4 focus:ring-red-300 dark:focus:ring-red-900"
+              >
+                Delete outdated data
+              </button>
+            </div>
+          </div>
+        )}
+      </Popup>
     </div>
   );
 }

@@ -166,6 +166,19 @@ type RunningScans = {
 
 export type { ScanStatusResponse, RunningScanEntry, RunningScans };
 
+type OutdatedDataPreview = {
+    packages: Array<{
+        project: string;
+        variant: string;
+        package: string;
+        vulnerabilities: string[];
+        linked_data: { observations: number; sbom_packages: number; sbom_observations: number };
+    }>;
+    assessments: Array<{ project: string; vulnerability: string; package: string; variant: string }>;
+};
+
+export type { OutdatedDataPreview };
+
 class ScansHandler {
     static async list(variantId?: string, projectId?: string): Promise<Scan[]> {
         let url: string;
@@ -327,6 +340,28 @@ class ScansHandler {
             return { ok: true, orphaned_findings_removed: data?.orphaned_findings_removed };
         }
         const data = await response.json().catch(() => ({}));
+        return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
+    }
+
+    static async deleteOutdatedData(): Promise<{ ok: boolean; error?: string; summary?: Record<string, number> }> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + '/api/outdated-data',
+            { method: 'DELETE', mode: 'cors' }
+        );
+        const data = await response.json().catch(() => ({}));
+        if (response.ok) return { ok: true, summary: data };
+        return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
+    }
+
+    static async getOutdatedDataPreview(): Promise<{ ok: boolean; error?: string; preview?: OutdatedDataPreview }> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + '/api/outdated-data',
+            { mode: 'cors' }
+        );
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && Array.isArray(data?.packages) && Array.isArray(data?.assessments)) {
+            return { ok: true, preview: data as OutdatedDataPreview };
+        }
         return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
     }
 }

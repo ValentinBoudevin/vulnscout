@@ -130,6 +130,7 @@ Scan & output commands:
     --import-context <path>   Import AI assessment context from a JSON file (overwrites matching project/variant)
   --match-condition <expr>  Exit code 2 if condition met (e.g. "cvss >= 9.0")
   --delete-scan <id>        Delete a past scan by its ID
+    --delete-outdated         Permanently delete outdated packages and assessments
 
 Data retrieval commands:
   --list-projects           List all projects and their variants
@@ -704,6 +705,10 @@ cmd_delete_scan() {
     flask --app src.bin.webapp delete-scan "$scan_id"
 }
 
+cmd_delete_outdated() {
+    flask --app src.bin.webapp delete-outdated
+}
+
 #######################################
 # Print a one-line NVD configuration summary
 #######################################
@@ -813,6 +818,8 @@ while [[ $# -gt 0 ]]; do
             SBOM_CVE_CHECK_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --delete-scan)
             cmd_delete_scan "$2"; shift 2 ;;
+        --delete-outdated)
+            cmd_delete_outdated; shift ;;
         --serve)
             if [[ -n "$MATCH_CONDITION" ]]; then
                 echo "Error: --serve and --match-condition are incompatible."; exit 1
