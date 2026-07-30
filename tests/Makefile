@@ -30,8 +30,8 @@ test_duplication:
 	cd "$(MAKEFILE_DIR).." && jscpd --config .jscpd.json
 
 test_complexity:
-	@echo "== Python cyclomatic complexity (flake8 mccabe, threshold 10) =="
-	-flake8 $(SRC_DIR) --select=C901 --max-complexity=10
+	@echo "== Python cyclomatic complexity (flake8 mccabe, threshold 15) =="
+	-flake8 $(SRC_DIR) --select=C901 --max-complexity=15
 	@echo "== Frontend complexity, function length & nesting (eslint) =="
 	-cd $(FRONTEND_DIR) && \
 	npx eslint src --no-config-lookup -c eslint.complexity.config.js

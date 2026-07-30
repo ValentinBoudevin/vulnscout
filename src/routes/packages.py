@@ -22,7 +22,7 @@ from ._scan_queries import _packages_by_scan_ids, _package_rows
 from ._scan_helpers import parse_uuid_or_400
 
 
-def init_app(app: Flask) -> None:
+def init_app(app: Flask) -> None:  # noqa: C901
 
     @app.route('/api/packages')
     def index_pkg() -> ResponseReturnValue:

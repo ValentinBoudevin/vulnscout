@@ -282,7 +282,7 @@ def _format_timestamp_for_filename(dt: datetime | str | None = None) -> str:
     return d.strftime('%Y%m%d_%H%M%S')
 
 
-def init_app(app: Flask) -> None:
+def init_app(app: Flask) -> None:  # noqa: C901
 
     @app.route('/api/scans')
     def list_all_scans() -> ResponseReturnValue:

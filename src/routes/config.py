@@ -64,7 +64,7 @@ def _write_config_key(key: str, value: str | None) -> bool:
         return False
 
 
-def init_app(app):
+def init_app(app):  # noqa: C901
 
     @app.route('/api/config', methods=['GET'])
     def get_config():

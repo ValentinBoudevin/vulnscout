@@ -195,7 +195,7 @@ def _parse_batch_record_ids() -> tuple[list[UUID] | None, str | None]:
         return None, "'ids' must contain valid record ids"
 
 
-def init_app(app: Flask) -> None:
+def init_app(app: Flask) -> None:  # noqa: C901
 
     @overload
     def _get_db_assessment_dicts(

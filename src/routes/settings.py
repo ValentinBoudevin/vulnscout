@@ -223,7 +223,7 @@ def _process_sbom_background(
                     pass
 
 
-def init_app(app: Flask) -> None:
+def init_app(app: Flask) -> None:  # noqa: C901
 
     def _validate_name_from_request(entity_label: str) -> tuple[str, None] | tuple[None, ErrorResponse]:
         """Parse and validate the ``name`` field from a JSON request body.

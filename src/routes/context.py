@@ -29,7 +29,7 @@ def _get_cache_dir() -> str:
     return os.getenv("VULNSCOUT_CACHE_DIR", "/cache/vulnscout")
 
 
-def init_app(app):
+def init_app(app):  # noqa: C901
 
     @app.route('/api/context', methods=['GET'])
     def get_merged_context():

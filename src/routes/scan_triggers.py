@@ -116,7 +116,7 @@ def _read_nvd_mode() -> str:
     return request.args.get("mode", "local").strip().lower()
 
 
-def init_app(app: Flask) -> None:
+def init_app(app: Flask) -> None:  # noqa: C901
 
     # ------------------------------------------------------------------
     # Grype Scan

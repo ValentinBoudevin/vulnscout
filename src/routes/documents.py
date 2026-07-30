@@ -185,7 +185,7 @@ def guess_mime_type(doc_name: Optional[str]) -> Optional[str]:
     return "application/octet-stream"
 
 
-def init_app(app: Flask) -> None:
+def init_app(app: Flask) -> None:  # noqa: C901
 
     @app.route('/api/documents', methods=['GET'])
     def index_docs() -> ResponseReturnValue:

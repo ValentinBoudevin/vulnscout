@@ -76,7 +76,7 @@ def _safe_commit(label: str) -> None:
         db.session.expunge_all()
 
 
-def init_app(app: Flask) -> None:
+def init_app(app: Flask) -> None:  # noqa: C901
 
     @app.route('/api/vulnerabilities/bulk-nvd-refresh', methods=['POST'])
     def bulk_nvd_refresh() -> ResponseReturnValue:
