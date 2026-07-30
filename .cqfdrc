@@ -5,7 +5,7 @@ build_context=.
 
 [build]
 command="make -C tests"
-flavors="test test_backend test_frontend test_ci test_duplication validate_sbom documentation"
+flavors="test test_backend test_frontend test_ci test_duplication test_complexity validate_sbom documentation"
 
 [test]
 command="make -C tests test"
@@ -22,6 +22,9 @@ docker_run_args="-v /run/docker.sock:/run/docker.sock"
 
 [test_duplication]
 command="make -C tests test_duplication"
+
+[test_complexity]
+command="make -C tests test_complexity"
 
 [validate_sbom]
 command="make -C tests validate_sbom"
