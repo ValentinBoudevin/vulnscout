@@ -167,6 +167,11 @@ type RunningScans = {
 export type { ScanStatusResponse, RunningScanEntry, RunningScans };
 
 type OutdatedDataPreview = {
+    candidate_ids: {
+        observations: string[];
+        assessments: string[];
+        package_pairs: Array<{ package_id: string; variant_id: string }>;
+    };
     packages: Array<{
         project: string;
         variant: string;
@@ -177,7 +182,20 @@ type OutdatedDataPreview = {
     assessments: Array<{ project: string; vulnerability: string; package: string; variant: string }>;
 };
 
-export type { OutdatedDataPreview };
+type EmptyScanPreview = {
+    id: string;
+    description: string;
+    timestamp: string;
+    project: string;
+    variant: string;
+};
+
+type OrphanedVulnerabilityPreview = {
+    id: string;
+    assessments: number;
+};
+
+export type { OutdatedDataPreview, EmptyScanPreview, OrphanedVulnerabilityPreview };
 
 class ScansHandler {
     static async list(variantId?: string, projectId?: string): Promise<Scan[]> {
@@ -343,10 +361,10 @@ class ScansHandler {
         return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
     }
 
-    static async deleteOutdatedData(): Promise<{ ok: boolean; error?: string; summary?: Record<string, number> }> {
+    static async deleteOutdatedData(candidateIds: OutdatedDataPreview["candidate_ids"]): Promise<{ ok: boolean; error?: string; summary?: Record<string, number> }> {
         const response = await fetch(
             import.meta.env.VITE_API_URL + '/api/outdated-data',
-            { method: 'DELETE', mode: 'cors' }
+            { method: 'DELETE', mode: 'cors', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ candidate_ids: candidateIds }) }
         );
         const data = await response.json().catch(() => ({}));
         if (response.ok) return { ok: true, summary: data };
@@ -362,6 +380,45 @@ class ScansHandler {
         if (response.ok && Array.isArray(data?.packages) && Array.isArray(data?.assessments)) {
             return { ok: true, preview: data as OutdatedDataPreview };
         }
+        return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
+    }
+
+    static async getEmptyScansPreview(): Promise<{ ok: boolean; error?: string; scans?: EmptyScanPreview[] }> {
+        const response = await fetch(import.meta.env.VITE_API_URL + '/api/empty-scans', { mode: 'cors' });
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && Array.isArray(data?.scans)) return { ok: true, scans: data.scans };
+        return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
+    }
+
+    static async deleteEmptyScans(scanIds: string[]): Promise<{ ok: boolean; error?: string; count?: number }> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + '/api/empty-scans',
+            { method: 'DELETE', mode: 'cors', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scan_ids: scanIds }) }
+        );
+        const data = await response.json().catch(() => ({}));
+        if (response.ok) return { ok: true, count: data?.scans_deleted ?? 0 };
+        return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
+    }
+
+    static async getOrphanedVulnerabilitiesPreview(): Promise<{ ok: boolean; error?: string; vulnerabilities?: OrphanedVulnerabilityPreview[] }> {
+        const response = await fetch(import.meta.env.VITE_API_URL + '/api/orphaned-vulnerabilities', { mode: 'cors' });
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && Array.isArray(data?.vulnerabilities)) {
+            return {
+                ok: true,
+                vulnerabilities: data.vulnerabilities,
+            };
+        }
+        return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
+    }
+
+    static async deleteOrphanedVulnerabilities(vulnerabilityIds: string[]): Promise<{ ok: boolean; error?: string; count?: number }> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + '/api/orphaned-vulnerabilities',
+            { method: 'DELETE', mode: 'cors', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vulnerability_ids: vulnerabilityIds }) }
+        );
+        const data = await response.json().catch(() => ({}));
+        if (response.ok) return { ok: true, count: data?.vulnerabilities_deleted ?? 0 };
         return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
     }
 }

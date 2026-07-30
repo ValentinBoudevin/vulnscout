@@ -39,6 +39,8 @@ from .cmd_context import (
     import_context_command,
 )
 from .cmd_scans import (
+    delete_empty_scans_command,
+    delete_orphaned_vulnerabilities_command,
     delete_outdated_command,
     list_projects_command,
     list_scans_command,
@@ -63,6 +65,8 @@ def init_app(app) -> None:
     app.cli.add_command(list_scans_command)
     app.cli.add_command(delete_scan_command)
     app.cli.add_command(delete_outdated_command)
+    app.cli.add_command(delete_empty_scans_command)
+    app.cli.add_command(delete_orphaned_vulnerabilities_command)
     app.cli.add_command(nvd_scan_command)
     app.cli.add_command(osv_scan_command)
     app.cli.add_command(sbom_cve_check_scan_command)

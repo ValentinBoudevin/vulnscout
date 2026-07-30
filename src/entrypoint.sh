@@ -131,6 +131,8 @@ Scan & output commands:
   --match-condition <expr>  Exit code 2 if condition met (e.g. "cvss >= 9.0")
   --delete-scan <id>        Delete a past scan by its ID
     --delete-outdated         Permanently delete outdated packages and assessments
+    --delete-empty-scans      Permanently delete scans with no recorded changes
+    --delete-orphaned-vulnerabilities  Delete CVEs absent from every project and variant
 
 Data retrieval commands:
   --list-projects           List all projects and their variants
@@ -709,6 +711,14 @@ cmd_delete_outdated() {
     flask --app src.bin.webapp delete-outdated
 }
 
+cmd_delete_empty_scans() {
+    flask --app src.bin.webapp delete-empty-scans
+}
+
+cmd_delete_orphaned_vulnerabilities() {
+    flask --app src.bin.webapp delete-orphaned-vulnerabilities
+}
+
 #######################################
 # Print a one-line NVD configuration summary
 #######################################
@@ -820,6 +830,10 @@ while [[ $# -gt 0 ]]; do
             cmd_delete_scan "$2"; shift 2 ;;
         --delete-outdated)
             cmd_delete_outdated; shift ;;
+        --delete-empty-scans)
+            cmd_delete_empty_scans; shift ;;
+        --delete-orphaned-vulnerabilities)
+            cmd_delete_orphaned_vulnerabilities; shift ;;
         --serve)
             if [[ -n "$MATCH_CONDITION" ]]; then
                 echo "Error: --serve and --match-condition are incompatible."; exit 1

@@ -62,6 +62,8 @@ from ._scan_diff import (  # noqa: F401  — re-exports
     _serialize_list_with_diff,
 )
 
+_STALE_CLEANUP_PREVIEW_ERROR = "Cleanup preview is no longer current. Review it again before deleting."
+
 
 # ---------------------------------------------------------------------------
 # Scan export helpers — mirror the frontend strip/transform functions
@@ -423,10 +425,47 @@ def init_app(app: Flask) -> None:
         if flask_request.method == 'GET':
             return jsonify(outdated_data_preview())
         try:
-            return jsonify(cleanup())
+            return jsonify(cleanup((flask_request.get_json(silent=True) or {}).get("candidate_ids")))
+        except ValueError:
+            return jsonify({"error": _STALE_CLEANUP_PREVIEW_ERROR}), 409
         except Exception as exc:
             db.session.rollback()
             return jsonify({"error": f"Failed to delete outdated data: {exc}"}), 500
+
+    @app.route('/api/empty-scans', methods=['GET', 'DELETE'])
+    def empty_scans() -> ResponseReturnValue:
+        """Preview or delete non-initial scans with no recorded changes."""
+        from ..helpers.outdated_cleanup import delete_empty_scans, empty_scans_preview
+
+        if flask_request.method == 'GET':
+            return jsonify({"scans": empty_scans_preview()})
+        try:
+            body = flask_request.get_json(silent=True) or {}
+            return jsonify(delete_empty_scans(body.get("scan_ids")))
+        except ValueError:
+            return jsonify({"error": _STALE_CLEANUP_PREVIEW_ERROR}), 409
+        except Exception as exc:
+            db.session.rollback()
+            return jsonify({"error": f"Failed to delete empty scans: {exc}"}), 500
+
+    @app.route('/api/orphaned-vulnerabilities', methods=['GET', 'DELETE'])
+    def orphaned_vulnerabilities() -> ResponseReturnValue:
+        """Preview or delete CVEs absent from every project and variant."""
+        from ..helpers.outdated_cleanup import (
+            delete_orphaned_vulnerabilities,
+            orphaned_vulnerabilities_preview,
+        )
+
+        if flask_request.method == 'GET':
+            return jsonify({"vulnerabilities": orphaned_vulnerabilities_preview()})
+        try:
+            body = flask_request.get_json(silent=True) or {}
+            return jsonify(delete_orphaned_vulnerabilities(body.get("vulnerability_ids")))
+        except ValueError:
+            return jsonify({"error": _STALE_CLEANUP_PREVIEW_ERROR}), 409
+        except Exception as exc:
+            db.session.rollback()
+            return jsonify({"error": f"Failed to delete orphaned vulnerabilities: {exc}"}), 500
 
     @app.route('/api/scans/<scan_id>/diff')
     def get_scan_diff(scan_id: str) -> ResponseReturnValue:

@@ -20,7 +20,7 @@ import type { Variant } from "../handlers/variant";
 import Config from "../handlers/config";
 import NvdApiKey from "../handlers/nvdApiKey";
 import ScansHandler from "../handlers/scans";
-import type { OutdatedDataPreview } from "../handlers/scans";
+import type { EmptyScanPreview, OrphanedVulnerabilityPreview, OutdatedDataPreview } from "../handlers/scans";
 import ConfirmationModal from "../components/ConfirmationModal";
 import MessageBanner from "../components/MessageBanner";
 import Popup from "../components/Popup";
@@ -41,6 +41,9 @@ type OutdatedPackagePlan = {
 
 type OutdatedVariantPlan = { name: string; packages: Map<string, OutdatedPackagePlan> };
 type OutdatedProjectPlan = { name: string; variants: Map<string, OutdatedVariantPlan> };
+type AdditionalCleanup =
+  | { kind: "empty-scans"; scans: EmptyScanPreview[] }
+  | { kind: "orphaned-vulnerabilities"; vulnerabilities: OrphanedVulnerabilityPreview[] };
 
 function buildOutdatedDataPlan(preview: OutdatedDataPreview): OutdatedProjectPlan[] {
   const projects = new Map<string, OutdatedProjectPlan>();
@@ -134,6 +137,14 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   const [loadingOutdatedDataPreview, setLoadingOutdatedDataPreview] = useState(false);
   const [deletingOutdatedData, setDeletingOutdatedData] = useState(false);
   const [outdatedDataMessage, setOutdatedDataMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+  const [pendingCleanup, setPendingCleanup] = useState<AdditionalCleanup | null>(null);
+  const [additionalCleanupBusy, setAdditionalCleanupBusy] = useState(false);
+  const maintenanceBusy = loadingOutdatedDataPreview || deletingOutdatedData || additionalCleanupBusy;
+  const maintenanceStatus = loadingOutdatedDataPreview || additionalCleanupBusy
+    ? "Scanning..."
+    : deletingOutdatedData
+      ? "Deleting..."
+      : null;
 
   useEffect(() => {
     Config.get()
@@ -293,7 +304,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     onLoadingMessage?.("Deleting outdated data...");
     let refreshStarted = false;
     try {
-      const result = await ScansHandler.deleteOutdatedData();
+      const result = await ScansHandler.deleteOutdatedData(outdatedDataPreview?.candidate_ids ?? {
+        observations: [], assessments: [], package_pairs: [],
+      });
       if (unmountedRef.current) return;
       if (!result.ok) {
         setOutdatedDataMessage({ text: result.error ?? "Failed to delete outdated data.", type: "error" });
@@ -310,6 +323,75 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     } finally {
       if (!unmountedRef.current) {
         setDeletingOutdatedData(false);
+        if (!refreshStarted) onLoadingMessage?.(null);
+      }
+    }
+  };
+
+  const openAdditionalCleanupConfirmation = async (kind: AdditionalCleanup["kind"]) => {
+    setAdditionalCleanupBusy(true);
+    setOutdatedDataMessage(null);
+    try {
+      if (kind === "empty-scans") {
+        const result = await ScansHandler.getEmptyScansPreview();
+        if (unmountedRef.current) return;
+        if (!result.ok) {
+          setOutdatedDataMessage({ text: result.error ?? "Failed to load cleanup preview.", type: "error" });
+        } else if (!result.scans?.length) {
+          setOutdatedDataMessage({ text: "No empty scans were found.", type: "success" });
+        } else {
+          setPendingCleanup({ kind, scans: result.scans });
+        }
+      } else {
+        const result = await ScansHandler.getOrphanedVulnerabilitiesPreview();
+        if (unmountedRef.current) return;
+        if (!result.ok) {
+          setOutdatedDataMessage({ text: result.error ?? "Failed to load cleanup preview.", type: "error" });
+        } else if (!result.vulnerabilities?.length) {
+          setOutdatedDataMessage({ text: "No orphaned CVEs were found.", type: "success" });
+        } else {
+          setPendingCleanup({ kind, vulnerabilities: result.vulnerabilities });
+        }
+      }
+    } catch {
+      if (!unmountedRef.current) {
+        setOutdatedDataMessage({ text: "Failed to load cleanup preview.", type: "error" });
+      }
+    } finally {
+      if (!unmountedRef.current) setAdditionalCleanupBusy(false);
+    }
+  };
+
+  const handleAdditionalCleanup = async () => {
+    if (!pendingCleanup) return;
+    const cleanup = pendingCleanup;
+    setPendingCleanup(null);
+    setAdditionalCleanupBusy(true);
+    setOutdatedDataMessage(null);
+    onLoadingMessage?.(cleanup.kind === "empty-scans" ? "Deleting empty scans..." : "Deleting orphaned CVEs...");
+    let refreshStarted = false;
+    try {
+      const result = cleanup.kind === "empty-scans"
+        ? await ScansHandler.deleteEmptyScans(cleanup.scans.map((scan) => scan.id))
+        : await ScansHandler.deleteOrphanedVulnerabilities(cleanup.vulnerabilities.map((vulnerability) => vulnerability.id));
+      if (unmountedRef.current) return;
+      if (!result.ok) {
+        setOutdatedDataMessage({ text: result.error ?? "Cleanup failed.", type: "error" });
+        return;
+      }
+      setOutdatedDataMessage({
+        text: cleanup.kind === "empty-scans"
+          ? `${result.count ?? 0} empty scan${result.count === 1 ? "" : "s"} deleted.`
+          : `${result.count ?? 0} orphaned CVE${result.count === 1 ? "" : "s"} and their assessments deleted.`,
+        type: "success",
+      });
+      onDataChanged?.("Refreshing data...");
+      refreshStarted = Boolean(onDataChanged);
+    } catch {
+      if (!unmountedRef.current) setOutdatedDataMessage({ text: "Cleanup failed.", type: "error" });
+    } finally {
+      if (!unmountedRef.current) {
+        setAdditionalCleanupBusy(false);
         if (!refreshStarted) onLoadingMessage?.(null);
       }
     }
@@ -1361,14 +1443,14 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
           </div>
         </section>
 
-        <section aria-labelledby="settings-heading-outdated-data">
+        <section aria-labelledby="settings-heading-outdated-data" aria-busy={maintenanceBusy}>
           <div className={cardHeader}>
             <FontAwesomeIcon icon={faTrash} className="text-red-400" aria-hidden="true" />
             <h2 id="settings-heading-outdated-data" className="text-xl font-bold text-white">Data Maintenance</h2>
           </div>
           <div className={cardBody + " space-y-3"}>
             <p className="text-sm text-zinc-400">
-              Permanently remove all outdated package evidence and custom assessments across every project and variant.
+              Permanently remove redundant or unreferenced records across every project and variant.
             </p>
             {outdatedDataMessage && (
               <MessageBanner
@@ -1378,19 +1460,42 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                 onClose={() => setOutdatedDataMessage(null)}
               />
             )}
-            <button
-              type="button"
-              onClick={openDeleteOutdatedDataConfirmation}
-              disabled={deletingOutdatedData || loadingOutdatedDataPreview}
-              className="px-4 py-2 rounded-lg bg-red-800 hover:bg-red-700 focus:ring-4 focus:outline-none focus:ring-red-900 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              {deletingOutdatedData ? (
-                <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
-              ) : (
+            {maintenanceStatus && (
+              <div role="status" aria-live="polite" className="flex items-center gap-2 text-sm font-medium text-cyan-300">
+                <FontAwesomeIcon icon={faSpinner} spin aria-hidden="true" />
+                <span>Maintenance Scan</span>
+                <span className="text-zinc-400">{maintenanceStatus}</span>
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={openDeleteOutdatedDataConfirmation}
+                disabled={maintenanceBusy}
+                className="px-4 py-2 rounded-lg bg-red-800 hover:bg-red-700 focus:ring-4 focus:outline-none focus:ring-red-900 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
                 <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
-              )}
-              {deletingOutdatedData ? "Removing outdated data..." : "Delete all outdated data"}
-            </button>
+                Analyze outdated data
+              </button>
+              <button
+                type="button"
+                onClick={() => openAdditionalCleanupConfirmation("empty-scans")}
+                disabled={maintenanceBusy}
+                className="px-4 py-2 rounded-lg bg-red-800 hover:bg-red-700 focus:ring-4 focus:outline-none focus:ring-red-900 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
+                Analyze empty scans
+              </button>
+              <button
+                type="button"
+                onClick={() => openAdditionalCleanupConfirmation("orphaned-vulnerabilities")}
+                disabled={maintenanceBusy}
+                className="px-4 py-2 rounded-lg bg-red-800 hover:bg-red-700 focus:ring-4 focus:outline-none focus:ring-red-900 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
+                Analyze orphaned CVEs
+              </button>
+            </div>
           </div>
         </section>
         </>
@@ -1429,6 +1534,50 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         onConfirm={handleRemoveNvdKey}
         onCancel={() => setConfirmRemoveNvdKey(false)}
       />
+      <Popup
+        isOpen={pendingCleanup !== null}
+        title={pendingCleanup?.kind === "empty-scans" ? "Delete Empty Scans" : "Delete Orphaned CVEs"}
+        onClose={() => setPendingCleanup(null)}
+      >
+        {pendingCleanup?.kind === "empty-scans" ? (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              The following scans have no package, CVE, finding, or assessment changes and will be permanently deleted.
+            </p>
+            <ul className="max-h-[45vh] space-y-2 overflow-y-auto" aria-label="Empty scans deletion plan">
+              {pendingCleanup.scans.map((scan) => (
+                <li key={scan.id} className="rounded border border-gray-200 p-3 text-sm dark:border-gray-600">
+                  <div className="font-semibold text-gray-900 dark:text-white">{scan.project} / {scan.variant}</div>
+                  <div className="mt-1 text-gray-600 dark:text-gray-300">{scan.description || "No description"}</div>
+                  <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">{scan.timestamp}</div>
+                </li>
+              ))}
+            </ul>
+            <div className="flex justify-end gap-3 border-t border-gray-200 pt-4 dark:border-gray-600">
+              <button type="button" onClick={() => setPendingCleanup(null)} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100 dark:border-gray-500 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600">Cancel</button>
+              <button type="button" onClick={handleAdditionalCleanup} className="rounded-lg bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-800 focus:outline-none focus:ring-4 focus:ring-red-300 dark:focus:ring-red-900">Delete empty scans</button>
+            </div>
+          </div>
+        ) : pendingCleanup ? (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              The following CVEs are absent from every project and variant and will be permanently deleted with their assessments.
+            </p>
+            <ul className="max-h-[45vh] space-y-2 overflow-y-auto" aria-label="Orphaned CVEs deletion plan">
+              {pendingCleanup.vulnerabilities.map((vulnerability) => (
+                <li key={vulnerability.id} className="flex items-center justify-between rounded border border-gray-200 p-3 text-sm dark:border-gray-600">
+                  <span className="font-mono font-semibold text-gray-900 dark:text-white">{vulnerability.id}</span>
+                  <span className="text-gray-600 dark:text-gray-300">{vulnerability.assessments} assessment{vulnerability.assessments === 1 ? "" : "s"}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="flex justify-end gap-3 border-t border-gray-200 pt-4 dark:border-gray-600">
+              <button type="button" onClick={() => setPendingCleanup(null)} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100 dark:border-gray-500 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600">Cancel</button>
+              <button type="button" onClick={handleAdditionalCleanup} className="rounded-lg bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-800 focus:outline-none focus:ring-4 focus:ring-red-300 dark:focus:ring-red-900">Delete orphaned CVEs</button>
+            </div>
+          </div>
+        ) : null}
+      </Popup>
       <Popup
         isOpen={confirmDeleteOutdatedData}
         title="Delete Outdated Data"

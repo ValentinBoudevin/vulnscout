@@ -88,3 +88,27 @@ def delete_outdated_command():
         f"{summary['vulnerabilities_deleted']} vulnerabilities, "
         f"{summary['packages_deleted']} packages"
     )
+
+
+@click.command("delete-empty-scans")
+@with_appcontext
+def delete_empty_scans_command():
+    """Permanently remove non-initial scans with no recorded changes."""
+    from ..helpers.outdated_cleanup import delete_empty_scans
+
+    summary = delete_empty_scans()
+    click.echo(f"Deleted {summary['scans_deleted']} empty scans")
+
+
+@click.command("delete-orphaned-vulnerabilities")
+@with_appcontext
+def delete_orphaned_vulnerabilities_command():
+    """Permanently remove CVEs absent from every project and variant."""
+    from ..helpers.outdated_cleanup import delete_orphaned_vulnerabilities
+
+    summary = delete_orphaned_vulnerabilities()
+    click.echo(
+        f"Deleted {summary['vulnerabilities_deleted']} orphaned vulnerabilities, "
+        f"{summary['assessments_deleted']} assessments, "
+        f"{summary['findings_deleted']} findings"
+    )

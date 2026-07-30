@@ -28,6 +28,7 @@ from src.models.project import Project
 from src.models.sbom_document import SBOMDocument
 from src.models.sbom_package import SBOMPackage
 from src.models.scan import Scan
+from src.models.time_estimate import TimeEstimate
 from src.models.variant import Variant
 from src.models.vulnerability import Vulnerability
 
@@ -312,7 +313,15 @@ class TestOutdatedFlag:
         response = self.client.get("/api/outdated-data")
 
         assert response.status_code == 200
-        assert json.loads(response.data) == {
+        preview = json.loads(response.data)
+        assert preview["candidate_ids"]["assessments"] == [str(self.assess_id)]
+        assert len(preview["candidate_ids"]["observations"]) == 1
+        assert preview["candidate_ids"]["package_pairs"] == [{
+            "package_id": preview["candidate_ids"]["package_pairs"][0]["package_id"],
+            "variant_id": str(VARIANT_ID),
+        }]
+        assert uuid.UUID(preview["candidate_ids"]["package_pairs"][0]["package_id"])
+        assert {key: value for key, value in preview.items() if key != "candidate_ids"} == {
             "packages": [{
                 "package": "firefox@1.0",
                 "project": "test",
@@ -468,6 +477,86 @@ class TestOutdatedFlag:
         with self.app.app_context():
             assert _db.session.get(Scan, earlier_id) is None
             assert _db.session.get(Scan, redundant_id) is None
+    def test_delete_orphaned_vulnerabilities_removes_assessments(self):
+        """Assessment-only CVEs are not considered included in a project or variant."""
+        orphaned_cve = "CVE-2024-00002"
+        orphaned_assessment_id = uuid.UUID("13131313-1313-1313-1313-131313131313")
+        with self.app.app_context():
+            Vulnerability.create_record(id=orphaned_cve, description="Orphaned", status="low")
+            package = Package.find_or_create("orphaned", "1.0", [], [], "")
+            finding = Finding.get_or_create(package.id, orphaned_cve)
+            _db.session.add(Assessment(
+                id=orphaned_assessment_id,
+                origin="custom",
+                status="not_affected",
+                finding_id=finding.id,
+                variant_id=VARIANT_ID,
+            ))
+            _db.session.commit()
+
+        preview = self.client.get("/api/orphaned-vulnerabilities")
+        assert preview.status_code == 200
+        assert json.loads(preview.data) == {
+            "vulnerabilities": [{"id": orphaned_cve, "assessments": 1}]
+        }
+
+        response = self.client.delete("/api/orphaned-vulnerabilities")
+        assert response.status_code == 200
+        assert json.loads(response.data) == {
+            "vulnerabilities_deleted": 1,
+            "assessments_deleted": 1,
+            "findings_deleted": 1,
+        }
+        with self.app.app_context():
+            assert _db.session.get(Vulnerability, orphaned_cve) is None
+            assert _db.session.get(Assessment, orphaned_assessment_id) is None
+            assert _db.session.get(Vulnerability, CVE_ID) is not None
+
+    def test_orphaned_vulnerabilities_preserve_variant_owned_data(self):
+        """Variant metrics and time estimates keep their CVEs out of cleanup."""
+        metrics_cve = "CVE-2024-00003"
+        estimate_cve = "CVE-2024-00004"
+        estimate_id = uuid.UUID("14141414-1414-1414-1414-141414141414")
+        with self.app.app_context():
+            Vulnerability.create_record(id=metrics_cve, description="Custom metric", status="low")
+            Vulnerability.create_record(id=estimate_cve, description="Estimated work", status="low")
+            package = Package.find_or_create("estimated", "1.0", [], [], "")
+            finding = Finding.get_or_create(package.id, estimate_cve)
+            _db.session.add(Metrics(vulnerability_id=metrics_cve, variant_id=VARIANT_ID))
+            _db.session.add(TimeEstimate(
+                id=estimate_id,
+                finding_id=finding.id,
+                variant_id=VARIANT_ID,
+                optimistic=1,
+                likely=2,
+                pessimistic=3,
+            ))
+            _db.session.commit()
+
+        preview = self.client.get("/api/orphaned-vulnerabilities")
+        assert preview.status_code == 200
+        preview_ids = {item["id"] for item in json.loads(preview.data)["vulnerabilities"]}
+        assert metrics_cve not in preview_ids
+        assert estimate_cve not in preview_ids
+
+        response = self.client.delete("/api/orphaned-vulnerabilities")
+        assert response.status_code == 200
+        with self.app.app_context():
+            assert _db.session.get(Vulnerability, metrics_cve) is not None
+            assert _db.session.get(Vulnerability, estimate_cve) is not None
+            assert _db.session.get(TimeEstimate, estimate_id) is not None
+
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [
+            ("delete-empty-scans", "Deleted 0 empty scans"),
+            ("delete-orphaned-vulnerabilities", "Deleted 0 orphaned vulnerabilities"),
+        ],
+    )
+    def test_additional_cleanup_cli_commands(self, command, expected):
+        result = self.app.test_cli_runner().invoke(args=[command])
+        assert result.exit_code == 0
+        assert expected in result.output
 
 class TestNotOutdated_VersionStillActive:
     """Not outdated when the assessed package version is still in the active SBOM."""

@@ -204,6 +204,17 @@ def outdated_data_preview() -> dict[str, list[dict[str, str]]]:
         )
     ]
     return {
+        "candidate_ids": {
+            "observations": sorted(str(observation_id) for observation_id in stale_observations),
+            "assessments": sorted(str(assessment["uuid"]) for assessment in assessments),
+            "package_pairs": sorted(
+                [
+                    {"package_id": str(package_id), "variant_id": str(variant_id)}
+                    for package_id, variant_id in package_pairs
+                ],
+                key=lambda pair: (pair["package_id"], pair["variant_id"]),
+            ),
+        },
         "packages": packages,
         "assessments": [
             {
@@ -275,7 +286,7 @@ def _delete_orphaned_packages(package_pairs: set[StalePackagePair]) -> int:
     return len(packages)
 
 
-def delete_outdated_data() -> dict[str, int]:
+def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict[str, int]:
     """Delete every package observation and custom assessment marked outdated.
 
     The predicates deliberately mirror ``/api/packages?outdated_only=true``
@@ -287,6 +298,19 @@ def delete_outdated_data() -> dict[str, int]:
     )
     outdated_assessments = _outdated_assessments()
     outdated_assessment_ids = [assessment["uuid"] for assessment in outdated_assessments]
+    current_candidates = {
+        "observations": sorted(str(observation.id) for observation in stale_observations),
+        "assessments": sorted(str(assessment_id) for assessment_id in outdated_assessment_ids),
+        "package_pairs": sorted(
+            [
+                {"package_id": str(package_id), "variant_id": str(variant_id)}
+                for package_id, variant_id in stale_package_pairs
+            ],
+            key=lambda pair: (pair["package_id"], pair["variant_id"]),
+        ),
+    }
+    if candidate_ids is not None and candidate_ids != current_candidates:
+        raise ValueError(_STALE_PREVIEW_MESSAGE)
     outdated_finding_ids = {
         assessment["finding_id"]
         for assessment in outdated_assessments
@@ -358,12 +382,59 @@ def empty_scans_preview() -> list[dict[str, str]]:
     ]
 
 
-def delete_empty_scans() -> dict[str, int]:
+def delete_empty_scans(candidate_ids: list[str] | None = None) -> dict[str, int]:
     """Delete scans selected by :func:`empty_scans_preview`."""
-    scan_ids = [uuid.UUID(scan["id"]) for scan in empty_scans_preview()]
+    current_ids = [scan["id"] for scan in empty_scans_preview()]
+    if candidate_ids is not None and sorted(candidate_ids) != sorted(current_ids):
+        raise ValueError(_STALE_PREVIEW_MESSAGE)
+    scan_ids = [uuid.UUID(scan_id) for scan_id in current_ids]
     for scan_id in scan_ids:
         scan = db.session.get(Scan, scan_id)
         if scan is not None:
             db.session.delete(scan)
     db.session.commit()
     return {"scans_deleted": len(scan_ids)}
+
+
+def orphaned_vulnerabilities_preview() -> list[dict[str, str | int]]:
+    """Return vulnerabilities that have no evidence in any variant scan."""
+    vulnerabilities = db.session.execute(
+        db.select(Vulnerability)
+        .where(~Vulnerability.findings.any(Finding.observations.any()))
+        .where(~Vulnerability.findings.any(Finding.time_estimates.any()))
+        .where(~Vulnerability.metrics.any(Metrics.variant_id.is_not(None)))
+        .where(~Vulnerability.sbom_observations.any())
+        .order_by(Vulnerability.id)
+    ).scalars()
+    return [
+        {
+            "id": vulnerability.id,
+            "assessments": sum(len(finding.assessments) for finding in vulnerability.findings),
+        }
+        for vulnerability in vulnerabilities
+    ]
+
+
+def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> dict[str, int]:
+    """Delete CVEs absent from every project/variant and their assessments."""
+    preview = orphaned_vulnerabilities_preview()
+    vulnerability_ids = [str(item["id"]) for item in preview]
+    if candidate_ids is not None and sorted(candidate_ids) != sorted(vulnerability_ids):
+        raise ValueError(_STALE_PREVIEW_MESSAGE)
+    vulnerabilities = list(db.session.execute(
+        db.select(Vulnerability).where(Vulnerability.id.in_(vulnerability_ids))
+    ).scalars()) if vulnerability_ids else []
+    findings_deleted = sum(len(vulnerability.findings) for vulnerability in vulnerabilities)
+    assessments_deleted = sum(
+        len(finding.assessments)
+        for vulnerability in vulnerabilities
+        for finding in vulnerability.findings
+    )
+    for vulnerability in vulnerabilities:
+        db.session.delete(vulnerability)
+    db.session.commit()
+    return {
+        "vulnerabilities_deleted": len(vulnerabilities),
+        "assessments_deleted": assessments_deleted,
+        "findings_deleted": findings_deleted,
+    }
