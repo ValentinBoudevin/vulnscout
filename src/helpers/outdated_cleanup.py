@@ -31,6 +31,8 @@ from .assessment_staleness import annotate_assessments_outdated
 
 PackageIdentity = tuple[str | None, str | None]
 StalePackagePair = tuple[uuid.UUID, uuid.UUID]
+UNKNOWN_PROJECT = "Unknown project"
+UNKNOWN_VARIANT = "Unknown variant"
 
 
 def _active_identities_by_variant() -> dict[uuid.UUID, set[PackageIdentity]]:
@@ -188,8 +190,8 @@ def outdated_data_preview() -> dict[str, list[dict[str, str]]]:
     packages = [
         {
             "package": package_labels[package_id],
-            "project": variant_details.get(str(variant_id), {}).get("project", "Unknown project"),
-            "variant": variant_details.get(str(variant_id), {}).get("variant", "Unknown variant"),
+            "project": variant_details.get(str(variant_id), {}).get("project", UNKNOWN_PROJECT),
+            "variant": variant_details.get(str(variant_id), {}).get("variant", UNKNOWN_VARIANT),
             "vulnerabilities": sorted(vulnerabilities_by_pair.get((package_id, variant_id), set())),
             "linked_data": linked_data_by_pair.get(
                 (package_id, variant_id),
@@ -207,8 +209,8 @@ def outdated_data_preview() -> dict[str, list[dict[str, str]]]:
             {
                 "vulnerability": assessment["vuln_id"],
                 "package": assessment["packages"][0] if assessment["packages"] else "Unknown package",
-                "project": variant_details.get(assessment["variant_id"], {}).get("project", "Unknown project"),
-                "variant": variant_details.get(assessment["variant_id"], {}).get("variant", "Unknown variant"),
+                "project": variant_details.get(assessment["variant_id"], {}).get("project", UNKNOWN_PROJECT),
+                "variant": variant_details.get(assessment["variant_id"], {}).get("variant", UNKNOWN_VARIANT),
             }
             for assessment in assessments
         ],
@@ -316,3 +318,52 @@ def delete_outdated_data() -> dict[str, int]:
         "vulnerabilities_deleted": vulnerabilities_deleted,
         "packages_deleted": packages_deleted,
     }
+
+
+_SCAN_CHANGE_FIELDS = (
+    "packages_added",
+    "packages_removed",
+    "packages_upgraded",
+    "findings_added",
+    "findings_removed",
+    "findings_upgraded",
+    "vulns_added",
+    "vulns_removed",
+    "assessments_added",
+    "assessments_removed",
+)
+_STALE_PREVIEW_MESSAGE = "Cleanup preview is no longer current"
+
+
+def empty_scans_preview() -> list[dict[str, str]]:
+    """Return non-initial scans whose complete history diff is empty.
+
+    Uses an uncached scan-history serialisation so destructive cleanup is based
+    on the current assessments and findings rather than a stale list response.
+    """
+    from ..routes._scan_diff import _serialize_list_with_diff
+
+    scans = _serialize_list_with_diff(Scan.get_all())
+    return [
+        {
+            "id": item["id"],
+            "description": item["description"] or "",
+            "timestamp": item["timestamp"],
+            "project": item.get("project_name") or UNKNOWN_PROJECT,
+            "variant": item.get("variant_name") or UNKNOWN_VARIANT,
+        }
+        for item in scans
+        if not item.get("is_first")
+        and all(item.get(field) == 0 for field in _SCAN_CHANGE_FIELDS)
+    ]
+
+
+def delete_empty_scans() -> dict[str, int]:
+    """Delete scans selected by :func:`empty_scans_preview`."""
+    scan_ids = [uuid.UUID(scan["id"]) for scan in empty_scans_preview()]
+    for scan_id in scan_ids:
+        scan = db.session.get(Scan, scan_id)
+        if scan is not None:
+            db.session.delete(scan)
+    db.session.commit()
+    return {"scans_deleted": len(scan_ids)}

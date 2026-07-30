@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Project and scan management commands.
 
-Includes ``flask list-projects``, ``flask list-scans``, ``flask delete-scan``,
-and ``flask delete-outdated``.
+Includes scan listing and deletion commands plus global data maintenance.
 """
 
 from ..controllers.projects import ProjectController

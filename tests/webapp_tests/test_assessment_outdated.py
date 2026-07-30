@@ -405,6 +405,69 @@ class TestOutdatedFlag:
             assert old_package is not None
             assert len(Observation.get_by_finding(old_finding_id)) == 1
 
+    def test_delete_empty_scans_removes_only_redundant_non_initial_scans(self):
+        """Empty scan cleanup uses the same complete diff shown in scan history."""
+        duplicate_scan_id = uuid.UUID("12121212-1212-1212-1212-121212121212")
+        with self.app.app_context():
+            finding = Finding.get_by_package_and_vulnerability(
+                Package.get_by_string_id("firefox@2.0").id, CVE_ID
+            )
+            _db.session.add(Scan(
+                id=duplicate_scan_id,
+                variant_id=VARIANT_ID,
+                scan_type="tool",
+                scan_source="nvd",
+                timestamp=datetime(2024, 6, 3, tzinfo=timezone.utc),
+            ))
+            _db.session.add(Observation(finding_id=finding.id, scan_id=duplicate_scan_id))
+            _db.session.commit()
+
+        preview = self.client.get("/api/empty-scans")
+        assert preview.status_code == 200
+        assert [scan["id"] for scan in json.loads(preview.data)["scans"]] == [str(duplicate_scan_id)]
+
+        response = self.client.delete("/api/empty-scans")
+        assert response.status_code == 200
+        assert json.loads(response.data) == {"scans_deleted": 1}
+        with self.app.app_context():
+            assert _db.session.get(Scan, duplicate_scan_id) is None
+            assert _db.session.get(Scan, SCAN_V1_ID) is not None
+            assert _db.session.get(Scan, SCAN_V2_ID) is not None
+
+    def test_empty_scan_cleanup_orders_equal_timestamps_by_id(self):
+        """Equal-time scans have a deterministic predecessor regardless of insertion order."""
+        earlier_id = uuid.UUID("11111111-2222-2222-2222-222222222222")
+        redundant_id = uuid.UUID("22222222-2222-2222-2222-222222222222")
+        tied_timestamp = datetime(2024, 7, 1, tzinfo=timezone.utc)
+        with self.app.app_context():
+            _db.session.add(Scan(
+                id=redundant_id,
+                variant_id=VARIANT_ID,
+                scan_type="tool",
+                scan_source="nvd",
+                timestamp=tied_timestamp,
+            ))
+            _db.session.add(Scan(
+                id=earlier_id,
+                variant_id=VARIANT_ID,
+                scan_type="tool",
+                scan_source="nvd",
+                timestamp=tied_timestamp,
+            ))
+            _db.session.commit()
+
+        preview = self.client.get("/api/empty-scans")
+        assert preview.status_code == 200
+        assert [scan["id"] for scan in json.loads(preview.data)["scans"]] == [
+            str(earlier_id),
+            str(redundant_id),
+        ]
+
+        response = self.client.delete("/api/empty-scans")
+        assert response.status_code == 200
+        with self.app.app_context():
+            assert _db.session.get(Scan, earlier_id) is None
+            assert _db.session.get(Scan, redundant_id) is None
 
 class TestNotOutdated_VersionStillActive:
     """Not outdated when the assessed package version is still in the active SBOM."""
