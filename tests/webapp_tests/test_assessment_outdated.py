@@ -26,6 +26,7 @@ from src.models.observation import Observation
 from src.models.package import Package
 from src.models.project import Project
 from src.models.sbom_document import SBOMDocument
+from src.models.sbom_observation import SBOMObservation
 from src.models.sbom_package import SBOMPackage
 from src.models.scan import Scan
 from src.models.time_estimate import TimeEstimate
@@ -363,6 +364,49 @@ class TestOutdatedFlag:
             ).scalar_one_or_none() is None
             assert _db.session.get(Vulnerability, CVE_ID) is not None
 
+    def test_delete_outdated_data_removes_packageless_observations_from_superseded_sboms(self):
+        """Package-less SBOM data from a prior import cannot retain a removed CVE."""
+        obsolete_cve = "CVE-2001-1267"
+        active_cve = "CVE-2024-00002"
+        with self.app.app_context():
+            Vulnerability.create_record(id=obsolete_cve, description="Obsolete vuln", status="high")
+            Vulnerability.create_record(id=active_cve, description="Active vuln", status="high")
+            SBOMObservation.create(
+                vulnerability_id=obsolete_cve,
+                sbom_document_id=uuid.UUID("e1111111-1111-1111-1111-111111111111"),
+                key="Yocto VEX Description",
+                description="Only present in the first SBOM",
+                commit=False,
+            )
+            SBOMObservation.create(
+                vulnerability_id=active_cve,
+                sbom_document_id=uuid.UUID("e2222222-2222-2222-2222-222222222222"),
+                key="Yocto VEX Description",
+                description="Present in the active SBOM",
+                commit=False,
+            )
+            _db.session.commit()
+
+        response = self.client.delete("/api/outdated-data")
+
+        assert response.status_code == 200
+        assert json.loads(response.data)["sbom_observations_deleted"] == 1
+        with self.app.app_context():
+            assert _db.session.execute(
+                _db.select(SBOMObservation).where(SBOMObservation.vulnerability_id == obsolete_cve)
+            ).scalar_one_or_none() is None
+            assert _db.session.execute(
+                _db.select(SBOMObservation).where(SBOMObservation.vulnerability_id == active_cve)
+            ).scalar_one_or_none() is not None
+
+        response = self.client.delete("/api/orphaned-vulnerabilities")
+
+        assert response.status_code == 200
+        assert json.loads(response.data)["vulnerabilities_deleted"] == 1
+        with self.app.app_context():
+            assert _db.session.get(Vulnerability, obsolete_cve) is None
+            assert _db.session.get(Vulnerability, active_cve) is not None
+
     def test_delete_outdated_cli_command(self):
         """The Flask command delegates to the same cleanup implementation."""
         runner = self.app.test_cli_runner()
@@ -545,6 +589,53 @@ class TestOutdatedFlag:
             assert _db.session.get(Vulnerability, metrics_cve) is not None
             assert _db.session.get(Vulnerability, estimate_cve) is not None
             assert _db.session.get(TimeEstimate, estimate_id) is not None
+
+    def test_orphaned_vulnerability_cleanup_batches_large_candidate_sets(self):
+        """Preview and deletion preserve exact counts across SQL parameter batches."""
+        candidate_count = 401
+        with self.app.app_context():
+            package = Package.get_by_string_id("firefox@2.0")
+            vulnerabilities = []
+            findings = []
+            assessments = []
+            for index in range(candidate_count):
+                vulnerability_id = f"CVE-2099-{index:05d}"
+                finding_id = uuid.UUID(int=index + 1000)
+                vulnerabilities.append(Vulnerability(
+                    id=vulnerability_id,
+                    description="Batched orphan",
+                    status="low",
+                ))
+                findings.append(Finding(
+                    id=finding_id,
+                    package_id=package.id,
+                    vulnerability_id=vulnerability_id,
+                ))
+                assessments.append(Assessment(
+                    id=uuid.UUID(int=index + 2000),
+                    origin="custom",
+                    status="not_affected",
+                    finding_id=finding_id,
+                    variant_id=VARIANT_ID,
+                ))
+            _db.session.add_all(vulnerabilities)
+            _db.session.add_all(findings)
+            _db.session.add_all(assessments)
+            _db.session.commit()
+
+        preview = self.client.get("/api/orphaned-vulnerabilities")
+        assert preview.status_code == 200
+        candidates = json.loads(preview.data)["vulnerabilities"]
+        assert len(candidates) == candidate_count
+        assert all(candidate["assessments"] == 1 for candidate in candidates)
+
+        response = self.client.delete("/api/orphaned-vulnerabilities")
+        assert response.status_code == 200
+        assert json.loads(response.data) == {
+            "vulnerabilities_deleted": candidate_count,
+            "assessments_deleted": candidate_count,
+            "findings_deleted": candidate_count,
+        }
 
     @pytest.mark.parametrize(
         ("command", "expected"),
