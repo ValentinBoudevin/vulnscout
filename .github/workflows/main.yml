@@ -48,3 +48,29 @@ jobs:
       - name: Docker Clean
         if: ${{ matrix.target == 'Docker' && always() }}
         run: BUILD_TAG=${{ github.sha }} make -C tests docker_clean
+
+  duplication:
+    name: Code Duplication
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install cqfd on the CI
+        run: |
+          git clone https://github.com/savoirfairelinux/cqfd.git
+          cd cqfd
+          sudo make install
+
+      - name: Init cqfd container on the project
+        run: cqfd init
+
+      - name: Run code duplication check in the container
+        run: cqfd -b test_duplication
+
+      - name: Upload duplication report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jscpd-report
+          path: jscpd-report/

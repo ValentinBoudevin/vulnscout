@@ -1,0 +1,35 @@
+{
+  "$schema": "https://raw.githubusercontent.com/kucherenko/jscpd/master/packages/jscpd/schema.json",
+  "//": "Offline copy/paste (code duplication) detection for VulnScout.",
+  "path": [
+    "src",
+    "frontend/src"
+  ],
+  "ignore": [
+    "**/node_modules/**",
+    "**/__pycache__/**",
+    "src/migrations/versions/**",
+    "src/static/**",
+    "frontend/src/**/*.d.ts",
+    "**/*.min.js",
+    "**/*.min.css"
+  ],
+  "format": [
+    "python",
+    "typescript",
+    "tsx",
+    "javascript",
+    "jsx"
+  ],
+  "reporters": [
+    "console",
+    "html",
+    "json"
+  ],
+  "output": "./jscpd-report",
+  "minTokens": 50,
+  "minLines": 5,
+  "threshold": 5,
+  "gitignore": true,
+  "absolute": false
+}

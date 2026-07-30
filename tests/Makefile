@@ -26,6 +26,9 @@ test_ci:
 	cd $(CI_DIR) && \
 	bash ./vulnscout_CI_test.sh
 
+test_duplication:
+	cd "$(MAKEFILE_DIR).." && jscpd --config .jscpd.json
+
 validate_sbom:
 	bash $(MAKEFILE_DIR)/validate_sbom.sh
 

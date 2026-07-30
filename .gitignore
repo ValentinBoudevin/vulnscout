@@ -9,6 +9,9 @@ src/static/*
 *.pdf
 *.local
 
+# jscpd code duplication report
+jscpd-report/
+
 # man page
 vulnscout*.1
 

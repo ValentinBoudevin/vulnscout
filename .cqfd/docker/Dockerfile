@@ -21,6 +21,9 @@ RUN pip install --no-cache-dir -r /tmp/dev.txt \
 
 COPY --from=koalaman/shellcheck:v0.11.0 /bin/shellcheck /bin/shellcheck
 
+# Install jscpd for offline copy/paste (code duplication) detection
+RUN npm install -g jscpd@4.0.5
+
 # Install Docker CLI only (no daemon)
 RUN apt-get update && \
     apt-get install -y ca-certificates curl gnupg lsb-release && \
