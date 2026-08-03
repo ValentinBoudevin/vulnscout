@@ -710,18 +710,31 @@ def import_custom_data(
                         "error": str(e),
                     })
 
-    # Import pending AI assessments separately so the Review page continues to
-    # surface them in its AI Assessments tab for approval or rejection.
-    _import_assessments(
-        "assessments", "custom", "assessments_imported", "assessments_skipped"
-    )
-    _import_assessments(
-        "ai_assessments", "ai", "ai_assessments_imported", "ai_assessments_skipped"
-    )
+    def _resolve_entry_variant_ids(
+        entry: dict, vuln_id: str
+    ) -> "tuple[list[_uuid.UUID | None] | None, str | None]":
+        """Resolve the target variant ids for a CVSS or time-estimate entry.
 
-    # -- Import CVSS --
-    cvss_list = data.get("cvss", [])
-    if isinstance(cvss_list, list):
+        Returns ``(variant_ids, None)`` on success, or ``(None, error)`` when a
+        named variant could not be resolved.
+        """
+        entry_variant_id = _resolve_variant(entry)
+        variant_token = entry.get("variant_id")
+        if variant_token in (None, ""):
+            variant_token = entry.get("variant")
+        if entry_variant_id is None and variant_token not in (None, ""):
+            return None, f"Variant '{variant_token}' not found"
+        if entry_variant_id is not None:
+            return [entry_variant_id], None
+        variant_ids = _variants_for_vuln_id(vuln_id)
+        if not variant_ids:
+            variant_ids = [None]
+        return variant_ids, None
+
+    def _import_cvss_entries() -> None:
+        cvss_list = data.get("cvss", [])
+        if not isinstance(cvss_list, list):
+            return
         for c in cvss_list:
             if not isinstance(c, dict):
                 continue
@@ -744,26 +757,11 @@ def import_custom_data(
                 "exploitability_score": c.get("exploitability_score", 0.0),
                 "impact_score": c.get("impact_score", 0.0),
             }
-            cvss_variant_id = _resolve_variant(c)
-
-            variant_token = c.get("variant_id")
-            if variant_token in (None, ""):
-                variant_token = c.get("variant")
-            if cvss_variant_id is None and variant_token not in (None, ""):
-                result["errors"].append({
-                    "vuln_id": vuln_id,
-                    "error": f"Variant '{variant_token}' not found",
-                })
+            target_variant_ids, err = _resolve_entry_variant_ids(c, vuln_id)
+            if err:
+                result["errors"].append({"vuln_id": vuln_id, "error": err})
                 continue
-
-            target_variant_ids: list[_uuid.UUID | None]
-            if cvss_variant_id is not None:
-                target_variant_ids = [cvss_variant_id]
-            else:
-                target_variant_ids = _variants_for_vuln_id(vuln_id)
-                if not target_variant_ids:
-                    target_variant_ids = [None]
-
+            assert target_variant_ids is not None
             cvss_failed = False
             for target_variant_id in target_variant_ids:
                 err = validate_and_apply_cvss(
@@ -779,9 +777,10 @@ def import_custom_data(
             if not cvss_failed:
                 result["cvss_imported"] += 1
 
-    # -- Import time estimates --
-    te_list = data.get("time_estimates", [])
-    if isinstance(te_list, list):
+    def _import_time_estimate_entries() -> None:
+        te_list = data.get("time_estimates", [])
+        if not isinstance(te_list, list):
+            return
         for t in te_list:
             if not isinstance(t, dict):
                 continue
@@ -804,30 +803,27 @@ def import_custom_data(
             if err:
                 result["errors"].append({"vuln_id": vuln_id, "error": err})
                 continue
-
-            te_variant_id = _resolve_variant(t)
-
-            variant_token = t.get("variant_id")
-            if variant_token in (None, ""):
-                variant_token = t.get("variant")
-            if te_variant_id is None and variant_token not in (None, ""):
-                result["errors"].append({
-                    "vuln_id": vuln_id,
-                    "error": f"Variant '{variant_token}' not found",
-                })
+            target_variant_ids, err = _resolve_entry_variant_ids(t, vuln_id)
+            if err:
+                result["errors"].append({"vuln_id": vuln_id, "error": err})
                 continue
-
-            if te_variant_id is not None:
-                target_variant_ids = [te_variant_id]
-            else:
-                target_variant_ids = _variants_for_vuln_id(vuln_id)
-                if not target_variant_ids:
-                    target_variant_ids = [None]
-
+            assert target_variant_ids is not None
             assert effort is not None
             for target_variant_id in target_variant_ids:
                 apply_effort(record, target_variant_id, effort, log_prefix="import-custom-data")
             result["time_estimates_imported"] += 1
+
+    # Import pending AI assessments separately so the Review page continues to
+    # surface them in its AI Assessments tab for approval or rejection.
+    _import_assessments(
+        "assessments", "custom", "assessments_imported", "assessments_skipped"
+    )
+    _import_assessments(
+        "ai_assessments", "ai", "ai_assessments_imported", "ai_assessments_skipped"
+    )
+
+    _import_cvss_entries()
+    _import_time_estimate_entries()
 
     if (
         not result["assessments_imported"]
