@@ -10,7 +10,7 @@ import { ScanStateManager } from "./scanStateManager";
 export type { ScanEntryState as NvdState, ScanManagerSnapshot } from "./scanStateManager";
 
 const manager = new ScanStateManager(
-    (vid, opts) => ScansHandler.triggerNvdScan(vid, opts.excludeKernel ?? true, opts.nvdMode ?? "local"),
+    (vid, opts) => ScansHandler.triggerNvdScan(vid, opts.excludeKernel ?? true),
     (vid) => ScansHandler.getNvdScanStatus(vid),
     "NVD",
     true, // serial: scans can share engine and finding state
