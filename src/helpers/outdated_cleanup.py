@@ -117,6 +117,22 @@ def _stale_observations(
     return observation_ids, package_pairs, finding_ids
 
 
+def _stale_sbom_package_pairs(
+    active_identities_by_variant: dict[uuid.UUID, set[PackageIdentity]],
+) -> set[StalePackagePair]:
+    """Return historical SBOM package links absent from each variant's active SBOM."""
+    pairs: set[StalePackagePair] = set()
+    for package_id, name, version, variant_id in db.session.execute(
+        db.select(SBOMPackage.package_id, Package.name, Package.version, Scan.variant_id)
+        .join(Package, Package.id == SBOMPackage.package_id)
+        .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
+        .join(Scan, Scan.id == SBOMDocument.scan_id)
+    ):
+        if (name, version) not in active_identities_by_variant.get(variant_id, set()):
+            pairs.add((package_id, variant_id))
+    return pairs
+
+
 def _outdated_assessments() -> list[dict]:
     """Return custom assessment data matching the public staleness predicate."""
     rows = db.session.execute(
@@ -191,7 +207,9 @@ def _stale_sbom_rows(
 
 def outdated_data_preview() -> dict[str, object]:
     """Return the stale package data and assessments selected for deletion."""
-    stale_observations, package_pairs, _ = _stale_observations(_active_identities_by_variant())
+    active_identities = _active_identities_by_variant()
+    stale_observations, package_pairs, _ = _stale_observations(active_identities)
+    package_pairs.update(_stale_sbom_package_pairs(active_identities))
     assessments = _outdated_assessments()
     package_ids = {package_id for package_id, _ in package_pairs}
     variant_ids = {variant_id for _, variant_id in package_pairs}
@@ -395,9 +413,9 @@ def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict
     no scan, assessment, or SBOM relation references them.
     """
     with write_lock():
-        stale_observation_ids, stale_package_pairs, stale_finding_ids = _stale_observations(
-            _active_identities_by_variant()
-        )
+        active_identities = _active_identities_by_variant()
+        stale_observation_ids, stale_package_pairs, stale_finding_ids = _stale_observations(active_identities)
+        stale_package_pairs.update(_stale_sbom_package_pairs(active_identities))
         outdated_assessments = _outdated_assessments()
         outdated_assessment_ids = [assessment["uuid"] for assessment in outdated_assessments]
         current_candidates = {
@@ -477,22 +495,25 @@ def empty_scans_preview() -> list[dict[str, str]]:
         }
         for item in scans
         if not item.get("is_first")
+        and item.get("scan_type") == "tool"
         and all(item.get(field) == 0 for field in _SCAN_CHANGE_FIELDS)
     ]
 
 
 def delete_empty_scans(candidate_ids: list[str] | None = None) -> dict[str, int]:
     """Delete scans selected by :func:`empty_scans_preview`."""
-    current_ids = [scan["id"] for scan in empty_scans_preview()]
-    if candidate_ids is not None and sorted(candidate_ids) != sorted(current_ids):
-        raise ValueError(_STALE_PREVIEW_MESSAGE)
-    scan_ids = [uuid.UUID(scan_id) for scan_id in current_ids]
+    with write_lock():
+        current_ids = [scan["id"] for scan in empty_scans_preview()]
+        if candidate_ids is not None and sorted(candidate_ids) != sorted(current_ids):
+            raise ValueError(_STALE_PREVIEW_MESSAGE)
+        scan_ids = [uuid.UUID(scan_id) for scan_id in current_ids]
+        for scan_id in scan_ids:
+            scan = db.session.get(Scan, scan_id)
+            if scan is not None:
+                db.session.delete(scan)
+        db.session.commit()
+
     from ..routes._scan_diff import invalidate_scan_list_cache
-    for scan_id in scan_ids:
-        scan = db.session.get(Scan, scan_id)
-        if scan is not None:
-            db.session.delete(scan)
-    db.session.commit()
     invalidate_scan_list_cache()
     return {"scans_deleted": len(scan_ids)}
 

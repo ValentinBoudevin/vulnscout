@@ -214,6 +214,29 @@ class TestOutdatedFlag:
         self.assess_id = _build_outdated_db(self.app)
         self.client = self.app.test_client()
 
+    def _delete_outdated_data(self):
+        preview = self.client.get("/api/outdated-data")
+        assert preview.status_code == 200
+        return self.client.delete(
+            "/api/outdated-data", json={"candidate_ids": json.loads(preview.data)["candidate_ids"]}
+        )
+
+    def _delete_empty_scans(self):
+        preview = self.client.get("/api/empty-scans")
+        assert preview.status_code == 200
+        return self.client.delete(
+            "/api/empty-scans",
+            json={"scan_ids": [scan["id"] for scan in json.loads(preview.data)["scans"]]},
+        )
+
+    def _delete_orphaned_vulnerabilities(self):
+        preview = self.client.get("/api/orphaned-vulnerabilities")
+        assert preview.status_code == 200
+        return self.client.delete(
+            "/api/orphaned-vulnerabilities",
+            json={"vulnerability_ids": [item["id"] for item in json.loads(preview.data)["vulnerabilities"]]},
+        )
+
     def test_index_assess_variant_returns_outdated(self):
         """GET /api/assessments?variant_id=... marks the outdated assessment."""
         resp = self.client.get(f"/api/assessments?variant_id={VARIANT_ID}")
@@ -287,7 +310,7 @@ class TestOutdatedFlag:
 
     def test_delete_outdated_data_removes_only_stale_records(self):
         """The cleanup endpoint removes the flagged package and assessment."""
-        response = self.client.delete("/api/outdated-data")
+        response = self._delete_outdated_data()
 
         assert response.status_code == 200
         summary = json.loads(response.data)
@@ -338,6 +361,38 @@ class TestOutdatedFlag:
             }],
         }
 
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["/api/outdated-data", "/api/empty-scans", "/api/orphaned-vulnerabilities"],
+    )
+    def test_cleanup_delete_requires_confirmed_preview(self, endpoint):
+        """HTTP cleanup rejects unconfirmed destructive requests."""
+        response = self.client.delete(endpoint)
+
+        assert response.status_code == 400
+
+    def test_delete_outdated_data_removes_stale_sbom_only_package(self):
+        """A package absent from the active SBOM is removed without a finding observation."""
+        with self.app.app_context():
+            obsolete_package = Package.find_or_create("legacy", "1.0", [], [], "")
+            _db.session.add(SBOMPackage(
+                sbom_document_id=uuid.UUID("e1111111-1111-1111-1111-111111111111"),
+                package_id=obsolete_package.id,
+            ))
+            _db.session.commit()
+
+        preview = self.client.get("/api/outdated-data")
+        assert preview.status_code == 200
+        packages = json.loads(preview.data)["packages"]
+        assert any(package["package"] == "legacy@1.0" for package in packages)
+
+        response = self._delete_outdated_data()
+
+        assert response.status_code == 200
+        assert json.loads(response.data)["packages_deleted"] == 2
+        with self.app.app_context():
+            assert Package.get_by_string_id("legacy@1.0") is None
+
     def test_delete_outdated_data_removes_orphaned_vulnerability_data(self):
         """A vulnerability exclusive to stale package evidence is removed with its metrics."""
         obsolete_cve = "CVE-2024-00001"
@@ -353,7 +408,7 @@ class TestOutdatedFlag:
             _db.session.add(Metrics(vulnerability_id=obsolete_cve, variant_id=VARIANT_ID))
             _db.session.commit()
 
-        response = self.client.delete("/api/outdated-data")
+        response = self._delete_outdated_data()
 
         assert response.status_code == 200
         assert json.loads(response.data)["vulnerabilities_deleted"] == 1
@@ -387,7 +442,7 @@ class TestOutdatedFlag:
             )
             _db.session.commit()
 
-        response = self.client.delete("/api/outdated-data")
+        response = self._delete_outdated_data()
 
         assert response.status_code == 200
         assert json.loads(response.data)["sbom_observations_deleted"] == 1
@@ -399,7 +454,7 @@ class TestOutdatedFlag:
                 _db.select(SBOMObservation).where(SBOMObservation.vulnerability_id == active_cve)
             ).scalar_one_or_none() is not None
 
-        response = self.client.delete("/api/orphaned-vulnerabilities")
+        response = self._delete_orphaned_vulnerabilities()
 
         assert response.status_code == 200
         assert json.loads(response.data)["vulnerabilities_deleted"] == 1
@@ -449,7 +504,7 @@ class TestOutdatedFlag:
             _db.session.add(Observation(finding_id=old_finding.id, scan_id=second_scan_id))
             _db.session.commit()
 
-        response = self.client.delete("/api/outdated-data")
+        response = self._delete_outdated_data()
 
         assert response.status_code == 200
         assert json.loads(response.data)["packages_deleted"] == 0
@@ -479,7 +534,7 @@ class TestOutdatedFlag:
         assert preview.status_code == 200
         assert [scan["id"] for scan in json.loads(preview.data)["scans"]] == [str(duplicate_scan_id)]
 
-        response = self.client.delete("/api/empty-scans")
+        response = self._delete_empty_scans()
         assert response.status_code == 200
         assert json.loads(response.data) == {"scans_deleted": 1}
         with self.app.app_context():
@@ -516,7 +571,7 @@ class TestOutdatedFlag:
             str(redundant_id),
         ]
 
-        response = self.client.delete("/api/empty-scans")
+        response = self._delete_empty_scans()
         assert response.status_code == 200
         with self.app.app_context():
             assert _db.session.get(Scan, earlier_id) is None
@@ -544,7 +599,7 @@ class TestOutdatedFlag:
             "vulnerabilities": [{"id": orphaned_cve, "assessments": 1}]
         }
 
-        response = self.client.delete("/api/orphaned-vulnerabilities")
+        response = self._delete_orphaned_vulnerabilities()
         assert response.status_code == 200
         assert json.loads(response.data) == {
             "vulnerabilities_deleted": 1,
@@ -583,7 +638,7 @@ class TestOutdatedFlag:
         assert metrics_cve not in preview_ids
         assert estimate_cve not in preview_ids
 
-        response = self.client.delete("/api/orphaned-vulnerabilities")
+        response = self._delete_orphaned_vulnerabilities()
         assert response.status_code == 200
         with self.app.app_context():
             assert _db.session.get(Vulnerability, metrics_cve) is not None
@@ -629,7 +684,7 @@ class TestOutdatedFlag:
         assert len(candidates) == candidate_count
         assert all(candidate["assessments"] == 1 for candidate in candidates)
 
-        response = self.client.delete("/api/orphaned-vulnerabilities")
+        response = self._delete_orphaned_vulnerabilities()
         assert response.status_code == 200
         assert json.loads(response.data) == {
             "vulnerabilities_deleted": candidate_count,

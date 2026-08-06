@@ -10,7 +10,9 @@ Computation helpers live in sibling modules:
 
 import re
 import uuid as uuid_module
+from collections.abc import Callable
 from datetime import datetime, timezone
+from typing import cast
 
 from flask import Flask, jsonify, request as flask_request
 from flask.typing import ResponseReturnValue
@@ -63,6 +65,33 @@ from ._scan_diff import (  # noqa: F401  — re-exports
 )
 
 _STALE_CLEANUP_PREVIEW_ERROR = "Cleanup preview is no longer current. Review it again before deleting."
+
+
+def _cleanup_candidates(body: object, key: str, validator: Callable[[object], bool]) -> object | None:
+    """Return a validated cleanup candidate field, or reject malformed API input."""
+    if not isinstance(body, dict) or key not in body or not validator(body[key]):
+        return None
+    return body[key]
+
+
+def _is_string_list(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _is_outdated_candidates(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value) == {"observations", "assessments", "package_pairs"}
+        and _is_string_list(value["observations"])
+        and _is_string_list(value["assessments"])
+        and isinstance(value["package_pairs"], list)
+        and all(
+            isinstance(pair, dict)
+            and set(pair) == {"package_id", "variant_id"}
+            and all(isinstance(item, str) for item in pair.values())
+            for pair in value["package_pairs"]
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -424,13 +453,19 @@ def init_app(app: Flask) -> None:
 
         if flask_request.method == 'GET':
             return jsonify(outdated_data_preview())
+        candidate_ids = _cleanup_candidates(
+            flask_request.get_json(silent=True), "candidate_ids", _is_outdated_candidates
+        )
+        if candidate_ids is None:
+            return jsonify({"error": "candidate_ids must be a valid cleanup preview"}), 400
         try:
-            return jsonify(cleanup((flask_request.get_json(silent=True) or {}).get("candidate_ids")))
+            return jsonify(cleanup(cast(dict[str, object], candidate_ids)))
         except ValueError:
             return jsonify({"error": _STALE_CLEANUP_PREVIEW_ERROR}), 409
-        except Exception as exc:
+        except Exception:
             db.session.rollback()
-            return jsonify({"error": f"Failed to delete outdated data: {exc}"}), 500
+            app.logger.exception("Failed to delete outdated data")
+            return jsonify({"error": "Failed to delete outdated data"}), 500
 
     @app.route('/api/empty-scans', methods=['GET', 'DELETE'])
     def empty_scans() -> ResponseReturnValue:
@@ -439,14 +474,17 @@ def init_app(app: Flask) -> None:
 
         if flask_request.method == 'GET':
             return jsonify({"scans": empty_scans_preview()})
+        scan_ids = _cleanup_candidates(flask_request.get_json(silent=True), "scan_ids", _is_string_list)
+        if scan_ids is None:
+            return jsonify({"error": "scan_ids must be a list of strings"}), 400
         try:
-            body = flask_request.get_json(silent=True) or {}
-            return jsonify(delete_empty_scans(body.get("scan_ids")))
+            return jsonify(delete_empty_scans(cast(list[str], scan_ids)))
         except ValueError:
             return jsonify({"error": _STALE_CLEANUP_PREVIEW_ERROR}), 409
-        except Exception as exc:
+        except Exception:
             db.session.rollback()
-            return jsonify({"error": f"Failed to delete empty scans: {exc}"}), 500
+            app.logger.exception("Failed to delete empty scans")
+            return jsonify({"error": "Failed to delete empty scans"}), 500
 
     @app.route('/api/orphaned-vulnerabilities', methods=['GET', 'DELETE'])
     def orphaned_vulnerabilities() -> ResponseReturnValue:
@@ -458,14 +496,19 @@ def init_app(app: Flask) -> None:
 
         if flask_request.method == 'GET':
             return jsonify({"vulnerabilities": orphaned_vulnerabilities_preview()})
+        vulnerability_ids = _cleanup_candidates(
+            flask_request.get_json(silent=True), "vulnerability_ids", _is_string_list
+        )
+        if vulnerability_ids is None:
+            return jsonify({"error": "vulnerability_ids must be a list of strings"}), 400
         try:
-            body = flask_request.get_json(silent=True) or {}
-            return jsonify(delete_orphaned_vulnerabilities(body.get("vulnerability_ids")))
+            return jsonify(delete_orphaned_vulnerabilities(cast(list[str], vulnerability_ids)))
         except ValueError:
             return jsonify({"error": _STALE_CLEANUP_PREVIEW_ERROR}), 409
-        except Exception as exc:
+        except Exception:
             db.session.rollback()
-            return jsonify({"error": f"Failed to delete orphaned vulnerabilities: {exc}"}), 500
+            app.logger.exception("Failed to delete orphaned vulnerabilities")
+            return jsonify({"error": "Failed to delete orphaned vulnerabilities"}), 500
 
     @app.route('/api/scans/<scan_id>/diff')
     def get_scan_diff(scan_id: str) -> ResponseReturnValue:
