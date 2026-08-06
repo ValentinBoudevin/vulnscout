@@ -87,6 +87,9 @@ Scan & output commands:
     --export-context                 Export AI assessment context to /scan/outputs/context-export.json
     --import-context <path>          Import AI assessment context from a JSON file (overwrites matching project/variant)
   --delete-scan <id>                Delete a past scan by its ID
+    --delete-outdated                 Permanently delete outdated packages and assessments
+    --delete-empty-scans              Permanently delete scans with no recorded changes
+    --delete-orphaned-vulnerabilities Delete CVEs absent from every project and variant
 
 Data retrieval commands:
   --list-projects                 List all projects and their variants
@@ -382,6 +385,18 @@ parse_and_run() {
                 ensure_running
                 exec_container --delete-scan "$2"
                 shift 2 ;;
+            delete-outdated|--delete-outdated)
+                ensure_running
+                exec_container --delete-outdated
+                shift ;;
+            delete-empty-scans|--delete-empty-scans)
+                ensure_running
+                exec_container --delete-empty-scans
+                shift ;;
+            delete-orphaned-vulnerabilities|--delete-orphaned-vulnerabilities)
+                ensure_running
+                exec_container --delete-orphaned-vulnerabilities
+                shift ;;
             serve|--serve)
                 SERVE_REQUESTED=true; shift ;;
             report|--report)
