@@ -14,6 +14,18 @@ type PostAssessment = {
     variant_ids?: string[]
 }
 
+// Statuses that can be created through this editor (must match the <option>
+// values rendered in the Status <select>).
+const CREATABLE_STATUSES = ["under_investigation", "affected", "fixed", "not_affected"] as const;
+
+// Callers (MultiEditBar uniformStatus, VulnModal derived default) may pass a
+// legacy/unsupported status such as "false_positive". Normalize it to an
+// allowed creation status so it can never be re-submitted through the hidden
+// option.
+function normalizeCreatableStatus (status: string): string {
+    return (CREATABLE_STATUSES as readonly string[]).includes(status) ? status : "under_investigation";
+}
+
 type Props = {
     onAddAssessment: (data: PostAssessment) => void;
     progressBar?: number;
@@ -58,7 +70,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         return [];
     }, [defaultSelectedPackages, currentPackages]);
 
-    const [status, setStatus] = useState(defaultStatus);
+    const [status, setStatus] = useState(normalizeCreatableStatus(defaultStatus));
     const [justification, setJustification] = useState("none");
     const [statusNotes, setStatusNotes] = useState("");
     const [workaround, setWorkaround] = useState("");
@@ -183,13 +195,13 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
 
     // Update status when defaultStatus prop changes
     useEffect(() => {
-        setStatus(defaultStatus);
+        setStatus(normalizeCreatableStatus(defaultStatus));
     }, [defaultStatus]);
 
     // Check if fields have changes
     useEffect(() => {
         const hasChanges = (
-            status !== defaultStatus ||
+            status !== normalizeCreatableStatus(defaultStatus) ||
             justification !== "none" ||
             statusNotes !== "" ||
             workaround !== "" ||
@@ -237,7 +249,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
     }
 
     const clearInputs = useCallback(() => {
-        setStatus(defaultStatus);
+        setStatus(normalizeCreatableStatus(defaultStatus));
         setJustification("none");
         setStatusNotes("");
         setWorkaround("");

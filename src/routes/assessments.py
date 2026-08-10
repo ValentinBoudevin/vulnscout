@@ -1296,7 +1296,7 @@ def init_app(app: Flask) -> None:
         if "status" in payload_data and isinstance(payload_data["status"], str):
             if not mem_assess.set_status(payload_data["status"]):
                 return {"error": "Invalid status"}, 400
-            if mem_assess.status not in ["not_affected", "false_positive"]:
+            if mem_assess.status not in ["not_affected"]:
                 mem_assess.justification = ""
                 mem_assess.impact_statement = ""
 

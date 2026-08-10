@@ -282,7 +282,7 @@ describe('EditAssessment Component', () => {
         expect(screen.getByText('Edit Assessment')).toBeInTheDocument();
     });
 
-    test('saves assessment for false_positive status without changing status', async () => {
+    test('normalizes a legacy false_positive assessment to not_affected on save', async () => {
         const fpAssessment: Assessment = {
             ...mockAssessment,
             status: 'false_positive'
@@ -300,14 +300,14 @@ describe('EditAssessment Component', () => {
         const saveButton = screen.getByText('Save Changes');
         await user.click(saveButton);
 
+        // false_positive was removed as a distinct status; it is normalized to
+        // not_affected, for which the impact statement is preserved.
         expect(mockOnSave).toHaveBeenCalledWith({
             id: 'test-assessment-id',
-            status: 'false_positive',
-            justification: undefined,
+            status: 'not_affected',
+            justification: 'test justification',
             status_notes: 'test notes',
             workaround: 'test workaround',
-            // The impact statement (reasoning) must be preserved for false_positive,
-            // not wiped, since the impact textarea is shown and editable for it.
             impact_statement: 'test impact',
             packages: [],
             variant_ids: undefined,
@@ -315,7 +315,7 @@ describe('EditAssessment Component', () => {
         });
     });
 
-    test('preserves an edited impact statement for false_positive status', async () => {
+    test('preserves an edited impact statement for a normalized false_positive assessment', async () => {
         const fpAssessment: Assessment = {
             ...mockAssessment,
             status: 'false_positive',
@@ -338,9 +338,8 @@ describe('EditAssessment Component', () => {
         await user.click(screen.getByText('Save Changes'));
 
         expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
-            status: 'false_positive',
+            status: 'not_affected',
             impact_statement: 'updated reason',
-            justification: undefined,
         }));
     });
 
@@ -471,7 +470,7 @@ describe('EditAssessment Component', () => {
         });
     });
 
-    test('changes status to false_positive and shows impact field', async () => {
+    test('changes status to not_affected and shows impact field', async () => {
         render(
             <EditAssessment
                 assessment={mockAssessment}
@@ -483,7 +482,7 @@ describe('EditAssessment Component', () => {
         const user = userEvent.setup();
         const statusSelect = screen.getByDisplayValue(/Affected \/ exploitable/i);
 
-        await user.selectOptions(statusSelect, 'false_positive');
+        await user.selectOptions(statusSelect, 'not_affected');
 
         // Impact field should appear
         await waitFor(() => {

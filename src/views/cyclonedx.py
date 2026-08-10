@@ -44,7 +44,6 @@ class CycloneDx:
         "resolved_with_pedigree": ImpactAnalysisState.RESOLVED_WITH_PEDIGREE,
         "exploitable": ImpactAnalysisState.EXPLOITABLE,
         "in_triage": ImpactAnalysisState.IN_TRIAGE,
-        "false_positive": ImpactAnalysisState.FALSE_POSITIVE,
         "not_affected": ImpactAnalysisState.NOT_AFFECTED,
     }
 

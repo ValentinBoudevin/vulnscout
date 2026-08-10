@@ -109,7 +109,6 @@ function statusBadgeClass(simplified: string): string {
         case "Exploitable":        return "bg-red-800 text-red-100";
         case "Fixed":              return "bg-teal-700 text-teal-100";
         case "Pending Assessment": return "bg-amber-700 text-amber-100";
-        case "False Positive":     return "bg-purple-700 text-purple-100";
         default:                   return "bg-slate-600 text-zinc-200";
     }
 }

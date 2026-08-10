@@ -837,7 +837,7 @@ def test_post_assessments_batch_missing_variant_id_returns_error(client):
 # ---------------------------------------------------------------------------
 
 def test_patch_assessment_clears_justification_and_impact(client):
-    """PATCH to a non-not_affected/false_positive status clears justification (line 271)."""
+    """PATCH to a non-not_affected status clears justification (line 271)."""
     # Create an assessment with not_affected + justification
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         "packages": ["test@1.0.0"],

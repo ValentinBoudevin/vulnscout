@@ -36,6 +36,25 @@ describe('StatusEditor', () => {
         expect(screen.getByRole('button', { name: 'Add assessment' })).toBeInTheDocument();
     });
 
+    test('normalizes an unsupported defaultStatus (false_positive) to under_investigation and never submits it', async () => {
+        const user = userEvent.setup();
+        const onAddAssessment = jest.fn();
+
+        render(<StatusEditor {...defaultProps} onAddAssessment={onAddAssessment} defaultStatus="false_positive" />);
+
+        // The hidden false_positive option must not leak into the control.
+        const statusSelect = screen.getByRole('combobox');
+        expect(statusSelect).toHaveValue('under_investigation');
+
+        // Submitting without touching the status must post the normalized status.
+        const addButton = screen.getByRole('button', { name: 'Add assessment' });
+        await user.click(addButton);
+
+        expect(onAddAssessment).toHaveBeenCalledTimes(1);
+        expect(onAddAssessment.mock.calls[0][0].status).toBe('under_investigation');
+        expect(onAddAssessment.mock.calls[0][0].status).not.toBe('false_positive');
+    });
+
     test('should render progress bar when progressBar prop is provided', () => {
         render(<StatusEditor {...defaultProps} progressBar={0.5} />);
 

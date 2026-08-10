@@ -183,7 +183,6 @@ describe('SBOM match condition', () => {
         ['resolved', 'fixed'],
         ['resolved_with_pedigree', 'fixed'],
         ['not_affected', 'ignored'],
-        ['false_positive', 'ignored'],
         ['affected', 'affected'],
         ['exploitable', 'affected'],
         ['under_investigation', 'pending'],

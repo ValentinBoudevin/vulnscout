@@ -246,26 +246,28 @@ def test_export_import_assessment(assessment_not_affected):
 
 def test_specific_handling_false_positive():
     """
-    GIVEN a vulnerability with false_positive status
-    WHEN converting to OpenVEX
-    THEN convert to the equivalent 'not_affected' + 'component_not_present' status
+    GIVEN a legacy/imported false_positive status
+    WHEN setting it on an assessment
+    THEN it is absorbed into not_affected and is never emitted as false_positive
     """
     from_cdx = Assessment.new_dto("CVE-000", [])
-    from_cdx.set_status("false_positive")
+    # false_positive was removed as a distinct status; it is absorbed on import.
+    assert from_cdx.set_status("false_positive") is True
+    assert from_cdx.status == "not_affected"
     from_cdx.set_justification("code_not_present")
 
     assert {
         "status": "not_affected",
-        "justification": "component_not_present",
+        "justification": "vulnerable_code_not_present",
     }.items() <= from_cdx.to_openvex_dict().items()
 
     from_openvex = Assessment.new_dto("CVE-000", [])
     from_openvex.set_status("not_affected")
     from_openvex.set_justification("component_not_present")
 
-    assert {
-        "state": "false_positive",
-    }.items() <= from_openvex.to_cdx_vex_dict()['analysis'].items()
+    # not_affected + component_not_present must no longer be exported as
+    # false_positive in CycloneDX VEX.
+    assert from_openvex.to_cdx_vex_dict()['analysis']['state'] == "not_affected"
 
 
 def test_merge_assessments(assessment_initial, assessment_active, assessment_fixed, assessment_not_affected):
@@ -339,7 +341,6 @@ def test_status_to_simplified_mapping():
 
     assert STATUS_TO_SIMPLIFIED["under_investigation"] == "Pending Assessment"
     assert STATUS_TO_SIMPLIFIED["in_triage"] == "Pending Assessment"
-    assert STATUS_TO_SIMPLIFIED["false_positive"] == "Not affected"
     assert STATUS_TO_SIMPLIFIED["not_affected"] == "Not affected"
     assert STATUS_TO_SIMPLIFIED["exploitable"] == "Exploitable"
     assert STATUS_TO_SIMPLIFIED["affected"] == "Exploitable"

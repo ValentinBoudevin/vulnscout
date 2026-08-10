@@ -727,7 +727,7 @@ type VariantScopedSnapshot = {
         const normalise = (raw: unknown): Assessment | null => {
             const a = asAssessment(raw);
             if (Array.isArray(a) || typeof a !== 'object') return null;
-            const isRelevant = a.status === 'not_affected' || a.status === 'false_positive';
+            const isRelevant = a.status === 'not_affected';
             if (!isRelevant) {
                 a.justification = undefined;
                 a.impact_statement = undefined;

@@ -100,7 +100,7 @@ def evaluate_condition(
                 last_assessment = assessment
         if last_assessment:
             data["fixed"] = last_assessment.status in ["fixed", "resolved", "resolved_with_pedigree"]
-            data["ignored"] = last_assessment.status in ["not_affected", "false_positive"]
+            data["ignored"] = last_assessment.status in ["not_affected"]
             data["affected"] = last_assessment.status in ["affected", "exploitable"]
             data["pending"] = last_assessment.status in ["under_investigation", "in_triage"]
             data["new"] = False

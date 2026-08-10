@@ -314,7 +314,7 @@ class Vulnerabilities {
                     effort_min: vulnerability.effort.optimistic.total_seconds || false,
                     effort_max: vulnerability.effort.pessimistic.total_seconds || false,
                     fixed: lastAssessment ? ['fixed', 'resolved', 'resolved_with_pedigree'].includes(lastAssessment.status) : false,
-                    ignored: lastAssessment ? ['not_affected', 'false_positive'].includes(lastAssessment.status) : false,
+                    ignored: lastAssessment ? ['not_affected'].includes(lastAssessment.status) : false,
                     affected: lastAssessment ? ['affected', 'exploitable'].includes(lastAssessment.status) : false,
                     pending: lastAssessment ? ['under_investigation', 'in_triage'].includes(lastAssessment.status) : true,
                     new: !lastAssessment,

@@ -280,7 +280,6 @@ describe('CopyAssessmentsReviewModal', () => {
 
     test.each([
         ['Pending Assessment', 'bg-amber-700'],
-        ['False Positive',     'bg-purple-700'],
         ['Unknown',            'bg-slate-600'],
     ])('status badge renders correct colour for "%s"', (simplified) => {
         const groups: CopyAssessmentsPreviewGroup[] = [{

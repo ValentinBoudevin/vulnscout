@@ -22,11 +22,10 @@ from .variant import Variant
 # ---------------------------------------------------------------------------
 
 VALID_STATUS_OPENVEX = ["under_investigation", "not_affected", "affected", "fixed"]
-VALID_STATUS_CDX_VEX = ["in_triage", "false_positive", "not_affected", "exploitable",
+VALID_STATUS_CDX_VEX = ["in_triage", "not_affected", "exploitable",
                         "resolved", "resolved_with_pedigree"]
 STATUS_CDX_VEX_TO_OPENVEX = {
     "in_triage": "under_investigation",
-    "false_positive": "not_affected",
     "not_affected": "not_affected",
     "exploitable": "affected",
     "resolved": "fixed",
@@ -42,7 +41,6 @@ STATUS_OPENVEX_TO_CDX_VEX = {
 STATUS_TO_SIMPLIFIED = {
     "under_investigation": "Pending Assessment",
     "in_triage": "Pending Assessment",
-    "false_positive": "Not affected",
     "not_affected": "Not affected",
     "exploitable": "Exploitable",
     "affected": "Exploitable",
@@ -243,8 +241,14 @@ class Assessment(Base):
     def set_status(self, status: str) -> bool:
         """Validate and set the assessment status (OpenVEX or CDX VEX).
 
+        ``false_positive`` was removed as a distinct status; any incoming value
+        (for example from an imported CycloneDX VEX document) is absorbed into
+        ``not_affected`` so it is never stored as a first-class status.
+
         Return ``True`` if the status was accepted, ``False`` otherwise.
         """
+        if status == "false_positive":
+            status = "not_affected"
         if status in VALID_STATUS_OPENVEX or status in VALID_STATUS_CDX_VEX:
             self.status = status
             return True
@@ -394,9 +398,6 @@ class Assessment(Base):
         if self.justification:
             openvex_justif = self.get_justification_openvex()
 
-        if self.status == "false_positive" and self.justification not in VALID_JUSTIFICATION_OPENVEX:
-            openvex_justif = "component_not_present"
-
         if (openvex_status == "not_affected"
            and openvex_justif not in VALID_JUSTIFICATION_OPENVEX
            and not self.impact_statement):
@@ -435,10 +436,6 @@ class Assessment(Base):
         cdx_justif: Optional[str] = ""
         if self.justification:
             cdx_justif = self.get_justification_cdx_vex()
-
-        if self.status == "not_affected" and self.justification == "component_not_present":
-            cdx_state = "false_positive"
-            cdx_justif = ""
 
         cdx_response = list(self.responses or [])
         if self.workaround in RESPONSES_CDX_VEX:

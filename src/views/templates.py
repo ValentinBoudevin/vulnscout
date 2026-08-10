@@ -466,7 +466,7 @@ class TemplatesExtensions:
         )
         jinjaEnv.filters["status_ignored"] = lambda value: TemplatesExtensions.filter_status(
             value,
-            ["not_affected", "false_positive"]
+            ["not_affected"]
         )
         jinjaEnv.filters["status_affected"] = lambda value: TemplatesExtensions.filter_status(
             value,
@@ -479,7 +479,7 @@ class TemplatesExtensions:
         )
         jinjaEnv.filters["status_inactive"] = lambda value: TemplatesExtensions.filter_status(
             value,
-            ["not_affected", "false_positive", "fixed", "resolved", "resolved_with_pedigree"]
+            ["not_affected", "fixed", "resolved", "resolved_with_pedigree"]
         )
         jinjaEnv.filters["severity"] = TemplatesExtensions.filter_severity
         jinjaEnv.filters["as_list"] = TemplatesExtensions.filter_as_list

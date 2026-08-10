@@ -47,7 +47,12 @@ function EditAssessment({
     variantFindingsMap,
     findingsLoading = false
 }: Readonly<Props>) {
-    const isImpactStatus = assessment.status === 'not_affected' || assessment.status === 'false_positive';
+    // `false_positive` was removed as a distinct status; any legacy or imported
+    // value is treated as `not_affected` throughout the editor.
+    const initialStatus = assessment.status === 'false_positive'
+        ? 'not_affected'
+        : (assessment.status || "under_investigation");
+    const isImpactStatus = initialStatus === 'not_affected';
     const hasSelectedOutdatedFinding = useMemo(() => {
         const selectedPackages = new Set(defaultSelectedPackages ?? []);
         const variantIds = defaultSelectedVariantIds ?? Object.keys(variantFindingsMap ?? {});
@@ -57,7 +62,7 @@ function EditAssessment({
             )
         );
     }, [defaultSelectedPackages, defaultSelectedVariantIds, variantFindingsMap]);
-    const [status, setStatus] = useState(assessment.status || "under_investigation");
+    const [status, setStatus] = useState(initialStatus);
     const [justification, setJustification] = useState(assessment.justification || "none");
     // For non-impact statuses (fixed, affected, …) Yocto stores its notes in impact_statement.
     // Pre-fill status_notes with that value so users see it in the right field.
@@ -201,7 +206,7 @@ function EditAssessment({
     useEffect(() => {
         const initialStatusNotes = assessment.status_notes || (!isImpactStatus ? (assessment.impact_statement || "") : "");
         const hasChanges = (
-            status !== assessment.status ||
+            status !== initialStatus ||
             justification !== (assessment.justification || "none") ||
             statusNotes !== initialStatusNotes ||
             workaround !== (assessment.workaround || "") ||
@@ -209,7 +214,7 @@ function EditAssessment({
             !keepCurrentTimestamp
         );
         onFieldsChange?.(hasChanges);
-    }, [status, justification, statusNotes, workaround, impact, keepCurrentTimestamp, onFieldsChange, assessment, isImpactStatus]);
+    }, [status, justification, statusNotes, workaround, impact, keepCurrentTimestamp, onFieldsChange, assessment, isImpactStatus, initialStatus]);
 
     // Auto-select single variant when availableVariants load asynchronously (e.g. Edit from Actions column)
     useEffect(() => {
@@ -245,10 +250,10 @@ function EditAssessment({
             return;
         }
 
-        // Justification only applies to not_affected; the impact statement
-        // applies to both not_affected and false_positive (mirrors StatusEditor).
+        // Justification and the impact statement only apply to not_affected
+        // (mirrors StatusEditor).
         const includeJustification = status == "not_affected";
-        const includeImpact = status == "not_affected" || status == "false_positive";
+        const includeImpact = status == "not_affected";
 
         onSaveAssessment({
             id: assessment.id,
@@ -265,7 +270,7 @@ function EditAssessment({
     }
 
     const resetToOriginal = useCallback(() => {
-        setStatus(assessment.status || "under_investigation");
+        setStatus(initialStatus);
         setJustification(assessment.justification || "none");
         setStatusNotes(assessment.status_notes || (!isImpactStatus ? (assessment.impact_statement || "") : ""));
         setWorkaround(assessment.workaround || "");
@@ -274,7 +279,7 @@ function EditAssessment({
         setKeepCurrentTimestamp(true);
         setSelectedVariantIds(defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : []));
         setSelectedPackages(defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : []));
-    }, [assessment, isImpactStatus, defaultSelectedVariantIds, defaultSelectedPackages, availableVariants, availablePackages, hasSelectedOutdatedFinding]);
+    }, [assessment, isImpactStatus, defaultSelectedVariantIds, defaultSelectedPackages, availableVariants, availablePackages, hasSelectedOutdatedFinding, initialStatus]);
 
     useEffect(() => {
         if (shouldClearFields) {
@@ -307,7 +312,6 @@ function EditAssessment({
                     <option value="affected">Affected / exploitable</option>
                     <option value="fixed">Fixed / patched</option>
                     <option value="not_affected">Not applicable</option>
-                    <option value="false_positive">False positive</option>
                 </select>
                 {status == "not_affected" && <>
                     Justification:
@@ -442,7 +446,7 @@ function EditAssessment({
                 </button>
             </div>
 
-            {(status === 'not_affected' || status === 'false_positive') && (
+            {status === 'not_affected' && (
                 <><textarea
                         value={impact}
                         onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setImpact(event.target.value)}

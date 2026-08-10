@@ -196,7 +196,7 @@ When exporting, users can add filters to export only some vulnerabilities. To by
 | `in_triage`, `under_investigation` | Vulnerability found but presence not confirmed. Default status. | `status_pending`, `status_active` |
 | `affected`, `exploitable` | Vulnerability confirmed and affecting the product. | `status_affected`, `status_active` |
 | `fixed`, `resolved`, `resolved_with_pedigree` | Vulnerability is fixed and no longer exploitable. | `status_fixed`, `status_inactive` |
-| `not_affected`, `false_positive` | Vulnerability is a false positive or not affecting us. | `status_ignored`, `status_inactive` |
+| `not_affected` | Vulnerability is a false positive or not affecting us. | `status_ignored`, `status_inactive` |
 
 #### Possible values for `justification`
 
@@ -245,7 +245,7 @@ In addition to [Jinja built-in filters](https://jinja.palletsprojects.com/en/3.1
 | `status_pending` | Shorthand for `in_triage` + `under_investigation`. |
 | `status_affected` | Shorthand for `affected` + `exploitable`. |
 | `status_fixed` | Shorthand for `fixed` + `resolved` + `resolved_with_pedigree`. |
-| `status_ignored` | Shorthand for `not_affected` + `false_positive`. |
+| `status_ignored` | Shorthand for `not_affected`. |
 | `status_active` | `status_pending` + `status_affected`. |
 | `status_inactive` | `status_fixed` + `status_ignored`. |
 

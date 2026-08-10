@@ -54,7 +54,7 @@ describe('asAssessment validation', () => {
   });
 
   test('known statuses map simplified_status', () => {
-    const statuses = ['under_investigation','in_triage','false_positive','not_affected','exploitable','affected','resolved','fixed','resolved_with_pedigree'];
+    const statuses = ['under_investigation','in_triage','not_affected','exploitable','affected','resolved','fixed','resolved_with_pedigree'];
     statuses.forEach(st => {
       const data = { id: `k-${st}`, vuln_id: 'CVE-Z', status: st, timestamp: '2024-03-01T00:00:00', packages: [], responses: [] };
       const assessed = asAssessment(data as any) as any;
