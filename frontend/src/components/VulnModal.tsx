@@ -394,7 +394,6 @@ type VariantScopedSnapshot = {
     const [refreshing, setRefreshing] = useState(false);
     const [refreshError, setRefreshError] = useState<string | null>(null);
     const [refreshedList, setRefreshedList] = useState<string[]>([]);
-    const [nvdMode, setNvdMode] = useState<"local" | "api">("local");
 
     const modalRef = useRef<HTMLDivElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -510,7 +509,7 @@ type VariantScopedSnapshot = {
                 }
             } else {
                 const [nvdResult, epssResult] = await Promise.allSettled([
-                    NvdRefreshHandler.triggerSingleRefresh(vuln.id, nvdMode),
+                    NvdRefreshHandler.triggerSingleRefresh(vuln.id, "api"),
                     EpssRefreshHandler.triggerSingleRefresh(vuln.id),
                 ]);
 
@@ -525,9 +524,7 @@ type VariantScopedSnapshot = {
                     } else if (nvdValue?.kind === "error" && nvdValue.code === "unauthorized") {
                         errors.push("NVD API key rejected. Check your key in Settings.");
                     } else {
-                        errors.push(nvdMode === "api"
-                            ? "NVD API unavailable. Try again or switch to Local mode."
-                            : "NVD data unavailable. Try again or run an sbom-cve-check scan.");
+                        errors.push("NVD API unavailable. Please try again later.");
                     }
                 }
                 if (epssResult.status === "rejected" || epssResult.value === null) {
@@ -570,7 +567,7 @@ type VariantScopedSnapshot = {
         } finally {
             setRefreshing(false);
         }
-    }, [vuln, patchVuln, nvdMode]);
+    }, [vuln, patchVuln]);
 
     const handleEditAssessment = (assessmentId: string, group: AssessmentGroup) => {
         setEditingAssessmentId(assessmentId);
@@ -1444,35 +1441,6 @@ type VariantScopedSnapshot = {
 
                             {!readOnly && (
                                 <div className="flex items-center gap-2 flex-wrap">
-                                    {!isGhsaVuln && (
-                                        <span className="flex items-center gap-1.5 text-xs text-gray-400">
-                                            NVD source:
-                                            <label className="flex items-center gap-1 cursor-pointer">
-                                                <input
-                                                    type="radio"
-                                                    name={`nvd-mode-${vuln.id}`}
-                                                    value="local"
-                                                    checked={nvdMode === "local"}
-                                                    onChange={() => setNvdMode("local")}
-                                                    disabled={refreshing}
-                                                    className="accent-cyan-500"
-                                                />
-                                                <span className="text-gray-300">Git repository</span>
-                                            </label>
-                                            <label className="flex items-center gap-1 cursor-pointer">
-                                                <input
-                                                    type="radio"
-                                                    name={`nvd-mode-${vuln.id}`}
-                                                    value="api"
-                                                    checked={nvdMode === "api"}
-                                                    onChange={() => setNvdMode("api")}
-                                                    disabled={refreshing}
-                                                    className="accent-cyan-500"
-                                                />
-                                                <span className="text-gray-300">API</span>
-                                            </label>
-                                        </span>
-                                    )}
                                     <button
                                         onClick={handleRefresh}
                                         disabled={refreshing}
