@@ -209,14 +209,6 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             }
             return;
         }
-        if (status == "false_positive" && impact == '') {
-            if (triggerBanner) {
-                triggerBanner("You must provide an impact statement for false positive status", "error");
-            } else {
-                internalTriggerBanner("You must provide an impact statement for false positive status", "error");
-            }
-            return;
-        }
         if (variants && variants.length > 0 && selectedVariantIds.length === 0) {
             if (triggerBanner) {
                 triggerBanner("You must select at least one variant", "error");
@@ -238,7 +230,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             justification: status == "not_affected" ? justification : undefined,
             status_notes: statusNotes,
             workaround,
-            impact_statement: (status == "not_affected" || status == "false_positive") ? impact : undefined,
+            impact_statement: status == "not_affected" ? impact : undefined,
             variant_ids: selectedVariantIds.length > 0 ? selectedVariantIds : undefined,
             packages: selectedPackages.length > 0 ? selectedPackages : (availablePackages ?? [])
         });
@@ -286,7 +278,6 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 <option value="affected">Affected / exploitable</option>
                 <option value="fixed">Fixed / patched</option>
                 <option value="not_affected">Not applicable</option>
-                <option value="false_positive">False positive</option>
             </select>
             {status == "not_affected" && <>
                 Justification:
@@ -394,7 +385,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 </div>
             </div>
         )}
-        {(status == "not_affected" || status == "false_positive") && <>
+        {status == "not_affected" && <>
             <textarea
                 value={impact}
                 onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setImpact(event.target.value)}

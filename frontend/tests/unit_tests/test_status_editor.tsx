@@ -244,50 +244,6 @@ describe('StatusEditor', () => {
         });
     });
 
-    test('should show impact input when status is false_positive', async () => {
-        const user = userEvent.setup();
-        render(<StatusEditor {...defaultProps} />);
-
-        const statusSelect = screen.getByRole('combobox');
-
-        // Test false_positive
-        await user.selectOptions(statusSelect, 'false_positive');
-        expect(screen.getByPlaceholderText('why this vulnerability is not exploitable ?')).toBeInTheDocument();
-    });
-
-    test('should show error when false_positive has no impact and external triggerBanner', async () => {
-        const triggerBanner = jest.fn();
-        const user = userEvent.setup();
-        render(<StatusEditor {...defaultProps} triggerBanner={triggerBanner} />);
-
-        const statusSelect = screen.getByRole('combobox');
-        await user.selectOptions(statusSelect, 'false_positive');
-
-        const addButton = screen.getByRole('button', { name: 'Add assessment' });
-        await user.click(addButton);
-
-        expect(triggerBanner).toHaveBeenCalledWith(
-            'You must provide an impact statement for false positive status',
-            'error'
-        );
-        expect(defaultProps.onAddAssessment).not.toHaveBeenCalled();
-    });
-
-    test('should show internal banner when false_positive has no impact', async () => {
-        const user = userEvent.setup();
-        render(<StatusEditor {...defaultProps} />);
-
-        const statusSelect = screen.getByRole('combobox');
-        await user.selectOptions(statusSelect, 'false_positive');
-
-        const addButton = screen.getByRole('button', { name: 'Add assessment' });
-        await user.click(addButton);
-
-        expect(screen.getByTestId('message-banner')).toBeInTheDocument();
-        expect(screen.getByText('You must provide an impact statement for false positive status')).toBeInTheDocument();
-        expect(defaultProps.onAddAssessment).not.toHaveBeenCalled();
-    });
-
     test('should render variant checkboxes when variants prop is provided', () => {
         const variants = [
             { id: 'v1', name: 'default', project_id: 'p1' },
