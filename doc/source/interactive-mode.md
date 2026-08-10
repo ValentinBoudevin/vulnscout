@@ -128,7 +128,7 @@ Each row has a checkbox on the left. Selecting one or more rows reveals the **mu
 
 The vulnerabilities table also exposes a **Refresh Vulnerability Data** dropdown. Unlike the scanners on the Scan History page — which discover *which* CVEs affect your packages — these refreshers **enrich the vulnerabilities you already have** with up-to-date metadata pulled directly from upstream databases. The refresh operates on the vulnerabilities in the current scope.
 
-The dropdown defaults to **Complete refresh**, which updates every available source for the current scope. Choose **Custom refresh** to select the sources to update. Each refresh runs in the background; a progress banner appears below the toolbar with a live counter, and a per-source **Cancel** button lets you stop a run in progress. Because every source runs independently, several refreshes can be active at once.
+The dropdown defaults to **Complete refresh**, which updates every available source for the current scope. Choose **Custom refresh** to select the sources to update. Each refresh is added to the **Operation queue** and runs in the background; a progress banner appears below the toolbar with a live counter, and a per-source **Cancel** button lets you stop a run in progress. Because every source runs independently, several refreshes can be active at once.
 
 The available sources are:
 
@@ -226,6 +226,8 @@ The **Run Scans** button in the top-right corner of the Scan History page opens 
 - **Variants** — checkboxes for the available variants. When a specific variant is selected in the project scope, only that variant appears here. When viewing a project, all variants within the project are listed. "Select all" and "Select none" shortcuts help when managing many variants.
 
 The bottom of the menu shows a summary button ("Run N scans on M variants") that launches the selected scans. Each scan runs independently and displays a per-variant progress panel below the toolbar, showing real-time logs, a progress bar, and the current step. Grype scans are queued and run one at a time; NVD and OSV scans can run in parallel.
+
+Every scan and vulnerability-data refresh is also tracked in the **Operation queue** in the navigation bar. A counter shows how many operations have finished out of the total tracked; clicking it opens the Operation queue window, where each running or finished operation has its own progress panel. The window can be closed at any time without interrupting the operations, which keep running in the background.
 
 ### Source Visibility Toggles
 

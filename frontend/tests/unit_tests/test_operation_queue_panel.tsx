@@ -3,10 +3,10 @@ import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 import { faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 
-import ScanProgressPanel from '../../src/components/ScanProgressPanel';
+import OperationQueuePanel from '../../src/components/OperationQueuePanel';
 import type { ScanEntryState } from '../../src/handlers/scanStateManager';
 
-describe('ScanProgressPanel', () => {
+describe('OperationQueuePanel', () => {
     const colors = {
         border: 'border-cyan-500/60',
         headerBg: 'bg-cyan-900/40',
@@ -30,7 +30,7 @@ describe('ScanProgressPanel', () => {
 
     it('keeps a scan queued until progress content arrives', async () => {
         const { rerender } = render(
-            <ScanProgressPanel
+            <OperationQueuePanel
                 entry={makeEntry('queued', { progress: 'Queued', logs: ['Waiting for previous scan to finish…'] })}
                 label="Grype Scan"
                 icon={faCircleInfo}
@@ -45,7 +45,7 @@ describe('ScanProgressPanel', () => {
         expect(screen.queryByRole('button', { name: /close/i })).not.toBeInTheDocument();
 
         rerender(
-            <ScanProgressPanel
+            <OperationQueuePanel
                 entry={makeEntry('running', { progress: 'starting', total: 0, doneCount: 0 })}
                 label="Grype Scan"
                 icon={faCircleInfo}
@@ -58,7 +58,7 @@ describe('ScanProgressPanel', () => {
             .toHaveAttribute('aria-expanded', 'false');
 
         rerender(
-            <ScanProgressPanel
+            <OperationQueuePanel
                 entry={makeEntry('running', { progress: '1 / 4', logs: ['Scanning package metadata'] })}
                 label="Grype Scan"
                 icon={faCircleInfo}
@@ -74,7 +74,7 @@ describe('ScanProgressPanel', () => {
 
     it('shows the queued state without a dismiss button', () => {
         render(
-            <ScanProgressPanel
+            <OperationQueuePanel
                 entry={makeEntry('queued', { progress: 'Queued', logs: ['Waiting for previous scan to finish…'] })}
                 label="Grype Scan"
                 icon={faCircleInfo}
@@ -90,7 +90,7 @@ describe('ScanProgressPanel', () => {
 
     it('shows the position for a multi-variant scan', () => {
         render(
-            <ScanProgressPanel
+            <OperationQueuePanel
                 entry={makeEntry('running', {
                     variantName: 'hyper-v',
                     variantPosition: 2,
@@ -108,7 +108,7 @@ describe('ScanProgressPanel', () => {
 
     it('omits the position for a single-variant scan', () => {
         render(
-            <ScanProgressPanel
+            <OperationQueuePanel
                 entry={makeEntry('running', { variantPosition: 1, variantCount: 1 })}
                 label="NVD Scan"
                 icon={faCircleInfo}
@@ -126,7 +126,7 @@ describe('ScanProgressPanel', () => {
         const onDismiss = jest.fn();
 
         const { rerender } = render(
-            <ScanProgressPanel
+            <OperationQueuePanel
                 entry={makeEntry('running', {
                     progress: '2 / 4',
                         logs: ['[ERROR] scanning', '✓ finished step'],
@@ -144,7 +144,7 @@ describe('ScanProgressPanel', () => {
         expect(screen.getByText('✓ finished step')).toHaveClass('text-green-400', 'font-semibold');
 
         rerender(
-            <ScanProgressPanel
+            <OperationQueuePanel
                 entry={makeEntry('done', {
                     progress: '4 / 4',
                     logs: ['✓ completed'],
@@ -169,7 +169,7 @@ describe('ScanProgressPanel', () => {
     it('renders zero-total completion at 100% and clamps excessive progress', async () => {
         const user = userEvent.setup();
         const { container, rerender } = render(
-            <ScanProgressPanel
+            <OperationQueuePanel
                 entry={makeEntry('done', { total: 0, doneCount: 0 })}
                 label="NVD Scan"
                 icon={faCircleInfo}
@@ -181,7 +181,7 @@ describe('ScanProgressPanel', () => {
         expect(container.querySelector('.bg-green-500')).toHaveStyle({ width: '100%' });
 
         rerender(
-            <ScanProgressPanel
+            <OperationQueuePanel
                 entry={makeEntry('running', { total: 2, doneCount: 3, logs: ['Finishing'] })}
                 label="NVD Scan"
                 icon={faCircleInfo}
@@ -194,7 +194,7 @@ describe('ScanProgressPanel', () => {
 
     it('labels cancellation without a success indicator', () => {
         render(
-            <ScanProgressPanel
+            <OperationQueuePanel
                 entry={makeEntry('cancelled', { progress: 'Cancelled', doneCount: 1, total: 4 })}
                 label="Vulnerability Data Refresh"
                 icon={faCircleInfo}

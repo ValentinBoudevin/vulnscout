@@ -1,5 +1,5 @@
 /**
- * ScanProgressPanel — reusable per-variant scan progress / log panel.
+ * OperationQueuePanel — reusable per-variant operation progress / log panel.
  *
  * Renders a collapsible card with:
  *  - coloured header showing scan type + variant name
@@ -31,7 +31,7 @@ type Props = {
     onDismiss: () => void;
 };
 
-export default function ScanProgressPanel({ entry, label, icon, colors, onDismiss }: Props) {
+export default function OperationQueuePanel({ entry, label, icon, colors, onDismiss }: Props) {
     const { status, variantName, variantPosition, variantCount, progress, logs, total, doneCount } = entry;
     const pct = status === "done" ? 100 : total > 0 ? Math.max(0, Math.min(100, Math.round((doneCount / total) * 100))) : 0;
     const hasProgressContent = logs.length > 0 || total > 0 || doneCount > 0;
