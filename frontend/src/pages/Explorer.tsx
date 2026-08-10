@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import NavigationBar from "../components/NavigationBar";
-import ScanProgressModal from "../components/ScanProgressModal";
+import OperationQueueModal from "../components/OperationQueueModal";
 import MessageBanner from "../components/MessageBanner";
 import type { Package } from "../handlers/packages";
 import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
@@ -72,7 +72,7 @@ function Explorer() {
     const [currentOperation, setCurrentOperation] = useState<string | undefined>(undefined);
     const [currentVariantIds, setCurrentVariantIds] = useState<string[] | undefined>(undefined);
     const [currentMultiOperation, setCurrentMultiOperation] = useState<string | undefined>(undefined);
-    const [scanProgressOpen, setScanProgressOpen] = useState(false);
+    const [operationQueueOpen, setOperationQueueOpen] = useState(false);
     const hadActiveScans = useRef(false);
     const grypeScanEntries = useSyncExternalStore(grypeSubscribe, grypeGetSnapshot);
     const nvdScanEntries = useSyncExternalStore(nvdSubscribe, nvdGetSnapshot);
@@ -88,7 +88,7 @@ function Explorer() {
 
     useEffect(() => {
         if (activeScanCount > 0 && !hadActiveScans.current) {
-            setScanProgressOpen(true);
+            setOperationQueueOpen(true);
         }
         hadActiveScans.current = activeScanCount > 0;
     }, [activeScanCount]);
@@ -410,10 +410,10 @@ function Explorer() {
                     trackedScanCount={trackedScanCount}
                     finishedScanCount={finishedScanCount}
                     activeScanCount={activeScanCount}
-                    onOpenScanProgress={() => setScanProgressOpen(true)}
+                    onOpenOperationQueue={() => setOperationQueueOpen(true)}
                 />
             </header>
-            <ScanProgressModal isOpen={scanProgressOpen} onClose={() => setScanProgressOpen(false)} />
+            <OperationQueueModal isOpen={operationQueueOpen} onClose={() => setOperationQueueOpen(false)} />
 
             <main id="main-content" aria-label={tabLabels[tab] ?? 'Content'} className="flex-1 flex flex-col overflow-hidden">
             <div className="px-8 pt-4">

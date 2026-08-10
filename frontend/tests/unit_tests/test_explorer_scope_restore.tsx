@@ -95,11 +95,11 @@ jest.mock('../../src/handlers/assessments', () => ({
 
 jest.mock('../../src/components/NavigationBar', () => ({
     __esModule: true,
-    default: ({ defaultProject, defaultScope, changeTab, onOpenScanProgress }: {
+    default: ({ defaultProject, defaultScope, changeTab, onOpenOperationQueue }: {
         defaultProject?: { id: string } | null;
         defaultScope?: { project_id: string } | null;
         changeTab: (tab: string) => void;
-        onOpenScanProgress: () => void;
+        onOpenOperationQueue: () => void;
     }) => (
         <div>
             <span data-testid="default-project">{defaultProject?.id ?? ''}</span>
@@ -107,7 +107,7 @@ jest.mock('../../src/components/NavigationBar', () => ({
             {['metrics', 'packages', 'vulnerabilities', 'scans', 'review', 'settings'].map(tab => (
                 <button key={tab} onClick={() => changeTab(tab)}>{tab}</button>
             ))}
-            <button onClick={onOpenScanProgress}>progress</button>
+            <button onClick={onOpenOperationQueue}>progress</button>
         </div>
     ),
 }));
@@ -119,7 +119,7 @@ jest.mock('../../src/components/MessageBanner', () => ({
 }));
 
 jest.mock('../../src/components/VersionDisplay', () => ({ __esModule: true, default: () => null }));
-jest.mock('../../src/components/ScanProgressModal', () => ({
+jest.mock('../../src/components/OperationQueueModal', () => ({
     __esModule: true,
     default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => isOpen ? <button onClick={onClose}>close progress</button> : null,
 }));
