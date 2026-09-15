@@ -763,7 +763,7 @@ type VariantScopedSnapshot = {
                     vuln_id: vuln.id,
                     packages: targetPackages,
                     variant_ids: targetVariantIds,
-                    targets: reconcileTargetPairs(
+                    targets: data.targets ?? reconcileTargetPairs(
                         editingGroup.targets ?? [], targetPackages, targetVariantIds),
                     status: data.status,
                     justification: data.justification,
@@ -1870,6 +1870,7 @@ type VariantScopedSnapshot = {
                                             variantPackageMap={Object.keys(variantPackageMap).length > 0 ? variantPackageMap : undefined}
                                             variantFindingsMap={variantFindingsMap}
                                             findingsLoading={!variantPackageMapLoaded}
+                                            exactTargetSelection={true}
                                         />
                                     </li>
                                 )}
@@ -2090,6 +2091,10 @@ type VariantScopedSnapshot = {
                                                         )]}
                                                         availablePackages={projectPackages}
                                                         defaultSelectedPackages={groupPackages}
+                                                        defaultSelectedTargets={group.targets.map(target => ({
+                                                            variant_id: target.variant_id,
+                                                            package: target.package,
+                                                        }))}
                                                         variantPackageMap={Object.keys(variantPackageMap).length > 0 ? variantPackageMap : undefined}
                                                         variantFindingsMap={variantFindingsMap}
                                                         findingsLoading={!variantPackageMapLoaded}
