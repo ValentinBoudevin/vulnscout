@@ -1698,6 +1698,11 @@ describe('Vulnerability Modal', () => {
             timestamp: '2021-01-01T00:00:00Z',
             targets: [{ variant_id: 'variant-1', package: 'aaabbbccc@1.0.0', outdated: false }],
         }])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variant-snapshots
+        fetchMock.mockResponseOnce(JSON.stringify([{
+            variant_id: 'variant-1',
+            active_packages: ['aaabbbccc@1.0.0'],
+        }])); // variant-active-packages
 
         const reconcileSpy = jest.spyOn(Assessments, 'reconcile').mockResolvedValue({
             status: 'success',

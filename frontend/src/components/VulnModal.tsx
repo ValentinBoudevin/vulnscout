@@ -171,7 +171,6 @@ type VariantScopedSnapshot = {
     // targets are synthesized and may have no variant at all). Reconcile only
     // applies to a real variant scope; an assessment with none must still go
     // through the legacy per-row PUT below.
-    const [editingGroupIsServerConfirmed, setEditingGroupIsServerConfirmed] = useState(false);
 
     // Project-scoped package list: prefer packages_current (scoped to
     // the active scan context) and fall back to the full list.
@@ -641,16 +640,14 @@ type VariantScopedSnapshot = {
         if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current);
     }, []);
 
-    const handleEditAssessment = (assessmentId: string, group: Assessment, isServerConfirmed: boolean) => {
+    const handleEditAssessment = (assessmentId: string, group: Assessment) => {
         setEditingAssessmentId(assessmentId);
         setEditingGroup(group);
-        setEditingGroupIsServerConfirmed(isServerConfirmed);
     };
 
     const handleCancelEdit = () => {
         setEditingAssessmentId(null);
         setEditingGroup(null);
-        setEditingGroupIsServerConfirmed(false);
     };
 
     const handleDeleteAssessment = (group: Assessment) => {
@@ -762,7 +759,10 @@ type VariantScopedSnapshot = {
         const targetVariantIds: string[] =
             data.variant_ids ?? [];
 
-        if (editingGroupIsServerConfirmed && data.variant_ids !== undefined) {
+        const hasVariantTargets = (editingGroup.targets ?? []).some(
+            target => target.variant_id !== null
+        );
+        if (hasVariantTargets && data.variant_ids !== undefined) {
             try {
                 const body: Record<string, unknown> = {
                     vuln_id: vuln.id,
@@ -2040,7 +2040,7 @@ type VariantScopedSnapshot = {
                                                             {isEditing && (
                                                                 <>
                                                                     <button
-                                                                        onClick={() => handleEditAssessment(firstId, group, nonAiRealGroups.length > 0)}
+                                                                        onClick={() => handleEditAssessment(firstId, group)}
                                                                         className="text-blue-400 hover:text-blue-300 transition-colors"
                                                                         title="Edit assessment"
                                                                     >
@@ -2097,7 +2097,7 @@ type VariantScopedSnapshot = {
                                                         )]}
                                                         availablePackages={projectPackages}
                                                         defaultSelectedPackages={groupPackages}
-                                                        defaultSelectedTargets={group.targets.map(target => ({
+                                                        defaultSelectedTargets={targets.map(target => ({
                                                             variant_id: target.variant_id,
                                                             package: target.package,
                                                         }))}
