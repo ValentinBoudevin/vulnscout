@@ -1770,11 +1770,29 @@ describe('Vulnerability Modal', () => {
         reconcileSpy.mockRestore();
     });
 
-    test('edit assessment success', async () => {
+    test('status-only edit preserves a variantless assessment', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([{
+            id: 'assessment-1',
+            vuln_id: 'CVE-2010-1234',
+            packages: ['aaabbbccc@1.0.0'],
+            status: 'affected',
+            simplified_status: 'Exploitable',
+            justification: 'because 42',
+            impact_statement: 'may impact or not',
+            status_notes: 'this is a fictive status note',
+            workaround: 'update dependency',
+            timestamp: '2021-01-01T00:00:00Z',
+            origin: 'custom',
+            responses: [],
+            targets: [{
+                variant_id: null,
+                package: 'aaabbbccc@1.0.0',
+                outdated: false,
+            }],
+        }])); // assessments history fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             assessment: {
@@ -1823,6 +1841,11 @@ describe('Vulnerability Modal', () => {
 
         // The default keeps the current history position and timestamp.
         expect(screen.getByRole('switch', {name: 'Keep the current timestamp'})).toBeChecked();
+        const statusSelect = document.querySelector<HTMLSelectElement>(
+            'select[name="edit_assessment_status"]'
+        );
+        expect(statusSelect).not.toBeNull();
+        await user.selectOptions(statusSelect!, 'fixed');
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
@@ -1833,9 +1856,11 @@ describe('Vulnerability Modal', () => {
         const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT');
         const putBody = JSON.parse(String(putCall?.[1]?.body));
         expect(putBody).toEqual(expect.objectContaining({
+            status: 'fixed',
             update_timestamp: false,
             timestamp: '2021-01-01T00:00:00Z',
         }));
+        expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
         expect(patchVuln).toHaveBeenCalled();
 
         // Check for success banner
