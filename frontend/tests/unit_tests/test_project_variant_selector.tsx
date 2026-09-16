@@ -358,6 +358,41 @@ describe('ProjectVariantSelector', () => {
         expect(onApply).toHaveBeenCalledWith('proj-1', 'var-1', 'var-2', 'difference', [], '');
     });
 
+    test('reopened select scope initializes the visible compare variant', async () => {
+        const onApply = jest.fn();
+        render(
+            <ProjectVariantSelector
+                defaultProject={{id: 'proj-1', name: 'ProjectAlpha'}}
+                defaultScope={{
+                    project_id: 'proj-1',
+                    mode: 'select',
+                    variant_ids: ['var-1', 'var-2', 'var-3'],
+                    compare_base_id: 'var-1',
+                    compare_operation: 'difference',
+                    compare_variant_id: '',
+                }}
+                onApply={onApply}
+            />
+        );
+
+        await waitFor(() => expect(mockVariantsList).toHaveBeenCalledWith('proj-1'));
+        await openPanel();
+        await act(async () => {
+            fireEvent.click(screen.getByRole('radio', {name: /compare variants/i}));
+        });
+
+        const selects = screen.getAllByRole('combobox');
+        await waitFor(() => expect(selects[2]).toHaveValue('var-2'));
+        expect(screen.getByRole('button', {name: 'Apply'})).toBeEnabled();
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', {name: 'Apply'}));
+        });
+
+        expect(onApply).toHaveBeenCalledWith(
+            'proj-1', 'var-1', 'var-2', 'difference', [], '',
+        );
+    });
+
     test('Apply in compare mode with intersection operation passes correct args', async () => {
         const onApply = jest.fn();
         render(<ProjectVariantSelector onApply={onApply} />);

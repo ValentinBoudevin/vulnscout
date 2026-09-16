@@ -102,7 +102,9 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
     }, [variants, compareBaseVariantId]);
 
     useEffect(() => {
-        if (selectedCompareVariantId === compareBaseVariantId) {
+        const compareIsValid = selectedCompareVariantId !== compareBaseVariantId
+            && variants.some(v => v.id === selectedCompareVariantId);
+        if (!compareIsValid) {
             const first = variants.find(v => v.id !== compareBaseVariantId);
             setSelectedCompareVariantId(first?.id ?? '');
         }
